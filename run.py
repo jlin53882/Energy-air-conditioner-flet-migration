@@ -7,7 +7,7 @@ starts only the Flet UI so there is one supported graphical entry point.
 import flet as ft
 
 from Flet_ui.flet_app import main as flet_main
-from Telegram_bot.config import logger, setup_logging
+from infrastructure.logging import logger, setup_logging
 
 
 def main() -> None:
