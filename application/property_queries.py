@@ -1,4 +1,4 @@
-"""Application service for neutral thermodynamic property queries."""
+"""提供中立 thermodynamic property query 的 application service。"""
 
 from __future__ import annotations
 
@@ -8,24 +8,46 @@ from .models import PropertyQueryRequest
 
 
 class PropertyQueryService:
-    """Validate and orchestrate property requests without channel concerns."""
+    """驗證並協調 property request，不依賴 channel concern。"""
 
     def __init__(self, state_service: ThermodynamicStateService) -> None:
-        """Initialize with an explicit shared thermodynamic service."""
+        """使用明確的 shared thermodynamic service 初始化。
+
+參數：
+    state_service (ThermodynamicStateService): 函數輸入值。
+
+回傳：
+    無。"""
         self.state_service = state_service
         self._requested_reference_states: dict[str, str] = {}
 
     def is_fluid_valid(self, fluid_name: str) -> bool:
-        """Validate a fluid through the shared thermodynamic service."""
+        """透過 shared thermodynamic service 驗證流體。
+
+參數：
+    fluid_name (str): 函數輸入值。
+
+回傳：
+    bool：函數計算或處理後的結果。"""
         return self.state_service.is_fluid_valid(fluid_name)
 
     @property
     def reference_state(self):
-        """Expose the service-owned reference-state registry for composition/tests."""
+        """提供由 service 擁有的 reference-state registry，供 composition 與測試使用。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
         return self.state_service.reference_state
 
     def set_reference_state(self, fluid_name: str, ref_state: str) -> None:
-        """Apply and record the requested policy through the shared service."""
+        """透過 shared service 套用並記錄要求的 policy。
+
+參數：
+    fluid_name (str): 函數輸入值。
+    ref_state (str): 函數輸入值。
+
+回傳：
+    無。"""
         normalized_fluid = fluid_name.strip()
         self.state_service.set_reference_state(normalized_fluid, ref_state)
         self._requested_reference_states[normalized_fluid.casefold()] = ref_state
@@ -33,15 +55,21 @@ class PropertyQueryService:
     def requested_reference_state(
         self, fluid_name: str, default: str = "ASHRAE"
     ) -> str:
-        """Return the application-owned requested policy for a fluid.
+        """回傳 application 擁有的流體要求 policy。
 
-        This is distinct from ``ReferenceStateService.current()``, which reports
-        the observed process state rather than the user's requested policy.
+        這不同於 `ReferenceStateService.current()` 回報的觀察到 process state；
+        此方法回傳的是使用者要求的 policy。
         """
         return self._requested_reference_states.get(fluid_name.strip().casefold(), default)
 
     def query(self, request: PropertyQueryRequest) -> dict[str, float | str]:
-        """Validate a request and return a neutral thermodynamic result."""
+        """驗證 request 並回傳中立 thermodynamic result。
+
+參數：
+    request (PropertyQueryRequest): 函數輸入值。
+
+回傳：
+    dict[str, float | str]：函數計算或處理後的結果。"""
         if not request.fluid.strip():
             raise ValueError("fluid is required")
         if len(request.known_properties) < 2:

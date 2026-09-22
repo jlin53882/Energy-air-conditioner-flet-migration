@@ -18,8 +18,8 @@ class BaseAnalysisModule:
         """
         self.unit_converter = unit_converter
         self.page = page
-        # Legacy handlers use ``parent`` as an attachment marker; keep it
-        # explicit because this service object is not itself an Flet Control.
+        # 舊版處理器使用 ``parent`` 作為附加標記；請保留它
+        # 明確保留，因為此服務物件本身不是 Flet Control。
         self.parent = page
         
         # 儲存傳入的其他服務 (例如 self.analyzer)
@@ -54,7 +54,17 @@ class BaseAnalysisModule:
     # --- 輔助函式：從舊 analysis_tab 搬移過來 ---
     
     def create_input_row(self, key, label, default_val, prop_code, default_unit=None):
-        """建立一個帶單位的輸入行"""
+        """建立一個帶單位的輸入行
+
+參數：
+    key (未指定型別): 函數輸入值。
+    label (未指定型別): 函數輸入值。
+    default_val (未指定型別): 函數輸入值。
+    prop_code (未指定型別): 函數輸入值。
+    default_unit (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
         units = self.unit_converter.get_available_units(prop_code)
         
         if default_unit and default_unit in units:
@@ -93,7 +103,14 @@ class BaseAnalysisModule:
         return self.all_entries[key] # 返回字典
 
     def _create_unit_sync_handler(self, prop_code, sync_group):
-        """建立單位同步處理器"""
+        """建立單位同步處理器
+
+參數：
+    prop_code (未指定型別): 函數輸入值。
+    sync_group (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
         def on_change(e):
             if self._is_updating_units:
                 return
@@ -138,7 +155,13 @@ class BaseAnalysisModule:
         return on_change
 
     def show_error(self, message):
-        """輔助方法：顯示 SnackBar"""
+        """輔助方法：顯示 SnackBar
+
+參數：
+    message (未指定型別): 函數輸入值。
+
+回傳：
+    無。"""
         snack = ft.SnackBar(ft.Text(message), bgcolor=ft.Colors.ERROR)
         self.page.overlay.append(snack)
         snack.open = True

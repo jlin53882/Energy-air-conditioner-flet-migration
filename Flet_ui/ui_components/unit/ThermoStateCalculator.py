@@ -2,7 +2,7 @@
 # 職責：執行熱力學計算 (CoolProp / 理想氣體)。
 # 依賴 UnitConverter 進行單位標準化。
 #不能直接計算比容
-#在 CoolProp 函式庫中，代碼 'V' 代表的是黏度 (Viscosity)，而不是比容 (Specific Volume)
+#在 CoolProp 函式庫中，代碼 'V' 代表的是黏度 (Viscosity)，而不是比容
 
 """
 🧩 各參考狀態詳細說明
@@ -50,15 +50,31 @@ class ThermoStateCalculator:
 
     @property
     def state_service(self) -> ThermodynamicStateService:
-        """Expose the shared service for application composition."""
+        """公開共用 service，供 application composition 使用。
+
+回傳：
+    ThermodynamicStateService：函數計算或處理後的結果。"""
         return self._service
 
     def is_fluid_valid(self, fluid_name: str) -> bool:
-        """Return whether the shared service recognizes a fluid."""
+        """回傳共用 service 是否辨識指定流體。
+
+參數：
+    fluid_name (str): 函數輸入值。
+
+回傳：
+    bool：函數計算或處理後的結果。"""
         return self._service.is_fluid_valid(fluid_name)
         
     def set_coolprop_ref_state(self, fluid_name: str, ref_state: str):
-        """Set a CoolProp reference state through the shared mechanism."""
+        """透過共用機制設定 CoolProp reference state。
+
+參數：
+    fluid_name (str): 函數輸入值。
+    ref_state (str): 函數輸入值。
+
+回傳：
+    無。"""
         self._service.set_reference_state(fluid_name, ref_state)
         
     def calculate_properties(
@@ -68,7 +84,16 @@ class ThermoStateCalculator:
         is_ideal_gas=False,
         reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
     ):
-        """Calculate properties under an explicit Flet reference-state policy."""
+        """在明確的 Flet reference-state policy 下計算性質。
+
+參數：
+    fluid (未指定型別): 函數輸入值。
+    known_props (未指定型別): 函數輸入值。
+    is_ideal_gas (未指定型別): 函數輸入值。
+    reference_state (ReferenceStatePolicy | str): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
         return self._service.calculate_properties(
             fluid, known_props, is_ideal_gas, reference_state
         )

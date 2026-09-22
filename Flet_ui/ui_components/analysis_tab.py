@@ -144,7 +144,13 @@ class AnalysisTab(ft.Column):
         self.on_output_unit_change(None) # 初始化大氣壓力預設值
 
     def on_output_unit_change(self, e):
-        """切換輸出單位時，通知 *所有* 模組更新大氣壓力預設值"""
+        """切換輸出單位時，通知 *所有* 模組更新大氣壓力預設值
+
+參數：
+    e (未指定型別): 函數輸入值。
+
+回傳：
+    無。"""
         use_imperial = ("Imperial" in self.output_unit_toggle.selected)
         
         # 遍歷 *所有* 載入的模組，並安全地呼叫
@@ -157,12 +163,16 @@ class AnalysisTab(ft.Column):
             self.update()
 
     def on_analysis_change(self, e):
-            """
-            切換顯示的 UI 模組 (已修正共用 UI 的邏輯)
-            """
+            """切換顯示的 UI 模組 (已修正共用 UI 的邏輯)
+
+參數：
+    e (未指定型別): 函數輸入值。
+
+回傳：
+    無。"""
             selected_name = self.analysis_dd.value
 
-            # --- NEW LOGIC ---
+            # --- 新邏輯 ---
 
             # 1. 取得所有 *獨特* 的 UI 容器
             #    (使用 set comprehension 來自動去除重複的 UI)
@@ -178,9 +188,9 @@ class AnalysisTab(ft.Column):
             # 4. ...並 *只顯示* 它
             selected_ui.visible = True
 
-            # --- END NEW LOGIC ---
+            # --- 新邏輯結束 ---
 
-            # --- Module-specific capability is explicit metadata, not a label prefix. ---
+            # --- 模組專屬能力由明確 metadata 表示，而不是由標籤前綴表示。 ---
             selected_definition = self.analysis_map[selected_name]
             if selected_definition["calculation_mode"] == "psychrometric":
                 for module in self.modules_to_load:
@@ -213,7 +223,7 @@ class AnalysisTab(ft.Column):
             # 3. 獲取輸出單位
             use_imperial = ("Imperial" in self.output_unit_toggle.selected)
             
-            # 4. Invoke the declared calculation mode; labels never control dispatch.
+            # 4. 呼叫宣告的計算模式；標籤永遠不控制 dispatch。
             if current_definition["calculation_mode"] == "psychrometric":
                 result_string = calc_func(use_imperial, mode_name=selected_name)
             else:

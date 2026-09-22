@@ -1,4 +1,4 @@
-"""Single adapter boundary around the excluded psychrometric model."""
+"""圍繞排除的 psychrometric model 建立單一 adapter 邊界。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 
 class PsychrometricModel(Protocol):
-    """Protocol implemented by the injected legacy psychrometric adapter."""
+    """由注入的舊版 psychrometric adapter 實作的 Protocol。"""
 
     def cal_p(self, altitude_m: float) -> float: ...
 
@@ -18,14 +18,26 @@ class PsychrometricModel(Protocol):
 
 
 class PsychrometricService:
-    """Return numeric SI-oriented results for an injected model boundary."""
+    """回傳注入 model 邊界的 SI 導向數值結果。"""
 
     def __init__(self, model: PsychrometricModel) -> None:
-        """Initialize with a neutral adapter for the legacy model."""
+        """以舊版 model 的中立 adapter 初始化。
+
+參數：
+    model (PsychrometricModel): 函數輸入值。
+
+回傳：
+    無。"""
         self._model = model
 
     def calculate_pressure_from_altitude(self, altitude_m: float) -> float:
-        """Return atmospheric pressure in pascals for an altitude in metres."""
+        """回傳以公尺海拔高度計算、以 pascal 為單位的大氣壓力。
+
+參數：
+    altitude_m (float): 函數輸入值。
+
+回傳：
+    float：函數計算或處理後的結果。"""
         return self._model.cal_p(altitude_m) * 1000.0
 
     def calculate_from_tdb_twb(
@@ -34,7 +46,15 @@ class PsychrometricService:
         twb_k: float,
         altitude_m: float,
     ) -> dict[str, Any]:
-        """Calculate psychrometric properties from dry/wet-bulb temperatures."""
+        """由乾球／濕球溫度計算 psychrometric properties。
+
+參數：
+    tdb_k (float): 函數輸入值。
+    twb_k (float): 函數輸入值。
+    altitude_m (float): 函數輸入值。
+
+回傳：
+    dict[str, Any]：函數計算或處理後的結果。"""
         tdb_c = tdb_k - 273.15
         twb_c = twb_k - 273.15
         pressure, vapor_pressure, pws_db, pws_wb, w, ws, wss, rh, enthalpy, volume = (
@@ -68,7 +88,15 @@ class PsychrometricService:
         rh: float,
         altitude_m: float,
     ) -> dict[str, Any]:
-        """Calculate psychrometric properties from dry-bulb/RH inputs."""
+        """由乾球／RH 輸入計算 psychrometric properties。
+
+參數：
+    tdb_k (float): 函數輸入值。
+    rh (float): 函數輸入值。
+    altitude_m (float): 函數輸入值。
+
+回傳：
+    dict[str, Any]：函數計算或處理後的結果。"""
         tdb_c = tdb_k - 273.15
         twb_c, pressure, vapor_pressure, pws_db, pws_wb, w, ws, wss, _, enthalpy, volume = (
             self._model.Calculation_process_m_Tdb_RH(
@@ -113,7 +141,26 @@ class PsychrometricService:
         ws: float,
         wss: float,
     ) -> dict[str, Any]:
-        """Build the stable neutral result shape shared by both channels."""
+        """建立兩個 channel 共用的穩定中立結果結構。
+
+參數：
+    altitude_m (float): 函數輸入值。
+    pressure (float): 函數輸入值。
+    tdb_k (float): 函數輸入值。
+    twb_k (float): 函數輸入值。
+    dew_point_k (float): 函數輸入值。
+    rh (float): 函數輸入值。
+    w (float): 函數輸入值。
+    enthalpy (float): 函數輸入值。
+    volume (float): 函數輸入值。
+    vapor_pressure (float): 函數輸入值。
+    pws_db (float): 函數輸入值。
+    pws_wb (float): 函數輸入值。
+    ws (float): 函數輸入值。
+    wss (float): 函數輸入值。
+
+回傳：
+    dict[str, Any]：函數計算或處理後的結果。"""
         return {
             "Altitude": altitude_m,
             "P": pressure,

@@ -1,4 +1,4 @@
-"""Focused regression tests for the migrated HVAC calculation surface."""
+"""已遷移 HVAC calculation surface 的 focused regression tests。"""
 
 from __future__ import annotations
 
@@ -14,28 +14,46 @@ from Flet_ui.ui_components.unit.UnitConverter import UnitConverter
 
 
 class DummyPage:
-    """Provide the page API required while constructing analysis controls."""
+    """提供建構 analysis controls 時所需的 page API。"""
 
     def __init__(self) -> None:
         self.overlay = []
         self.controls = []
 
     def update(self) -> None:
-        """Accept updates without a live Flet session."""
+        """在沒有 live Flet session 的情況下接受 updates。
+
+回傳：
+    無。"""
 
     def add(self, *controls) -> None:
-        """Collect controls added by a page entry point."""
+        """收集 page entry point 新增的 controls。
+
+參數：
+    controls (未指定型別): 函數輸入值。
+
+回傳：
+    無。"""
         self.controls.extend(controls)
 
 
 @pytest.fixture
 def analyzer() -> HVACAnalyzer:
-    """Return the calculation facade used by the analysis tab."""
+    """回傳 analysis tab 使用的 calculation facade。
+
+回傳：
+    HVACAnalyzer：函數計算或處理後的結果。"""
     return HVACAnalyzer()
 
 
 def test_hvac_basic_energy_calculations(analyzer: HVACAnalyzer) -> None:
-    """Cover the core compressor, heat-exchanger, and throttling equations."""
+    """涵蓋核心 compressor、heat-exchanger 與 throttling equations。
+
+參數：
+    analyzer (HVACAnalyzer): 函數輸入值。
+
+回傳：
+    無。"""
     assert analyzer.calculate_compression_ratio(2.0, 10.0) == pytest.approx(5.0)
     assert analyzer.calculate_compressor_work(2.0, 10.0, 30.0) == pytest.approx(40.0)
     assert analyzer.calculate_compressor_work_heat_transfer(2.0, 10.0, 30.0, 4.0) == pytest.approx(44.0)
@@ -45,7 +63,13 @@ def test_hvac_basic_energy_calculations(analyzer: HVACAnalyzer) -> None:
 
 
 def test_hvac_efficiency_and_entropy_calculations(analyzer: HVACAnalyzer) -> None:
-    """Cover dimensionless efficiency and entropy-generation calculations."""
+    """涵蓋 dimensionless efficiency 與 entropy-generation calculations。
+
+參數：
+    analyzer (HVACAnalyzer): 函數輸入值。
+
+回傳：
+    無。"""
     assert analyzer.calculate_Sgen(100.0, 125.0) == pytest.approx(25.0)
     assert analyzer.calculate_Sgen_flow(2.0, 100.0, 125.0) == pytest.approx(50.0)
     assert analyzer.calculate_isentropic_efficiency(10.0, 30.0, 20.0) == pytest.approx(0.5)
@@ -53,14 +77,26 @@ def test_hvac_efficiency_and_entropy_calculations(analyzer: HVACAnalyzer) -> Non
 
 
 def test_hvac_invalid_denominators_raise_value_error(analyzer: HVACAnalyzer) -> None:
-    """Keep invalid physical inputs explicit instead of returning misleading zeros."""
+    """明確處理無效 physical inputs，而不是回傳誤導性的零值。
+
+參數：
+    analyzer (HVACAnalyzer): 函數輸入值。
+
+回傳：
+    無。"""
     with pytest.raises((ValueError, ZeroDivisionError)):
         analyzer.calculate_compression_ratio(0.0, 10.0)
     assert analyzer.calculate_isentropic_efficiency(1.0, 2.0, 1.0) == pytest.approx(0.0)
 
 
 def test_unit_converter_round_trip_and_unknown_unit(analyzer: HVACAnalyzer) -> None:
-    """Verify SI conversion round trips and rejection of unsupported units."""
+    """驗證 SI conversion 往返結果，以及拒絕不支援的 units。
+
+參數：
+    analyzer (HVACAnalyzer): 函數輸入值。
+
+回傳：
+    無。"""
     converter = UnitConverter()
     for prop_code, value, unit in (("T", 25.0, "C"), ("P", 2.0, "bar"), ("H", 300.0, "kJ/kg")):
         si_value = converter.convert_to_si(prop_code, value, unit)
@@ -70,7 +106,10 @@ def test_unit_converter_round_trip_and_unknown_unit(analyzer: HVACAnalyzer) -> N
 
 
 def test_thermo_state_validation_and_property_calculation() -> None:
-    """Exercise CoolProp-backed state validation and one ordinary property query."""
+    """執行 CoolProp-backed state validation 與一次一般 property query。
+
+回傳：
+    無。"""
     converter = UnitConverter()
     calculator = ThermoStateCalculator(converter)
     assert calculator.is_fluid_valid("R134a") is True
@@ -81,7 +120,10 @@ def test_thermo_state_validation_and_property_calculation() -> None:
 
 
 def test_psychrometric_calculator_returns_finite_properties() -> None:
-    """Exercise both supported moist-air input paths with realistic conditions."""
+    """以 realistic conditions 執行兩條受支援的 moist-air input paths。
+
+回傳：
+    無。"""
     calculator = PsychrometricCalculator()
     for result in (
         calculator.calculate_from_tdb_rh(298.15, 0.5, 0.0),
@@ -94,7 +136,10 @@ def test_psychrometric_calculator_returns_finite_properties() -> None:
 
 
 def test_every_analysis_option_switches_and_calculates() -> None:
-    """Smoke-test every registered analysis page and its default calculation path."""
+    """Smoke-test 每個已註冊 analysis page 與其 default calculation path。
+
+回傳：
+    無。"""
     page = DummyPage()
     converter = UnitConverter()
     tab = AnalysisTab(

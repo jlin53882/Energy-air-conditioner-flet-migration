@@ -1,4 +1,4 @@
-"""Shared HVAC domain equations."""
+"""共用 HVAC domain 方程式。"""
 
 from .basic import (
     calculate_compression_ratio_si,

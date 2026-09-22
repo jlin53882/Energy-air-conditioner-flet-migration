@@ -1,4 +1,4 @@
-"""Phase 1 tests for the canonical unit contract."""
+"""Phase 1 的 canonical unit contract test。"""
 
 from __future__ import annotations
 
@@ -11,14 +11,23 @@ from Telegram_bot.thermo_calculator import ThermoCalculator
 
 @pytest.fixture
 def canonical_converter() -> CanonicalUnitConverter:
-    """Create the canonical unit converter under test."""
+    """建立受測的 canonical unit converter。
+
+回傳：
+    CanonicalUnitConverter：函數計算或處理後的結果。"""
     return CanonicalUnitConverter()
 
 
 def test_canonical_converter_round_trips_core_quantities(
     canonical_converter: CanonicalUnitConverter,
 ) -> None:
-    """Core physical quantities round-trip through explicit SI transforms."""
+    """核心 physical quantities 透過明確 SI transforms 往返轉換。
+
+參數：
+    canonical_converter (CanonicalUnitConverter): 函數輸入值。
+
+回傳：
+    無。"""
     cases = (
         ("P", 1.2, "bar"),
         ("T", 25.0, "°C"),
@@ -36,7 +45,13 @@ def test_canonical_converter_round_trips_core_quantities(
 def test_canonical_converter_uses_specific_volume_semantics(
     canonical_converter: CanonicalUnitConverter,
 ) -> None:
-    """V is a specific volume at the domain boundary, not density."""
+    """V 在 domain boundary 表示 specific volume，而不是 density。
+
+參數：
+    canonical_converter (CanonicalUnitConverter): 函數輸入值。
+
+回傳：
+    無。"""
     assert canonical_converter.convert_to_si("V", 0.5, "m³/kg") == pytest.approx(0.5)
     assert canonical_converter.convert_to_si("V", 16.0185, "ft³/lbm") == pytest.approx(
         16.0185 * 0.062428
@@ -47,7 +62,10 @@ def test_canonical_converter_uses_specific_volume_semantics(
 
 
 def test_flet_converter_delegates_core_quantities_to_canonical_contract() -> None:
-    """The existing Flet facade exposes the canonical core transforms."""
+    """既有 Flet facade 公開 canonical core transforms。
+
+回傳：
+    無。"""
     converter = UnitConverter()
     canonical = CanonicalUnitConverter()
 
@@ -58,7 +76,10 @@ def test_flet_converter_delegates_core_quantities_to_canonical_contract() -> Non
 
 
 def test_telegram_converter_delegates_core_quantities_to_canonical_contract() -> None:
-    """The Telegram calculator uses the same core conversion semantics."""
+    """Telegram calculator 使用相同的 core conversion semantics。
+
+回傳：
+    無。"""
     converter = ThermoCalculator()
     canonical = CanonicalUnitConverter()
 
@@ -74,7 +95,10 @@ def test_telegram_converter_delegates_core_quantities_to_canonical_contract() ->
 
 
 def test_flet_converter_rejects_unknown_specific_volume_units() -> None:
-    """Flet V conversion must use the canonical explicit-error contract."""
+    """Flet V conversion 必須使用 canonical explicit-error contract。
+
+回傳：
+    無。"""
     converter = UnitConverter()
     with pytest.raises(ValueError, match="Unknown unit"):
         converter.convert_to_si("V", 1.0, "not-a-unit")
@@ -83,6 +107,9 @@ def test_flet_converter_rejects_unknown_specific_volume_units() -> None:
 
 
 def test_canonical_converter_rejects_unknown_units() -> None:
-    """Unknown core units fail explicitly instead of silently changing semantics."""
+    """未知 core units 必須明確失敗，而不是默默改變 semantics。
+
+回傳：
+    無。"""
     with pytest.raises(ValueError, match="Unknown unit"):
         CanonicalUnitConverter().convert_to_si("P", 1.0, "not-a-pressure-unit")

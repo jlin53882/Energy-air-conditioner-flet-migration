@@ -1,4 +1,4 @@
-"""Neutral application requests for thermodynamic property queries."""
+"""用於 thermodynamic property query 的中立 application request。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from domain.thermodynamics.state_service import KnownProperty
 
 @dataclass(frozen=True)
 class PropertyQueryRequest:
-    """Describe a property query independently of any channel UI."""
+    """描述不依賴 channel UI 的 property query。"""
 
     fluid: str
     known_properties: tuple[KnownProperty, ...]
@@ -20,7 +20,7 @@ class PropertyQueryRequest:
 
 @dataclass(frozen=True)
 class CompressionRatioRequest:
-    """Describe a compression-ratio calculation in canonical pascals."""
+    """描述以 canonical pascal 為單位的壓縮比計算。"""
 
     suction_pressure_pa: float
     discharge_pressure_pa: float

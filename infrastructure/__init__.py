@@ -1,1 +1,1 @@
-"""Shared infrastructure helpers."""
+"""共用 infrastructure helpers。"""

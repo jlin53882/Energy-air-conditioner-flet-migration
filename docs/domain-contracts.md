@@ -1,117 +1,76 @@
-# Domain Contracts
+# 領域契約
 
-This document describes the current domain semantics. Display units and channel
-formatting belong to adapters unless explicitly stated otherwise.
+本文件描述目前的 domain semantics。除非另有明確說明，display unit 與 channel formatting 都屬於 adapter 責任。
 
-## 1. Canonical Quantities
+## 1. Canonical quantity
 
-The shared domain uses these canonical quantities:
+共享 domain 使用以下 canonical quantity：
 
-- pressure `P`: `Pa`
-- temperature `T`: `K`
-- enthalpy `H`: `J/kg`
-- entropy `S`: `J/(kg·K)`
-- density `D`: `kg/m³`
-- specific volume `V`: `m³/kg`
-- internal energy `U`: `J/kg`
-- mass: `kg`
-- mass flow: `kg/s`
-- power: `W`
-- energy: `J`
+- pressure `P`：`Pa`
+- temperature `T`：`K`
+- enthalpy `H`：`J/kg`
+- entropy `S`：`J/(kg·K)`
+- density `D`：`kg/m³`
+- specific volume `V`：`m³/kg`
+- internal energy `U`：`J/kg`
+- mass：`kg`
+- mass flow：`kg/s`
+- power：`W`
+- energy：`J`
 
-Quality `Q` is dimensionless. `kPa`, `bar`, `psi`, `°C`, `°F`, `kJ/kg`, and
-other display units are adapter-facing units, not domain-internal canonical
-units.
+Quality `Q` 為無因次量。`kPa`、`bar`、`psi`、`°C`、`°F`、`kJ/kg` 與其他 display unit 都是 adapter-facing unit，不是 domain 內部的 canonical unit。
 
-## 2. Unit Conversion Rules
+## 2. Unit conversion 規則
 
-Adapters may accept display units and construct requests. The canonical unit
-converter owns the registered conversion definitions for consolidated core
-properties. A conversion definition must identify the property code and the
-unit explicitly in both directions.
+Adapter 可以接受 display unit 並建立 request。Canonical unit converter 負責 consolidated core property 的 registered conversion definition。每個 conversion definition 都必須在兩個方向明確指出 property code 與 unit。
 
-For canonicalized core quantities, an unknown unit is an error. The system must
-raise an explicit failure rather than assume the input is already SI or return
-the original value silently.
+對已 canonicalized 的 core quantity，unknown unit 必須視為錯誤。系統必須明確回報 failure，不得假設 input 已是 SI，也不得默默回傳原值。
 
-## 3. Specific Volume / Density Semantics
+## 3. Specific volume / density semantics
 
-`V` means specific volume and has canonical unit `m³/kg`.
+`V` 代表 specific volume，canonical unit 為 `m³/kg`。
 
-`D` means density and has canonical unit `kg/m³`.
+`D` 代表 density，canonical unit 為 `kg/m³`。
 
-When CoolProp requires density for a calculation that starts with specific
-volume, the thermodynamic boundary performs:
+當 CoolProp 的 calculation 需要 density，而 input 是 specific volume 時，thermodynamic boundary 執行：
 
 ```text
 D = 1 / V
 ```
 
-The property code `V` must not be confused with a CoolProp viscosity code or
-with density. Telegram's remaining legacy `V` behavior is documented as an
-explicit compatibility boundary, not as the canonical domain contract.
+Property code `V` 不得與 CoolProp viscosity code 或 density 混淆。Telegram 尚存的 legacy `V` behavior 是明確的 compatibility boundary，不是 canonical domain contract。
 
-## 4. Thermodynamic Property Contract
+## 4. Thermodynamic property contract
 
-`ThermodynamicStateService` accepts at least two known properties, converts
-inputs to canonical SI, and returns neutral numeric results for the configured
-properties plus `phase`. CoolProp-backed calculations and ideal-gas calculations
-are selected by the request. Channel adapters own display conversion and error
-presentation.
+`ThermodynamicStateService` 接受至少兩個 known property，將 input 轉為 canonical SI，並為設定的 property 加上 `phase` 回傳 neutral numeric result。Request 會選擇 CoolProp-backed calculation 或 ideal-gas calculation；channel adapter 負責 display conversion 與 error presentation。
 
-Reference-state-sensitive calculations must carry an explicit request policy.
-Ordinary requests use a concrete policy such as `DEF`, `ASHRAE`, `IIR`, or
-`NBP`. Internal operations may explicitly use `CURRENT`, which means that the
-scope does not mutate the process reference state. No ordinary calculation may
-depend on whichever state a previous request left in the process. `Water` is an
-ordinary fluid request and uses the explicit `DEF` policy; backend or
-equation-model selection is a separate concern from reference-state policy.
+Reference-state-sensitive calculation 必須攜帶明確的 request policy。一般 request 使用 `DEF`、`ASHRAE`、`IIR` 或 `NBP` 等 concrete policy。Internal operation 可以明確使用 `CURRENT`，表示該 scope 不修改 process reference state。一般 calculation 不得依賴前一個 request 留在 process 中的 state。`Water` 是一般 fluid request，使用明確的 `DEF` policy；backend 或 equation-model selection 與 reference-state policy 是不同責任。
 
-## 5. Reference-State Contract
+## 5. Reference-state contract
 
-CoolProp reference state is process-global. `ReferenceStateService` provides the
-single process-level synchronization mechanism and controls mutation. The
-mutation and all dependent `PropsSI`/`PhaseSI` calls for one request execute in
-the same synchronized transaction.
+CoolProp reference state 是 process-global。`ReferenceStateService` 提供唯一的 process-level synchronization mechanism 並控制 mutation。單一 request 的 mutation 與所有相依的 `PropsSI`/`PhaseSI` call，必須在同一個 synchronized transaction 中執行。
 
-The mechanism and policy are separate:
+Mechanism 與 policy 必須分離：
 
-- **Mechanism:** shared lock, controlled mutation, and process-global observed
-  registry owned by `ReferenceStateService`.
-- **Policy:** the caller/application decides which reference state the request
-  requires and keeps that requested policy for the user flow; `current()` is
-  only an observed process-state report, not a user-preference store.
+- **Mechanism：** shared lock、controlled mutation 與 process-global observed registry 由 `ReferenceStateService` 擁有。
+- **Policy：** caller/application 決定 request 所需的 reference state，並在 user flow 中保留 requested policy；`current()` 只能回報 observed process state，不是 user-preference store。
 
-Creating another service instance must not create another lock or another
-process-local interpretation of `current()`.
+建立另一個 service instance 不得建立另一把 lock，也不得產生另一種 process-local `current()` 解讀方式。
 
-## 6. HVAC Calculation Contract
+## 6. HVAC calculation contract
 
-Shared functions under `domain/hvac/` use canonical SI quantities. Typical
-contracts include mass flow in `kg/s`, enthalpy in `J/kg`, heat and power in
-`W`, and pressure in `Pa`. A Flet or Telegram compatibility facade may accept
-`kJ/kg`, `kW`, or other display units only while converting at the adapter
-boundary.
+`domain/hvac/` 下的 shared function 使用 canonical SI quantity。典型 contract 包含 `kg/s` 的 mass flow、`J/kg` 的 enthalpy、`W` 的 heat 與 power，以及 `Pa` 的 pressure。Flet 或 Telegram compatibility facade 可以接受 `kJ/kg`、`kW` 或其他 display unit，但只能在 adapter boundary 進行轉換。
 
-Physics formulas are not changed by an adapter conversion or architecture
-refactor.
+Adapter conversion 或 architecture refactor 不得改變 physics formula。
 
-## 7. Psychrometric Contract
+## 7. Psychrometric contract
 
-The shared psychrometric service accepts numeric SI-oriented inputs and returns
-neutral numeric results. In particular, temperatures are represented in `K`,
-pressure in `Pa`, enthalpy in `J/kg`, and the result is a structured mapping.
+Shared psychrometric service 接受 numeric SI-oriented input 並回傳 neutral numeric result。特別是 temperature 使用 `K`、pressure 使用 `Pa`、enthalpy 使用 `J/kg`，result 使用 structured mapping。
 
-Flet and Telegram remain responsible for labels, display units, strings, and
-message/control rendering. Telegram display strings are not the domain output
-contract.
+Flet 與 Telegram 負責 label、display unit、string 以及 message/control rendering。Telegram display string 不是 domain output contract。
 
-The excluded legacy model is accessed through the infrastructure adapter; the
-domain service does not import the Flet-owned implementation.
+排除的 legacy model 透過 infrastructure adapter 存取；domain service 不得 import Flet-owned implementation。
 
-## 8. Error Contract
+## 8. Error contract
 
-Invalid request shape, insufficient known properties, invalid fluid/policy, and
-unknown canonical units must fail explicitly. Compatibility facades may add
-channel-specific error presentation, but they must not swallow canonical
-contract errors or silently substitute a different physical meaning.
+Invalid request shape、known property 不足、invalid fluid/policy 與 unknown canonical unit 都必須明確失敗。Compatibility facade 可以增加 channel-specific error presentation，但不得吞掉 canonical contract error，也不得默默替換成另一種 physical meaning。

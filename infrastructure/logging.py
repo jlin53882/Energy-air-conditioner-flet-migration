@@ -1,4 +1,4 @@
-"""Neutral application logging infrastructure."""
+"""中立 application logging infrastructure。"""
 
 from __future__ import annotations
 
@@ -8,6 +8,9 @@ logger = logging.getLogger("energy_air_conditioner")
 
 
 def setup_logging() -> None:
-    """Configure a conservative process-wide logging default once."""
+    """一次設定保守的 process-wide logging 預設值。
+
+回傳：
+    無。"""
     if not logging.getLogger().handlers:
         logging.basicConfig(level=logging.INFO)

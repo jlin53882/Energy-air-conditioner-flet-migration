@@ -22,9 +22,10 @@ _REFERENCE_STATE = ReferenceStateService()
 
 class ThermoCalculator:
     def __init__(self):
-        """
-        初始化熱力學計算器，包含所有需要的常數、單位定義和轉換邏輯。
-        """
+        """初始化熱力學計算器，包含所有需要的常數、單位定義和轉換邏輯。
+
+回傳：
+    無。"""
         self._canonical_converter = CanonicalUnitConverter()
         self._shared_state_service = ThermodynamicStateService(self._canonical_converter)
         self._psychrometric_service = PsychrometricService(LegacyPsychrometricModelAdapter())
@@ -128,7 +129,7 @@ class ThermoCalculator:
                     "kJ/kg": lambda v: v / 1000,  # 1 kJ/kg = 1000 J/kg
                     "Btu/lbm": lambda v: v / 2326 # 1 Btu/lbm = 2326 J/kg
                 },
-                # For extensive properties
+                # 對於廣延性質
                 "from_si_extensive": {
                     "J": lambda v: v,  # 基本單位
                     "kJ": lambda v: v / 1000,  # 1 kJ = 1000 J
@@ -163,7 +164,7 @@ class ThermoCalculator:
                 "to_si": {"m³/kg": lambda v: v},
                 "from_si": { 
                     "m³/kg": lambda v: v, 
-                    "ft³/lbm": lambda v: v * 16.0185} # Note: v is specific volume, not density
+                    "ft³/lbm": lambda v: v * 16.0185} # 注意：v 是 specific volume，而不是 density
             },
             "U": {
                 "to_si": {
@@ -176,7 +177,7 @@ class ThermoCalculator:
                     "kJ/kg": lambda v: v / 1000,  # 1 kJ/kg = 1000 J/kg
                     "Btu/lbm": lambda v: v / 2326 # 1 Btu/lbm = 2326 J/kg
                 },
-                # For extensive properties
+                # 對於廣延性質
                 "from_si_extensive": {
                     "J": lambda v: v, # 基本單位
                     "kJ": lambda v: v / 1000,  # 1 kJ = 1000 J
@@ -192,7 +193,13 @@ class ThermoCalculator:
         }
 
     def is_fluid_valid(self, fluid_name: str) -> bool:
-        """Return whether the shared thermodynamic service recognizes a fluid."""
+        """回傳共用 thermodynamic service 是否辨識指定流體。
+
+參數：
+    fluid_name (str): 函數輸入值。
+
+回傳：
+    bool：函數計算或處理後的結果。"""
         return self._shared_state_service.is_fluid_valid(fluid_name)
         
     def _convert_to_si(self, prop_code, value, unit_code): 
@@ -200,15 +207,15 @@ class ThermoCalculator:
         將給定性質的值從指定單位轉換為 SI 單位。
         這是輸入值標準化的關鍵步驟。
 
-        :param prop_code: 性質代碼 (e.g., 'P', 'T', 'V')
+        :param prop_code: 性質代碼 (例如： 'P', 'T', 'V')
         :param value: 輸入值
-        :param unit_code: 輸入值的單位代碼 (e.g., 'kPa', 'C')
+        :param unit_code: 輸入值的單位代碼 (例如： 'kPa', 'C')
         :return: 轉換為 SI 單位後的值 (CoolProp 標準)
         """
         if prop_code in self._canonical_converter.CORE_PROPERTIES - {"V"}:
             return self._canonical_converter.convert_to_si(prop_code, value, unit_code)
 
-        if prop_code == 'V': # 特殊處理比容 (Specific Volume) V
+        if prop_code == 'V': # 特殊處理比容 V
             # 註解：在 calculate_properties 函數中，V 會被轉換為密度 D，
             # 但這裡的邏輯看起來是為了在 _convert_to_si 內部完成 V 到 D 的 SI 轉換。
             # V (比容) 的 SI 單位是 m³/kg，CoolProp 通常使用密度 D (kg/m³)
@@ -237,7 +244,7 @@ class ThermoCalculator:
 
     def _convert_from_si(self, prop_code, value_si, unit_code):
         """
-        將 SI 單位值轉換為目標顯示單位 (通常是比性質，per mass)。
+        將 SI 單位值轉換為目標顯示單位 (通常是比性質，按質量)。
 
         :param prop_code: 性質代碼
         :param value_si: SI 單位的值
@@ -256,12 +263,12 @@ class ThermoCalculator:
 
     def _convert_from_si_extensive(self, prop_code, value_si, unit_code):
         """
-        轉換廣延性質 (Extensive Properties) 的單位 (例如總體積 V_total, 總焓 H_total)。
+        轉換廣延性質 (廣延性質) 的單位 (例如總體積 V_total, 總焓 H_total)。
         廣延性質的單位通常不包含 /kg 或 /lbm。
         
-        :param prop_code: 性質代碼 (e.g., 'H')
-        :param value_si: SI 單位的值 (e.g., J)
-        :param unit_code: 目標單位代碼 (e.g., 'kJ')
+        :param prop_code: 性質代碼 (例如： 'H')
+        :param value_si: SI 單位的值 (例如： J)
+        :param unit_code: 目標單位代碼 (例如： 'kJ')
         :return: 轉換為目標廣延單位後的值
         """
         # 檢查是否存在廣延性質專用的轉換規則
@@ -277,7 +284,7 @@ class ThermoCalculator:
         為給定的性質代碼 (prop_code) 安全地返回所有可用的單位列表。
         單位列表是從 'self.conversion_map' 字典中動態生成的，用於使用者介面顯示。
         
-        :param prop_code: 性質代碼 (e.g., 'P', 'T', 'V')
+        :param prop_code: 性質代碼 (例如： 'P', 'T', 'V')
         :return: 單位字串列表 (list of str)
         """
         # 排除乾度 (Q) - 乾度是一個無單位 (無量綱) 的性質
@@ -300,7 +307,16 @@ class ThermoCalculator:
         is_ideal_gas=False,
         reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
     ):
-        """Calculate under Telegram's explicit default reference-state policy."""
+        """在 Telegram 明確的 default reference-state policy 下計算。
+
+參數：
+    fluid (未指定型別): 函數輸入值。
+    known_props (未指定型別): 函數輸入值。
+    is_ideal_gas (未指定型別): 函數輸入值。
+    reference_state (ReferenceStatePolicy | str): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
         if any(prop == "V" for prop, _, _ in known_props):
             return self._calculate_legacy_properties(
                 fluid, known_props, is_ideal_gas, reference_state
@@ -367,7 +383,15 @@ class ThermoCalculator:
         known_props_si,
         reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
     ):
-        """Query the legacy Telegram path under an explicit policy."""
+        """在明確 policy 下查詢舊版 Telegram path。
+
+參數：
+    fluid (未指定型別): 函數輸入值。
+    known_props_si (未指定型別): 函數輸入值。
+    reference_state (ReferenceStatePolicy | str): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
         with _REFERENCE_STATE.calculation_scope(fluid, reference_state):
             return self._calculate_coolprop_unlocked(fluid, known_props_si)
 
@@ -439,7 +463,14 @@ class ThermoCalculator:
         return si_results
 
     def format_specific_properties(self, si_results, use_imperial_units):
-        """將 SI 單位比性質結果格式化為可讀的字串，並添加詳細的相態描述。"""
+        """將 SI 單位比性質結果格式化為可讀的字串，並添加詳細的相態描述。
+
+參數：
+    si_results (未指定型別): 函數輸入值。
+    use_imperial_units (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
         lines = ["--- 比性質 (Specific Properties) ---"]
         
         # 格式化所有性質
@@ -502,13 +533,21 @@ class ThermoCalculator:
         return "\n".join(lines)
 
     def format_extensive_properties(self, si_results, total_mass, use_imperial_units):
-        """計算並格式化廣延性質"""
+        """計算並格式化廣延性質
+
+參數：
+    si_results (未指定型別): 函數輸入值。
+    total_mass (未指定型別): 函數輸入值。
+    use_imperial_units (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
         lines = ["\n--- 廣延性質 (Extensive Properties) ---"]
         
         # 質量單位轉換
         mass_unit = "kg"
         if use_imperial_units:
-            total_mass /= 2.20462 # kg to lbm for display, but calculation uses SI
+            total_mass /= 2.20462 # 顯示時將 kg 轉為 lbm，但計算使用 SI
             mass_unit = "lbm"
         lines.append(f"總質量 (Mass): {total_mass:.4f} {mass_unit}")
 
@@ -530,16 +569,47 @@ class ThermoCalculator:
 # --- [新功能] 冷凍空調原理分析 ---
     
     def calculate_compressor_work(self, mass_flow_rate, h1, h2):
-        """Return compressor work in kW for the legacy kJ/kg API."""
+        """針對舊版 kJ/kg API 回傳以 kW 為單位的壓縮機功。
+
+參數：
+    mass_flow_rate (未指定型別): 函數輸入值。
+    h1 (未指定型別): 函數輸入值。
+    h2 (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
         return calculate_compressor_work_si(mass_flow_rate, h1 * 1000.0, h2 * 1000.0) / 1000.0
     def calculate_compression_ratio(self, p_suction_abs, p_discharge_abs):
-        """Return the compression ratio through the shared SI equation."""
+        """透過共用 SI 方程式回傳壓縮比。
+
+參數：
+    p_suction_abs (未指定型別): 函數輸入值。
+    p_discharge_abs (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
         return calculate_compression_ratio_si(p_suction_abs, p_discharge_abs)
     def calculate_evaporator_heat_rate(self, mass_flow_rate, h1, h2):
-        """Return evaporator heat rate in kW for the legacy kJ/kg API."""
+        """針對舊版 kJ/kg API 回傳以 kW 為單位的蒸發器熱傳率。
+
+參數：
+    mass_flow_rate (未指定型別): 函數輸入值。
+    h1 (未指定型別): 函數輸入值。
+    h2 (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
         return calculate_evaporator_heat_rate_si(mass_flow_rate, h1 * 1000.0, h2 * 1000.0) / 1000.0
     def calculate_condenser_heat_rate(self, mass_flow_rate, h1, h2):
-        """Return condenser heat rate in kW for the legacy kJ/kg API."""
+        """針對舊版 kJ/kg API 回傳以 kW 為單位的冷凝器熱傳率。
+
+參數：
+    mass_flow_rate (未指定型別): 函數輸入值。
+    h1 (未指定型別): 函數輸入值。
+    h2 (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
         return calculate_condenser_heat_rate_si(mass_flow_rate, h1 * 1000.0, h2 * 1000.0) / 1000.0
 
     def calculate_throttling_value(self, h1: float, h2: float) -> float:
@@ -569,7 +639,7 @@ class ThermoCalculator:
         :param P2: 節流後實際工作壓力 (Pa)  <- 修正: 新增此參數
         :param P0_dead: 參考狀態壓力 (Pa)
         :param T0_dead: 參考狀態溫度 (K)
-        :param substance: 流體名稱 (e.g., 'R134a', 'Water')
+        :param substance: 流體名稱 (例如： 'R134a', 'Water')
         :param m_dot: 質量流率 (kg/s)
         :return: (Sgen_flow (W/K), Ex_destruction (W)) 
         """
@@ -605,7 +675,7 @@ class ThermoCalculator:
         s2 = CP.PropsSI('S', 'P', P2, 'H', h2, substance) #kJ/(kg K)
         T2= CP.PropsSI('T', 'P', P2, 'H', h2, substance) 
 
-        #reference state: dead state
+        # 參考狀態：dead state
         # 計算dead狀態的焓值和熵值 h0_dead, s0_dead
         h0_dead= CP.PropsSI('H', 'P', P0_dead, 'T', T0_dead, substance)
         s0_dead= CP.PropsSI('S', 'P', P0_dead, 'T', T0_dead, substance)
@@ -614,11 +684,11 @@ class ThermoCalculator:
         Sgen_tv= s2 - s1  # 計算節流過程的熵增  可能用不到 (預留)
         Sgen_flow=Sgen_tv*m_dot # 熵增的流量形式
 
-        #specific exergy calculation  
-        #state 1: throttling state
+        #specific exergy 計算
+        # state 1：throttling state
         exergy_specific_1= (h1 - h0_dead) - T0_dead*(s1 - s0_dead)  # 計算狀態1比焓值
 
-        #state 2: throttling state
+        # state 2：throttling state
         exergy_specific_2= (h2 - h0_dead) - T0_dead*(s2 - s0_dead)  # 計算狀態2比焓值
 
         Ex_destruction= m_dot*(exergy_specific_1 - exergy_specific_2)  # 計算比焓值損失 KW
@@ -627,7 +697,13 @@ class ThermoCalculator:
 
 
     def calculate_psychrometric_properties(self, known_props: dict):
-        """Format shared psychrometric results for Telegram responses."""
+        """將共用 psychrometric results 格式化為 Telegram responses。
+
+參數：
+    known_props (dict): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
         altitude = known_props.get("altitude")
         tdb_c = known_props.get("Tdb")
         if "Twb" in known_props:

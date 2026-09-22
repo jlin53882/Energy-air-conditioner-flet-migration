@@ -1,4 +1,4 @@
-"""Psychrometric domain boundary."""
+"""Psychrometric domain 的邊界。"""
 
 from .service import PsychrometricService
 

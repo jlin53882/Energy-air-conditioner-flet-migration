@@ -1,4 +1,4 @@
-"""Process-wide reference-state synchronization and request policy."""
+"""Process-wide reference-state 同步與 request policy。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ _PROCESS_REFERENCE_STATES: dict[str, str] = {}
 
 
 class ReferenceStatePolicy(str, Enum):
-    """Explicit policies for a reference-state-sensitive request."""
+    """reference-state-sensitive request 的明確 policies。"""
 
     DEFAULT = "DEF"
     ASHRAE = "ASHRAE"
@@ -25,18 +25,27 @@ class ReferenceStatePolicy(str, Enum):
 
 
 class ReferenceStateService:
-    """Serialize CoolProp transactions and record process-global state policy."""
+    """序列化 CoolProp transactions，並記錄 process-global state policy。"""
 
     VALID_CODES = frozenset({"DEF", "ASHRAE", "IIR", "NBP"})
 
     @property
     def lock(self) -> RLock:
-        """Expose the process-wide lock for identity/regression checks."""
+        """公開 process-wide lock，供 identity/regression checks 使用。
+
+回傳：
+    RLock：函數計算或處理後的結果。"""
         return _PROCESS_COOLPROP_LOCK
 
     @staticmethod
     def _normalize_policy(policy: ReferenceStatePolicy | str) -> str:
-        """Normalize a request policy without conflating CURRENT and DEFAULT."""
+        """正規化 request policy，不混淆 CURRENT 與 DEFAULT。
+
+參數：
+    policy (ReferenceStatePolicy | str): 函數輸入值。
+
+回傳：
+    str：函數計算或處理後的結果。"""
         normalized = policy.value if isinstance(policy, ReferenceStatePolicy) else policy.upper()
         if normalized == "DEFAULT":
             normalized = ReferenceStatePolicy.DEFAULT.value
@@ -47,7 +56,14 @@ class ReferenceStateService:
         return normalized
 
     def _set_unlocked(self, fluid_name: str, ref_state: ReferenceStatePolicy | str) -> None:
-        """Apply a concrete CoolProp mutation while the shared lock is held."""
+        """持有共用 lock 時套用具體的 CoolProp mutation。
+
+參數：
+    fluid_name (str): 函數輸入值。
+    ref_state (ReferenceStatePolicy | str): 函數輸入值。
+
+回傳：
+    無。"""
         normalized = self._normalize_policy(ref_state)
         if normalized == ReferenceStatePolicy.CURRENT.value:
             raise ValueError("CURRENT is not valid for set(); choose a concrete policy")
@@ -60,7 +76,14 @@ class ReferenceStateService:
         _PROCESS_REFERENCE_STATES[fluid_name] = normalized
 
     def set(self, fluid_name: str, ref_state: ReferenceStatePolicy | str) -> None:
-        """Set a concrete reference state and update the shared process registry."""
+        """設定具體的 reference state，並更新共用 process registry。
+
+參數：
+    fluid_name (str): 函數輸入值。
+    ref_state (ReferenceStatePolicy | str): 函數輸入值。
+
+回傳：
+    無。"""
         with _PROCESS_COOLPROP_LOCK:
             self._set_unlocked(fluid_name, ref_state)
 
@@ -70,12 +93,12 @@ class ReferenceStateService:
         fluid_name: str,
         ref_state: ReferenceStatePolicy | str = ReferenceStatePolicy.CURRENT,
     ) -> Iterator[None]:
-        """Protect a complete request transaction under an explicit policy.
+        """在明確 policy 下保護完整的 request transaction。
 
-        ``CURRENT`` deliberately preserves the current process state for an
-        internal operation such as a fluid-validity probe. Ordinary property
-        entrypoints must pass a concrete policy such as ``DEFAULT`` or
-        ``ASHRAE``; they must not rely on ambient state.
+        ``CURRENT`` 刻意保留目前 process state，供
+        流體有效性探測等內部操作使用。一般 property
+        entrypoints 必須傳入 ``DEFAULT`` 或
+        ``ASHRAE`` 等具體 policy；不得依賴 ambient state。
         """
         normalized = self._normalize_policy(ref_state)
         with _PROCESS_COOLPROP_LOCK:
@@ -84,6 +107,12 @@ class ReferenceStateService:
             yield
 
     def current(self, fluid_name: str) -> str | None:
-        """Return the process-global observed reference state for a fluid."""
+        """回傳流體的 process-global observed reference state。
+
+參數：
+    fluid_name (str): 函數輸入值。
+
+回傳：
+    str | None：函數計算或處理後的結果。"""
         with _PROCESS_COOLPROP_LOCK:
             return _PROCESS_REFERENCE_STATES.get(fluid_name)

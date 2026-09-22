@@ -1,4 +1,4 @@
-"""Phase 6B tests for the first incremental compressor migration."""
+"""Phase 6B 的第一個 incremental compressor migration test。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,10 @@ from application.models import CompressionRatioRequest
 
 
 def test_compression_ratio_application_service_uses_si_request_schema() -> None:
-    """The first migrated analysis accepts a neutral request, not controls."""
+    """第一個已遷移的 analysis 接受中立 request，而不是 control。
+
+回傳：
+    無。"""
     result = CompressionRatioService().calculate(
         CompressionRatioRequest(
             suction_pressure_pa=100_000.0,
@@ -20,7 +23,10 @@ def test_compression_ratio_application_service_uses_si_request_schema() -> None:
 
 
 def test_compression_ratio_request_rejects_non_positive_pressure() -> None:
-    """The migrated analysis preserves the physical input boundary."""
+    """已遷移的 analysis 保留 physical input boundary。
+
+回傳：
+    無。"""
     with pytest.raises(ValueError):
         CompressionRatioService().calculate(
             CompressionRatioRequest(

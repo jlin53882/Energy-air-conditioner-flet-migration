@@ -1,1 +1,1 @@
-"""UI-agnostic domain services."""
+"""與 UI 無關的 domain services。"""

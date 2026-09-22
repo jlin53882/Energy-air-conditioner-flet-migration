@@ -41,11 +41,24 @@ class Config:
 
 # --- 3. 進階日誌管理系統 ---
 def zip_namer(default_name: str) -> str:
-    """日誌壓縮檔的命名函式：在預設名稱後加上 .zip"""
+    """日誌壓縮檔的命名函式：在預設名稱後加上 .zip
+
+參數：
+    default_name (str): 函數輸入值。
+
+回傳：
+    str：函數計算或處理後的結果。"""
     return default_name + ".zip"
 
 def log_rotator_zip(source: str, dest: str):
-    """日誌輪替時的壓縮函式：將舊日誌檔案壓縮成 ZIP 檔案並刪除原檔"""
+    """日誌輪替時的壓縮函式：將舊日誌檔案壓縮成 ZIP 檔案並刪除原檔
+
+參數：
+    source (str): 函數輸入值。
+    dest (str): 函數輸入值。
+
+回傳：
+    無。"""
     with zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
         # 將日誌檔案寫入 ZIP 檔案，arcname 確保壓縮包內只有檔名
         zf.write(source, arcname=os.path.basename(source))
@@ -53,7 +66,10 @@ def log_rotator_zip(source: str, dest: str):
     os.remove(source)
 
 def setup_logging():
-    """設定日誌系統，使用 TimedRotatingFileHandler 實現定時輪替和壓縮"""
+    """設定日誌系統，使用 TimedRotatingFileHandler 實現定時輪替和壓縮
+
+回傳：
+    無。"""
     log_file_path = os.path.join(LOGS_DIR, 'ThermoBot.log') # 更改日誌檔名
     logger = logging.getLogger("ThermoBot") # 給予一個獨立的 logger 名稱
     logger.setLevel(logging.INFO) # 設定日誌級別為 INFO

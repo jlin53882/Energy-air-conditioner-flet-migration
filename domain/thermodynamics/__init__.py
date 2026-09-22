@@ -1,4 +1,4 @@
-"""Shared thermodynamic domain services."""
+"""共用 thermodynamic domain services。"""
 
 from .reference_state import ReferenceStatePolicy, ReferenceStateService
 from .state_service import ThermodynamicStateService

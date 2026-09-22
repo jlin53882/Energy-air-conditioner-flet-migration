@@ -1,4 +1,4 @@
-"""Phase 5 tests for application-level property orchestration."""
+"""Phase 5 的 application-level property orchestration test。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,10 @@ from domain.units.converter import CanonicalUnitConverter
 
 
 def test_property_query_service_is_headless_and_returns_neutral_result() -> None:
-    """Application orchestration can run without Flet controls or Telegram state."""
+    """Application orchestration 不依賴 Flet control 或 Telegram state 也能執行。
+
+回傳：
+    無。"""
     service = PropertyQueryService(ThermodynamicStateService(CanonicalUnitConverter()))
     result = service.query(
         PropertyQueryRequest(
@@ -29,7 +32,10 @@ def test_property_query_service_is_headless_and_returns_neutral_result() -> None
 
 
 def test_property_query_service_owns_fluid_validation_and_reference_state() -> None:
-    """The application boundary exposes lifecycle operations without UI types."""
+    """application boundary 提供 lifecycle operation，但不使用 UI type。
+
+回傳：
+    無。"""
     service = PropertyQueryService(ThermodynamicStateService(CanonicalUnitConverter()))
     assert service.is_fluid_valid("R134a") is True
     assert service.is_fluid_valid("not-a-fluid") is False
@@ -39,7 +45,10 @@ def test_property_query_service_owns_fluid_validation_and_reference_state() -> N
 
 
 def test_property_query_service_rejects_insufficient_inputs() -> None:
-    """Application validation fails before entering the domain calculation."""
+    """Application validation 必須在進入 domain calculation 前失敗。
+
+回傳：
+    無。"""
     service = PropertyQueryService(ThermodynamicStateService(CanonicalUnitConverter()))
     with pytest.raises(ValueError, match="at least two"):
         service.query(

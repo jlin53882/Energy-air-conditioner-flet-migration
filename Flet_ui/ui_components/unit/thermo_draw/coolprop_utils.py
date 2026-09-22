@@ -19,7 +19,14 @@ _REFERENCE_STATE = ReferenceStateService()
 def _effective_reference_state(
     fluid: str, ref_state: str
 ) -> ReferenceStatePolicy | str:
-    """Resolve chart UI reference-state semantics to a shared policy code."""
+    """將圖表 UI reference-state 語意解析為共用 policy code。
+
+參數：
+    fluid (str): 函數輸入值。
+    ref_state (str): 函數輸入值。
+
+回傳：
+    ReferenceStatePolicy | str：函數計算或處理後的結果。"""
     if ref_state == "Auto":
         return resolve_reference_state_policy(fluid)
     if ref_state in {"ASHRAE", "NBP", "IIR", "DEF"}:
@@ -47,9 +54,13 @@ setup_chinese_font()
 # (新增) 冷媒驗證函式
 # ======================================================
 def check_coolprop_fluid(fluid_name):
-    """
-    檢查 CoolProp 中是否存在指定的流體名稱。
-    """
+    """檢查 CoolProp 中是否存在指定的流體名稱。
+
+參數：
+    fluid_name (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
     if not fluid_name:
         return False, "名稱不可為空"
     try:
@@ -69,7 +80,19 @@ def check_coolprop_fluid(fluid_name):
 # ======================================================
 @lru_cache(maxsize=10000)
 def safe_props(output, in1, in1_val, in2, in2_val, fluid, ref_state="Auto"):
-    """Query CoolProp under the process-wide reference-state transaction."""
+    """在 process-wide reference-state transaction 下查詢 CoolProp。
+
+參數：
+    output (未指定型別): 函數輸入值。
+    in1 (未指定型別): 函數輸入值。
+    in1_val (未指定型別): 函數輸入值。
+    in2 (未指定型別): 函數輸入值。
+    in2_val (未指定型別): 函數輸入值。
+    fluid (未指定型別): 函數輸入值。
+    ref_state (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
     try:
         with _REFERENCE_STATE.calculation_scope(
             fluid, _effective_reference_state(fluid, ref_state)
@@ -86,16 +109,32 @@ def safe_props(output, in1, in1_val, in2, in2_val, fluid, ref_state="Auto"):
 # 通用飽和線生成函式 (接受 ref_state)
 # ======================================================
 def get_saturation_curve(fluid, ref_state, mode="T", num_points=400):
-    """Generate a saturation curve under the shared CoolProp lock."""
+    """在共用 CoolProp lock 下產生飽和曲線。
+
+參數：
+    fluid (未指定型別): 函數輸入值。
+    ref_state (未指定型別): 函數輸入值。
+    mode (未指定型別): 函數輸入值。
+    num_points (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
     with _REFERENCE_STATE.calculation_scope(
         fluid, _effective_reference_state(fluid, ref_state)
     ):
         return _get_saturation_curve_unlocked(fluid, ref_state, mode, num_points)
 
 def _get_saturation_curve_unlocked(fluid, ref_state, mode="T", num_points=400):
-    """
-    生成指定流體的飽和線（液線與氣線）。
-    """
+    """生成指定流體的飽和線（液線與氣線）。
+
+參數：
+    fluid (未指定型別): 函數輸入值。
+    ref_state (未指定型別): 函數輸入值。
+    mode (未指定型別): 函數輸入值。
+    num_points (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
     try:
         T_crit = CP.PropsSI("Tcrit", fluid)
         T_trip = CP.PropsSI("Ttriple", fluid)
@@ -156,7 +195,21 @@ def generate_thermo_diagram(fluid, diagram, state_points_si, unit_converter,
                           connect_points=False, input_mode=None, ref_state="Auto",
                           target_P_unit="MPa", # 接受Y軸壓力單位
                           result_text=None):
-    """Build a diagram while holding the shared CoolProp transaction lock."""
+    """持有共用 CoolProp transaction lock 時建立圖表。
+
+參數：
+    fluid (未指定型別): 函數輸入值。
+    diagram (未指定型別): 函數輸入值。
+    state_points_si (未指定型別): 函數輸入值。
+    unit_converter (未指定型別): 函數輸入值。
+    connect_points (未指定型別): 函數輸入值。
+    input_mode (未指定型別): 函數輸入值。
+    ref_state (未指定型別): 函數輸入值。
+    target_P_unit (未指定型別): 函數輸入值。
+    result_text (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
     with _REFERENCE_STATE.calculation_scope(
         fluid, _effective_reference_state(fluid, ref_state)
     ):
@@ -168,12 +221,24 @@ def generate_thermo_diagram(fluid, diagram, state_points_si, unit_converter,
 def _generate_thermo_diagram_unlocked(fluid, diagram, state_points_si, unit_converter,
                           connect_points=False, input_mode=None, ref_state="Auto",
                           target_P_unit="MPa", result_text=None):
-    """
-    建立熱力圖（P-h、T-s、P-v、T-v）
-    """
+    """建立熱力圖（P-h、T-s、P-v、T-v）
+
+參數：
+    fluid (未指定型別): 函數輸入值。
+    diagram (未指定型別): 函數輸入值。
+    state_points_si (未指定型別): 函數輸入值。
+    unit_converter (未指定型別): 函數輸入值。
+    connect_points (未指定型別): 函數輸入值。
+    input_mode (未指定型別): 函數輸入值。
+    ref_state (未指定型別): 函數輸入值。
+    target_P_unit (未指定型別): 函數輸入值。
+    result_text (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
     plt.close('all')
 
-    # CoolProp reference-state setup is owned by the public wrapper.
+    # CoolProp reference-state 設定由 public wrapper 擁有。
     try:
         CP.PropsSI("Tcrit", fluid)
     except Exception:

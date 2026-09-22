@@ -1,4 +1,4 @@
-"""Phase 3 tests for shared SI HVAC equations."""
+"""Phase 3 的 shared SI HVAC equation test。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,10 @@ from Telegram_bot.thermo_calculator import ThermoCalculator
 
 
 def test_shared_hvac_equations_use_si_energy_units() -> None:
-    """J/kg inputs produce W outputs in the domain boundary."""
+    """domain boundary 將 J/kg input 產生為 W output。
+
+回傳：
+    無。"""
     assert calculate_compressor_work_si(0.2, 250_000.0, 300_000.0) == pytest.approx(10_000.0)
     assert calculate_evaporator_heat_rate_si(0.2, 100_000.0, 250_000.0) == pytest.approx(30_000.0)
     assert calculate_condenser_heat_rate_si(0.2, 300_000.0, 250_000.0) == pytest.approx(10_000.0)
@@ -23,7 +26,10 @@ def test_shared_hvac_equations_use_si_energy_units() -> None:
 
 
 def test_shared_hvac_equations_preserve_existing_channel_outputs() -> None:
-    """Flet and Telegram compatibility callers retain their current kW API."""
+    """Flet 與 Telegram compatibility caller 保留目前的 kW API。
+
+回傳：
+    無。"""
     telegram = ThermoCalculator()
     cases = (
         (HVACAnalyzer.calculate_compressor_work, telegram.calculate_compressor_work, (0.2, 250.0, 300.0)),
@@ -36,7 +42,10 @@ def test_shared_hvac_equations_preserve_existing_channel_outputs() -> None:
 
 
 def test_shared_hvac_equations_reject_invalid_boundaries() -> None:
-    """Negative flow/enthalpy and non-positive absolute pressure fail."""
+    """負值 flow/enthalpy 與非正絕對壓力必須失敗。
+
+回傳：
+    無。"""
     with pytest.raises(ValueError):
         calculate_compressor_work_si(-0.1, 250_000.0, 300_000.0)
     with pytest.raises(ValueError):

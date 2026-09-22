@@ -1,4 +1,4 @@
-"""Phase 4 tests for the single psychrometric boundary."""
+"""Phase 4 的 single psychrometric boundary test。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,10 @@ from infrastructure.psychrometrics import LegacyPsychrometricModelAdapter
 
 
 def test_shared_psychrometric_service_returns_si_numeric_result() -> None:
-    """The shared adapter hides the excluded model tuple contract."""
+    """shared adapter 隱藏排除 model 的 tuple contract。
+
+回傳：
+    無。"""
     result = PsychrometricService(LegacyPsychrometricModelAdapter()).calculate_from_tdb_rh(
         tdb_k=298.15,
         rh=50.0,
@@ -25,14 +28,20 @@ def test_shared_psychrometric_service_returns_si_numeric_result() -> None:
 
 
 def test_flet_psychrometric_adapter_matches_shared_service() -> None:
-    """The Flet adapter exposes the shared service result unchanged."""
+    """Flet adapter 原樣提供 shared service result。
+
+回傳：
+    無。"""
     expected = PsychrometricService(LegacyPsychrometricModelAdapter()).calculate_from_tdb_rh(298.15, 50.0, 0.0)
     actual = PsychrometricCalculator().calculate_from_tdb_rh(298.15, 50.0, 0.0)
     assert actual == expected
 
 
 def test_telegram_psychrometric_adapter_preserves_display_contract() -> None:
-    """Telegram keeps display strings while sourcing values from the service."""
+    """Telegram 保留 display string，但數值來源改由 service 提供。
+
+回傳：
+    無。"""
     result = ThermoCalculator().calculate_psychrometric_properties(
         {"altitude": 0.0, "Tdb": 25.0, "RH": 50.0}
     )

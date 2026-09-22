@@ -1,4 +1,4 @@
-"""Headless parser for thermodynamic chart state-point input."""
+"""不依賴 UI 的 thermodynamic chart state-point input parser。"""
 
 from __future__ import annotations
 
@@ -8,10 +8,16 @@ from .models import StatePoint
 
 
 class StatePointParser:
-    """Parse comma-separated chart input into neutral SI state points."""
+    """將逗號分隔的 chart input 解析為中立 SI state point。"""
 
     def __init__(self, unit_converter: CanonicalUnitConverter | None = None) -> None:
-        """Initialize with the shared canonical unit converter."""
+        """使用 shared canonical unit converter 初始化。
+
+參數：
+    unit_converter (CanonicalUnitConverter | None): 函數輸入值。
+
+回傳：
+    無。"""
         self.unit_converter = unit_converter or CanonicalUnitConverter()
 
     def parse(
@@ -21,7 +27,16 @@ class StatePointParser:
         pressure_unit: str,
         temperature_unit: str,
     ) -> list[StatePoint]:
-        """Parse paired comma-separated pressures and temperatures."""
+        """解析成對的逗號分隔壓力與溫度。
+
+參數：
+    pressures (str): 函數輸入值。
+    temperatures (str): 函數輸入值。
+    pressure_unit (str): 函數輸入值。
+    temperature_unit (str): 函數輸入值。
+
+回傳：
+    list[StatePoint]：函數計算或處理後的結果。"""
         pressure_values = self._parse_numbers(pressures)
         temperature_values = self._parse_numbers(temperatures)
         if len(pressure_values) != len(temperature_values):
@@ -36,7 +51,13 @@ class StatePointParser:
 
     @staticmethod
     def _parse_numbers(raw_value: str) -> list[float]:
-        """Parse a non-empty comma-separated numeric string."""
+        """解析非空的逗號分隔數值字串。
+
+參數：
+    raw_value (str): 函數輸入值。
+
+回傳：
+    list[float]：函數計算或處理後的結果。"""
         try:
             values = [float(item.strip()) for item in raw_value.split(",") if item.strip()]
         except ValueError as exc:

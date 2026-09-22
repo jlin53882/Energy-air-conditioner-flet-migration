@@ -33,7 +33,10 @@ class ThermoDiagramModule(BaseAnalysisModule):
     # 1️⃣ UI 建構區 (與前版相同)
     # ======================================================
     def _build_thermo_diagram_ui(self):
-        """建立熱力圖輸入與繪圖區"""
+        """建立熱力圖輸入與繪圖區
+
+回傳：
+    無。"""
         #單位處理
         temp_unit = self.unit_converter.default_units["T"]
         press_unit = self.unit_converter.default_units["P"]
@@ -158,7 +161,13 @@ class ThermoDiagramModule(BaseAnalysisModule):
     # 1a. 冷媒驗證事件 (無變更)
     # ======================================================
     def _on_check_fluid(self, e):
-        """使用者按下 [驗證] 按鈕時"""
+        """使用者按下 [驗證] 按鈕時
+
+參數：
+    e (未指定型別): 函數輸入值。
+
+回傳：
+    無。"""
         fluid_name = self.fluid_tf.value.strip()
         if not fluid_name:
             self.fluid_check_result.value = "請輸入冷媒名稱"
@@ -221,7 +230,13 @@ class ThermoDiagramModule(BaseAnalysisModule):
     # 2️⃣ 繪圖邏輯：事件觸發 (無變更)
     # ======================================================
     def _on_plot_click(self, e):
-        """使用者按下 [繪圖] 按鈕時"""
+        """使用者按下 [繪圖] 按鈕時
+
+參數：
+    e (未指定型別): 函數輸入值。
+
+回傳：
+    無。"""
         
         self.result_text.value = "繪製中..."
         self.result_text.color = "blue"
@@ -247,9 +262,13 @@ class ThermoDiagramModule(BaseAnalysisModule):
     # 3️⃣ 核心邏輯：計算並繪製圖形 (無變更)
     # ======================================================
     def calculate_thermo_diagram(self, use_imperial: bool) -> str:
-        """
-        呼叫 coolprop_utils.generate_thermo_diagram() 執行繪圖
-        """
+        """呼叫 coolprop_utils.generate_thermo_diagram() 執行繪圖
+
+參數：
+    use_imperial (bool): 函數輸入值。
+
+回傳：
+    str：函數計算或處理後的結果。"""
         try:
             # --- 繪圖前驗證冷媒 ---
             fluid = self.fluid_tf.value.strip()
@@ -363,8 +382,8 @@ class ThermoDiagramModule(BaseAnalysisModule):
             )
 
             self.chart.figure = fig
-            # A headless calculation can produce a figure before the chart is
-            # attached to a page; only push a UI update when attachment exists.
+            # headless 計算可能在圖表
+            # 附加到 page 前產生圖形；只有在存在附加關係時才推送 UI 更新。
             try:
                 chart_page = self.chart.page
             except RuntimeError:
@@ -392,8 +411,8 @@ class ThermoDiagramModule(BaseAnalysisModule):
     def _create_multi_value_unit_sync_handler(self, unit_type, sync_group):
         """
         (覆寫)
-        Factory function to create an on_change handler that supports
-        comma-separated values (例如 "-10, 50") for unit conversion.
+        建立 on_change handler 的 factory function，支援
+        comma-separated values (例如 "-10, 50") 進行單位轉換。
         """
         def on_change_handler(e):
             # 1. 找到是哪個輸入框觸發了事件
@@ -475,7 +494,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
             if self.parent:
                 self.page.update()
         
-        # --- End of on_change_handler ---
+        # --- on_change_handler 結束 ---
         return on_change_handler
 
     # ======================================================
@@ -508,7 +527,14 @@ class ThermoDiagramModule(BaseAnalysisModule):
         self.all_entries["td_V"]["unit"].on_change = self._create_unit_sync_handler("V", v_sync_group)
         
         def setup_sync_for_group(unit_type, sync_group):
-            """輔助函式：綁定 handler 並設定初始單位"""
+            """輔助函式：綁定 handler 並設定初始單位
+
+參數：
+    unit_type (未指定型別): 函數輸入值。
+    sync_group (未指定型別): 函數輸入值。
+
+回傳：
+    無。"""
             
             # 1. 建立客製化的 handler
             handler = self._create_multi_value_unit_sync_handler(unit_type, sync_group)

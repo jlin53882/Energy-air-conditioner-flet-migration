@@ -1,4 +1,4 @@
-"""Regression tests for PR #1 review findings F1-F7."""
+"""PR #1 review finding F1-F7 的 regression test。"""
 
 from __future__ import annotations
 
@@ -26,12 +26,18 @@ ROOT = Path(__file__).parents[2]
 
 
 def test_reference_state_services_share_process_lock() -> None:
-    """Every service instance must serialize the same CoolProp process state."""
+    """每個 service instance 都必須序列化相同的 CoolProp process state。
+
+回傳：
+    無。"""
     assert ReferenceStateService().lock is ReferenceStateService().lock
 
 
 def test_iapws_is_not_a_reference_state_policy() -> None:
-    """Only CoolProp predefined states plus CURRENT belong to the policy enum."""
+    """只有 CoolProp 預先定義的 states 與 CURRENT 屬於 policy enum。
+
+回傳：
+    無。"""
     service = ReferenceStateService()
     assert {
         ReferenceStatePolicy.DEFAULT.value,
@@ -47,7 +53,10 @@ def test_iapws_is_not_a_reference_state_policy() -> None:
 
 
 def test_water_property_request_uses_default_not_ambient_state() -> None:
-    """Water ordinary queries reset to CoolProp's explicit default policy."""
+    """Water 的一般 query 會重設為 CoolProp 的明確 default policy。
+
+回傳：
+    無。"""
     from domain.thermodynamics.fluid_policy import resolve_reference_state_policy
 
     service = ThermodynamicStateService(CanonicalUnitConverter())
@@ -69,7 +78,10 @@ def test_water_property_request_uses_default_not_ambient_state() -> None:
 
 
 def test_chart_auto_policy_is_explicit_for_water() -> None:
-    """Chart Auto selects concrete defaults and rejects IAPWS as a policy code."""
+    """Chart Auto 會選擇具體 defaults，並拒絕將 IAPWS 作為 policy code。
+
+回傳：
+    無。"""
     from Flet_ui.ui_components.unit.thermo_draw.coolprop_utils import (
         _effective_reference_state,
     )
@@ -82,7 +94,13 @@ def test_chart_auto_policy_is_explicit_for_water() -> None:
 
 @pytest.mark.parametrize("fluid", ["Water", "water", "WATER", " Water "])
 def test_property_water_aliases_use_default_reference_state(fluid: str) -> None:
-    """Property requests use one Water policy regardless of fluid spelling."""
+    """Property request 不論流體拼法為何，都使用同一個 Water policy。
+
+參數：
+    fluid (str): 函數輸入值。
+
+回傳：
+    無。"""
     from domain.thermodynamics.fluid_policy import resolve_reference_state_policy
 
     assert resolve_reference_state_policy(fluid) == ReferenceStatePolicy.DEFAULT
@@ -90,7 +108,13 @@ def test_property_water_aliases_use_default_reference_state(fluid: str) -> None:
 
 @pytest.mark.parametrize("fluid", ["Water", "water", "WATER", " Water "])
 def test_chart_auto_water_aliases_use_default_reference_state(fluid: str) -> None:
-    """Chart Auto shares the neutral Water policy resolver."""
+    """Chart Auto 共用中立的 Water policy resolver。
+
+參數：
+    fluid (str): 函數輸入值。
+
+回傳：
+    無。"""
     from Flet_ui.ui_components.unit.thermo_draw.coolprop_utils import (
         _effective_reference_state,
     )
@@ -100,7 +124,10 @@ def test_chart_auto_water_aliases_use_default_reference_state(fluid: str) -> Non
 
 
 def test_property_selection_policy_is_shared_with_compressor_example() -> None:
-    """A PropertyTab selection is the policy consumed by the compressor page."""
+    """PropertyTab 的選擇就是 compressor page 消費的 policy。
+
+回傳：
+    None：函數計算或處理後的結果。"""
     class DummyPage:
         overlay = []
 
@@ -160,7 +187,13 @@ def test_property_selection_policy_is_shared_with_compressor_example() -> None:
 
 
 def test_t_s_renderer_path_returns_figure_without_residual_count_access(monkeypatch) -> None:
-    """T-s renderer path executes after set_ylim no longer returns an attribute."""
+    """set_ylim 不再回傳 attribute 後，T-s renderer path 仍可執行。
+
+參數：
+    monkeypatch (未指定型別): 函數輸入值。
+
+回傳：
+    無。"""
     from Flet_ui.ui_components.unit import UnitConverter as unit_converter_module
     from Flet_ui.ui_components.unit.thermo_draw import coolprop_utils
 
@@ -210,7 +243,10 @@ def test_t_s_renderer_path_returns_figure_without_residual_count_access(monkeypa
 
 
 def test_reference_state_registry_is_process_global() -> None:
-    """A registry read from another service sees the process-global state."""
+    """由另一個 service 讀取 registry 時可看見 process-global state。
+
+回傳：
+    無。"""
     first = ReferenceStateService()
     second = ReferenceStateService()
     try:
@@ -221,7 +257,10 @@ def test_reference_state_registry_is_process_global() -> None:
 
 
 def test_calculation_default_policy_does_not_inherit_ambient_state() -> None:
-    """An omitted request policy resolves to the explicit channel default."""
+    """省略的 request policy 會解析為明確的 channel default。
+
+回傳：
+    無。"""
     service = ThermodynamicStateService(CanonicalUnitConverter())
     known_props = (("P", 101.325, "kPa"), ("T", 25.0, "°C"))
     try:
@@ -240,7 +279,10 @@ def test_calculation_default_policy_does_not_inherit_ambient_state() -> None:
 
 
 def test_telegram_uses_explicit_default_after_flet_changes_state() -> None:
-    """Telegram's default policy is independent from a preceding Flet request."""
+    """Telegram 的 default policy 不受先前 Flet request 影響。
+
+回傳：
+    無。"""
     known_props = [("P", 101.325, "kPa"), ("T", 25.0, "°C")]
     flet = ThermoStateCalculator(UnitConverter())
     telegram = ThermoCalculator()
@@ -258,7 +300,10 @@ def test_telegram_uses_explicit_default_after_flet_changes_state() -> None:
 
 
 def test_telegram_legacy_v_path_accepts_explicit_policy() -> None:
-    """The deferred Telegram V semantics still use explicit state ownership."""
+    """延後處理的 Telegram V semantics 仍使用明確的 state ownership。
+
+回傳：
+    無。"""
     telegram = ThermoCalculator()
     flet = ThermoStateCalculator(UnitConverter())
     known_props = [("T", 25.0, "°C"), ("V", 0.2, "m³/kg")]
@@ -276,7 +321,10 @@ def test_telegram_legacy_v_path_accepts_explicit_policy() -> None:
 
 
 def test_thermodynamic_entrypoints_have_non_ambient_defaults() -> None:
-    """Production entrypoints expose a concrete reference-state policy."""
+    """Production entrypoints 公開具體的 reference-state policy。
+
+回傳：
+    無。"""
     assert inspect.signature(ThermodynamicStateService.calculate_properties).parameters[
         "reference_state"
     ].default is not None
@@ -292,7 +340,13 @@ def test_thermodynamic_entrypoints_have_non_ambient_defaults() -> None:
 
 
 def test_reference_state_and_query_are_one_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A concurrent mutation cannot interleave with a complete property query."""
+    """並行 mutation 不可插入完整的 property query。
+
+參數：
+    monkeypatch (pytest.MonkeyPatch): 函數輸入值。
+
+回傳：
+    None：函數計算或處理後的結果。"""
     entered_first_query = threading.Event()
     release_query = threading.Event()
     mutation_finished = threading.Event()
@@ -349,7 +403,10 @@ def test_reference_state_and_query_are_one_transaction(monkeypatch: pytest.Monke
 
 
 def test_domain_has_no_channel_package_imports() -> None:
-    """The domain layer must not import Flet or Telegram packages."""
+    """Domain layer 不得 import Flet 或 Telegram 套件。
+
+回傳：
+    無。"""
     forbidden = {"Flet_ui", "Telegram_bot", "flet", "telegram", "matplotlib"}
     for source_path in (ROOT / "domain").rglob("*.py"):
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
@@ -368,7 +425,10 @@ def test_domain_has_no_channel_package_imports() -> None:
 
 
 def test_application_has_no_channel_package_imports() -> None:
-    """The application layer must not import channel implementations."""
+    """Application layer 不得 import channel implementations。
+
+回傳：
+    無。"""
     forbidden = {"Flet_ui", "Telegram_bot", "flet", "telegram"}
     for source_path in (ROOT / "application").rglob("*.py"):
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
@@ -387,7 +447,10 @@ def test_application_has_no_channel_package_imports() -> None:
 
 
 def test_only_reference_state_service_may_mutate_coolprop() -> None:
-    """Production direct mutation is limited to the approved mechanism."""
+    """Production direct mutation 僅限於核准的 mechanism。
+
+回傳：
+    無。"""
     approved = ROOT / "domain/thermodynamics/reference_state.py"
     for source_path in ROOT.rglob("*.py"):
         if source_path == approved or "tests" in source_path.parts:
@@ -406,7 +469,10 @@ def test_only_reference_state_service_may_mutate_coolprop() -> None:
 
 
 def test_canonical_facades_reject_unknown_units() -> None:
-    """Flet and Telegram canonical properties must not silently accept units."""
+    """Flet 與 Telegram canonical properties 不得默默接受 units。
+
+回傳：
+    無。"""
     flet_converter = UnitConverter()
     telegram_converter = ThermoCalculator()
     for converter, to_si, from_si in (
@@ -421,7 +487,10 @@ def test_canonical_facades_reject_unknown_units() -> None:
 
 
 def test_analysis_ids_are_semantic_and_unique() -> None:
-    """Each definition owns an explicit semantic ID, not a positional ID."""
+    """每個 definition 都擁有明確的 semantic ID，而不是 positional ID。
+
+回傳：
+    無。"""
     from Flet_ui.ui_components.analysis_tab import AnalysisTab
     from Flet_ui.ui_components.unit.HVACAnalyzer import HVACAnalyzer
     from Flet_ui.ui_components.unit.PsychrometricCalculator import PsychrometricCalculator
@@ -449,7 +518,10 @@ def test_analysis_ids_are_semantic_and_unique() -> None:
 
 
 def test_property_tab_uses_property_query_service_for_lifecycle() -> None:
-    """PropertyTab and compressor pages must not use facade state as truth."""
+    """PropertyTab 與 compressor pages 不得以 facade state 作為真實來源。
+
+回傳：
+    無。"""
     property_source = (ROOT / "Flet_ui/ui_components/property_tab.py").read_text(encoding="utf-8")
     calculator_source = (ROOT / "Flet_ui/ui_components/unit/ThermoStateCalculator.py").read_text(encoding="utf-8")
     compressor_source = (ROOT / "Flet_ui/ui_components/analysis_modules/hvac_compressor_module.py").read_text(encoding="utf-8")
@@ -460,7 +532,10 @@ def test_property_tab_uses_property_query_service_for_lifecycle() -> None:
 
 
 def test_readme_and_project_description_exist() -> None:
-    """The published project must have a real landing document and metadata."""
+    """已發布專案必須具備實際的 landing document 與 metadata。
+
+回傳：
+    無。"""
     readme = ROOT / "README.md"
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert readme.exists()

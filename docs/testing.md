@@ -1,91 +1,66 @@
-# Testing Strategy
+# 測試策略
 
-## 1. Test Layers
+## 1. 測試層級
 
-The repository currently keeps many tests under `tests/characterization/`; the
-following are logical layers rather than claims that every directory already
-exists:
+Repository 目前有許多 test 放在 `tests/characterization/`；以下是 logical layer，不代表每一個目錄都已存在：
 
-- domain and equation tests;
-- adapter and compatibility tests;
-- application/service tests;
-- integration and Flet construction tests;
-- architecture guardrail tests;
-- compile, dependency, and packaging checks.
+- domain 與 equation test；
+- adapter 與 compatibility test；
+- application/service test；
+- integration 與 Flet construction test；
+- architecture guardrail test；
+- compile、dependency 與 packaging check。
 
-Tests should be placed in the nearest existing layer without inventing a new
-layout solely for naming consistency.
+Test 應放在最接近的既有 layer，不得只為了命名一致而發明新的目錄結構。
 
-## 2. Characterization Tests
+## 2. Characterization test
 
-Characterization tests record behavior at a boundary before or during
-consolidation. They are useful when Flet and Telegram behavior differs, but a
-characterization is not automatically the desired long-term contract. When a
-contract is intentionally changed, update the characterization or add a
-contract test that makes the new decision explicit.
+Characterization test 用來記錄 consolidation 前或 consolidation 中的 boundary behavior。當 Flet 與 Telegram behavior 不同時，它很有價值；但 characterization 不自動等於長期 desired contract。若 contract 被刻意改變，應更新 characterization，或新增讓新決策明確化的 contract test。
 
-## 3. Domain Tests
+## 3. Domain test
 
-Domain tests cover canonical units, thermodynamic state calculations, HVAC
-equations, psychrometric result shapes, reference-state policy, and explicit
-error behavior. They should use numeric canonical values and should not require
-Flet controls, Telegram transports, or display formatting.
+Domain test 覆蓋 canonical unit、thermodynamic state calculation、HVAC equation、psychrometric result shape、reference-state policy 與 explicit error behavior。Test 應使用 numeric canonical value，不應依賴 Flet control、Telegram transport 或 display formatting。
 
-## 4. Adapter Tests
+## 4. Adapter test
 
-Adapter tests verify parsing, compatibility conversion, display conversion,
-error presentation, and channel-specific output. They must prove that unknown
-canonical units fail explicitly and that legacy compatibility behavior does not
-silently become the domain contract.
+Adapter test 驗證 parsing、compatibility conversion、display conversion、error presentation 與 channel-specific output。必須證明 unknown canonical unit 會明確失敗，也必須證明 legacy compatibility behavior 不會默默變成 domain contract。
 
-## 5. Integration Tests
+## 5. Integration test
 
-Integration and smoke tests construct real production entrypoints or UI
-components with minimal faithful stubs for non-target runtime dependencies.
-They cover Flet tab construction, representative analysis selections,
-psychrometric Flet/Telegram paths, and the application service boundary.
+Integration 與 smoke test 使用 minimal、faithful stub 建立真正的 production entrypoint 或 UI component。應涵蓋 Flet tab construction、代表性的 analysis selection、psychrometric Flet/Telegram path 與 application service boundary。
 
-## 6. Architecture Guardrails
+## 6. Architecture guardrail
 
-Guardrails verify dependency direction and ownership invariants:
+Guardrail 驗證 dependency direction 與 ownership invariant：
 
-- domain does not import Flet or Telegram packages;
-- application does not import channel rendering/runtime objects;
-- only `ReferenceStateService` directly mutates CoolProp reference state;
-- reference-state transactions use the shared synchronization mechanism;
-- analysis definitions provide unique semantic IDs;
-- service boundaries are used by UI lifecycle code.
+- domain 不得 import Flet 或 Telegram package；
+- application 不得 import channel rendering/runtime object；
+- 只有 `ReferenceStateService` 可以直接修改 CoolProp reference state；
+- reference-state transaction 使用 shared synchronization mechanism；
+- analysis definition 提供唯一的 semantic ID；
+- UI lifecycle code 使用 service boundary。
 
-Guardrails should inspect the relevant production tree and fail on a new
-boundary violation rather than checking only one changed file.
+Guardrail 應檢查相關的 production tree，並在新增 boundary violation 時失敗，不得只檢查單一變更檔案。
 
-## 7. Runtime Smoke Tests
+## 7. Runtime smoke test
 
-Runtime smoke coverage should exercise the real Flet composition path, property
-query path, analysis registration, psychrometric adapters, and chart state
-pipeline. A static import check is not a substitute for constructing the
-production entrypoint.
+Runtime smoke coverage 應執行真正的 Flet composition path、property query path、analysis registration、psychrometric adapter 與 chart state pipeline。Static import check 不能取代 production entrypoint construction。
 
-## 8. Regression Workflow
+## 8. Regression workflow
 
-For a behavior bug, follow:
+行為 bug 使用以下流程：
 
 ```text
-reproduce → RED regression → minimal fix → GREEN regression → full suite
+重現 → RED regression → 最小修復 → GREEN regression → 完整 suite
 ```
 
-For process-global dependencies, tests must cover sequential isolation,
-concurrency/interleaving, cross-request isolation, and explicit policy
-ownership. A lock test alone is insufficient if a request can still inherit an
-ambient process state.
+Process-global dependency 必須覆蓋 sequential isolation、concurrency/interleaving、cross-request isolation 與 explicit policy ownership。只有 lock test 不足以證明 request 不會繼承 ambient process state。
 
-For architecture changes, characterize the current behavior, establish the
-contract, make the smallest boundary change, verify callers, and remove the
-replaced path only when no longer referenced.
+Architecture change 應先記錄 current behavior、建立 contract、進行最小 boundary change、驗證 caller，並只在沒有 reference 後移除 replaced path。
 
-## Verification Commands
+## 驗證命令
 
-Run the complete local verification set from the repository root:
+從 repository root 執行完整 local verification：
 
 ```bash
 uv run pytest -q
@@ -95,6 +70,4 @@ uv run python -m compileall -q Flet_ui Telegram_bot application domain chart inf
 git diff --check
 ```
 
-Use focused tests while iterating, then rerun the full suite after the final
-edit. Report exact tool output; pending external CI is not equivalent to a
-local pass.
+迭代期間先執行 focused test，最後一次 edit 後再執行完整 suite。回報必須使用工具實際輸出；pending external CI 不等於 local pass。

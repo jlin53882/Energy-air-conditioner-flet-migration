@@ -1,4 +1,4 @@
-"""Phase 9 architecture guardrails."""
+"""階段 9 architecture guardrail test。"""
 
 from __future__ import annotations
 
@@ -10,12 +10,24 @@ ROOT = Path(__file__).parents[2]
 
 
 def _python_sources(relative_dir: str) -> list[Path]:
-    """Return Python source files under a project layer."""
+    """回傳 project layer 下的 Python source file。
+
+參數：
+    relative_dir (str): 函數輸入值。
+
+回傳：
+    list[Path]：函數計算或處理後的結果。"""
     return sorted((ROOT / relative_dir).rglob("*.py"))
 
 
 def _imports(source_path: Path) -> set[str]:
-    """Extract imported module names without matching display strings."""
+    """擷取 imported module name，不要誤判 display string。
+
+參數：
+    source_path (Path): 函數輸入值。
+
+回傳：
+    set[str]：函數計算或處理後的結果。"""
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
     modules: set[str] = set()
     for node in ast.walk(tree):
@@ -27,7 +39,10 @@ def _imports(source_path: Path) -> set[str]:
 
 
 def test_domain_has_no_channel_or_rendering_imports() -> None:
-    """Domain code remains independent of Flet, Telegram, and Matplotlib UI."""
+    """Domain code 維持獨立於 Flet、Telegram 與 Matplotlib UI。
+
+回傳：
+    無。"""
     forbidden_prefixes = ("flet", "telegram", "matplotlib")
     for source_path in _python_sources("domain"):
         assert not any(
@@ -38,7 +53,10 @@ def test_domain_has_no_channel_or_rendering_imports() -> None:
 
 
 def test_application_has_no_channel_object_dependencies() -> None:
-    """Application services do not accept channel controls or updates."""
+    """Application service 不接受 channel control 或 update。
+
+回傳：
+    無。"""
     forbidden_prefixes = ("flet", "telegram")
     for source_path in _python_sources("application"):
         assert not any(
@@ -49,7 +67,10 @@ def test_application_has_no_channel_object_dependencies() -> None:
 
 
 def test_selected_adapters_do_not_call_coolprop_directly() -> None:
-    """Migrated adapters use services instead of direct property queries."""
+    """已遷移的 adapter 使用 service，不直接執行 property query。
+
+回傳：
+    無。"""
     for relative_path in (
         "Flet_ui/ui_components/property_tab.py",
         "Flet_ui/ui_components/analysis_modules/hvac_compressor_module.py",

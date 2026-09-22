@@ -1,102 +1,82 @@
-# Maintenance Guide
+# 維護指南
 
-## 1. Before Modifying Production Code
+## 1. 修改 production code 前
 
-1. Search all callers and consumers of the symbol or contract.
-2. Identify the current executable behavior and domain meaning.
-3. Check [`compatibility-boundaries.md`](compatibility-boundaries.md) and the
-   dependency direction in [`architecture.md`](architecture.md).
-4. Check repository and GitNexus index freshness; do not treat a stale graph as
-   the only source of caller evidence.
-5. Add or update a regression test that expresses the intended behavior.
-6. Make the smallest change that closes the contract.
-7. Run focused tests, then the full verification set in [`testing.md`](testing.md).
+1. 搜尋 symbol 或 contract 的所有 caller 與 consumer。
+2. 確認目前的 executable behavior 與 domain meaning。
+3. 檢查 [`compatibility-boundaries.md`](compatibility-boundaries.md) 與 [`architecture.md`](architecture.md) 中的 dependency direction。
+4. 檢查 repository 與 GitNexus index 的 freshness；不得將 stale graph 視為唯一 caller evidence。
+5. 新增或更新表達預期行為的 regression test。
+6. 以最小變更關閉 contract。
+7. 執行 focused test，再執行 [`testing.md`](testing.md) 的完整驗證組合。
 
-## 2. Domain Change Rules
+## 2. Domain change 規則
 
-- Keep one domain implementation for each rule.
-- Keep canonical quantities and unit semantics in domain/application
-  boundaries, not in UI or handlers.
-- Do not change physics formulas during an architecture-only refactor.
-- Unknown canonical units must fail explicitly; never silently assume SI.
-- Process-global dependencies require explicit request policy and tests for
-  sequential, concurrent, and cross-request isolation.
-- Use PEP 257 docstrings for new or changed Python functions and classes.
+- 每一條規則只保留一個 domain implementation。
+- Canonical quantity 與 unit semantics 必須位於 domain/application boundary，不得放在 UI 或 handler。
+- Architecture-only refactor 不得修改 physics formula。
+- Unknown canonical unit 必須明確失敗，不得默默假設為 SI。
+- Process-global dependency 必須有明確 request policy，並測試 sequential、concurrent 與 cross-request isolation。
+- 新增或修改的 Python function/class 使用 PEP 257 docstring，說明內容使用中文。
 
-## 3. Architecture Change Rules
+## 3. Architecture change 規則
 
-- Preserve the direction `channel adapter → application → domain`.
-- Domain must not import Flet, Telegram, or infrastructure implementations.
-- Application must remain independent of channel controls, updates, contexts,
-  and rendering.
-- New routes, modules, scripts, and entrypoints require both their import and
-  registration/wiring to be checked.
-- New production code must not leave zero-reference helpers, duplicate replaced
-  implementations, or calculated-but-unused values.
+- 維持 `channel adapter → application → domain` 的方向。
+- Domain 不得 import Flet、Telegram 或 infrastructure implementation。
+- Application 必須獨立於 channel control、update、context 與 rendering。
+- 新 route、module、script 與 entrypoint 都必須同時檢查 import 與 registration/wiring。
+- 新 production code 不得留下零引用 helper、被替換實作的 duplicate，或計算後未使用的 value。
 
-## 4. Compatibility Boundary Rules
+## 4. Compatibility boundary 規則
 
-A compatibility facade may remain only when:
+Compatibility facade 只有在下列條件都成立時才能保留：
 
-- a legacy caller still exists;
-- the target contract is documented;
-- the boundary has regression coverage;
-- the allowed scope is narrow; and
-- removal criteria are explicit.
+- 仍存在 legacy caller；
+- target contract 已文件化；
+- boundary 有 regression coverage；
+- 允許範圍狹窄；
+- removal criteria 明確。
 
-A compatibility facade is not permission to create a permanent second core
-implementation. Current accepted boundaries are listed in
-[`compatibility-boundaries.md`](compatibility-boundaries.md).
+Compatibility facade 不代表可以建立永久的第二份 core implementation。目前接受的 boundary 列在 [`compatibility-boundaries.md`](compatibility-boundaries.md)。
 
-## 5. Documentation Update Rules
+## 5. 文件更新規則
 
-Long-term documents describe current architecture, current domain contracts,
-accepted compatibility boundaries, testing strategy, and maintenance rules.
-They should use present-tense, contract-oriented language.
+長期文件描述目前的 architecture、domain contract、接受的 compatibility boundary、testing strategy 與 maintenance rule。內容應使用現在式、以 contract 為中心的語言，並以中文說明。
 
-Do not add PR numbers, commit SHAs, phase labels, one-time audit counts, or
-review snapshots to current documentation. Preserve historical evidence in Git
-history and PR history. When executable behavior or an invariant changes,
-update the relevant current-state document in the same change.
+不要把 PR number、commit SHA、phase label、一次性 audit count 或 review snapshot 放進 current documentation。歷史證據保留在 Git history 與 PR history。當 executable behavior 或 invariant 改變時，應在同一次變更同步更新對應 current-state document。
 
-Documentation authority is explicit:
+文件權威關係如下：
 
-- production code and executable tests are the executable truth;
-- `docs/architecture.md` is the intended architecture;
-- `docs/domain-contracts.md` is the intended domain contract;
-- `docs/compatibility-boundaries.md` records accepted temporary exceptions;
-- `docs/testing.md` records the testing strategy.
+- production code 與 executable test 是 executable truth；
+- `docs/architecture.md` 是 intended architecture；
+- `docs/domain-contracts.md` 是 intended domain contract；
+- `docs/compatibility-boundaries.md` 記錄接受的 temporary exception；
+- `docs/testing.md` 記錄 testing strategy。
 
-A disagreement is architecture or contract drift. Determine whether code or
-documentation must change; do not leave a silent divergence.
+若兩者不一致，視為 architecture 或 contract drift。必須判斷應修改 code 還是文件，不得讓分歧靜默存在。
 
-## 6. Verification Checklist
+## 6. 驗證清單
 
-Before handoff or commit:
+在交接或 commit 前：
 
-- focused regression tests pass;
-- `uv run pytest -q` passes;
-- compileall passes for the production entrypoints and packages;
-- `uv lock --check` passes;
-- `uv pip check` passes;
-- `git diff --check` passes with the repository's line-ending policy;
-- the worktree and intended branch are verified;
-- external PR/branch state is read back after a push.
+- focused regression test 通過；
+- `uv run pytest -q` 通過；
+- production entrypoint 與 package 的 compileall 通過；
+- `uv lock --check` 通過；
+- `uv pip check` 通過；
+- 依 repository line-ending policy 執行 `git diff --check` 並通過；
+- 已確認 worktree 與目標 branch；
+- push 後讀回 external PR/branch state。
 
-## 7. Current Maintenance Constraints
+## 7. 目前維護限制
 
-These are current technical constraints, not phase or PR history:
+以下是目前的 technical constraint，不是 phase 或 PR history：
 
-- Telegram specific-volume behavior remains an active compatibility boundary.
-- Remaining compressor analyses still use legacy paths and require separate
-  characterization before migration.
-- Telegram constructor dependency injection is not fully consolidated.
-- Chart renderer and sampling responsibilities are not fully separated.
-- Packaging targets and build-script cleanup remain future maintenance work.
-- Packaging metadata belongs in `pyproject.toml` and `uv.lock`; build scripts
-  must target an explicit artifact and must not mutate dependency metadata as a
-  build side effect.
+- Telegram specific-volume behavior 仍是 active compatibility boundary。
+- Remaining compressor analysis 仍使用 legacy path，遷移前需要獨立 characterization。
+- Telegram constructor dependency injection 尚未完全整合。
+- Chart renderer 與 sampling responsibility 尚未完全分離。
+- Packaging target 與 build-script cleanup 仍是後續維護工作。
+- Packaging metadata 屬於 `pyproject.toml` 與 `uv.lock`；build script 必須針對明確 artifact，且不得以 build side effect 修改 dependency metadata。
 
-These constraints must not be silently promoted into domain contracts. Any
-future removal or migration should update the compatibility/maintenance
-classification and add the corresponding tests.
+這些限制不得被默默提升為 domain contract。未來若要移除或遷移，必須同步更新 compatibility/maintenance classification 並補上對應 test。

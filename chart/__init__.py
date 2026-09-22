@@ -1,4 +1,4 @@
-"""Headless chart pipeline components."""
+"""Headless chart pipeline 元件。"""
 
 from .models import StatePoint
 from .state_point_parser import StatePointParser

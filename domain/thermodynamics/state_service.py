@@ -1,4 +1,4 @@
-"""Headless thermodynamic property calculation service."""
+"""Headless thermodynamic property 的計算服務。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ KnownProperty = tuple[str, float, str]
 
 
 class ThermodynamicStateService:
-    """Calculate thermodynamic states using canonical SI inputs and outputs."""
+    """使用 canonical SI inputs 與 outputs 計算 thermodynamic states。"""
 
     PROPERTIES = ("P", "T", "H", "S", "D", "Q", "V", "U")
 
@@ -23,7 +23,14 @@ class ThermodynamicStateService:
         unit_converter: CanonicalUnitConverter,
         reference_state: ReferenceStateService | None = None,
     ) -> None:
-        """Initialize the service with explicit conversion and state policy."""
+        """以明確的 conversion 與 state policy 初始化 service。
+
+參數：
+    unit_converter (CanonicalUnitConverter): 函數輸入值。
+    reference_state (ReferenceStateService | None): 函數輸入值。
+
+回傳：
+    無。"""
         self.unit_converter = unit_converter
         self.reference_state = reference_state or ReferenceStateService()
         self.ideal_gas_props = {
@@ -32,7 +39,13 @@ class ThermodynamicStateService:
         }
 
     def is_fluid_valid(self, fluid_name: str) -> bool:
-        """Return whether CoolProp recognizes a fluid identifier."""
+        """回傳 CoolProp 是否辨識指定的流體識別字。
+
+參數：
+    fluid_name (str): 函數輸入值。
+
+回傳：
+    bool：函數計算或處理後的結果。"""
         try:
             with self.reference_state.calculation_scope(fluid_name):
                 CP.PropsSI("Tcrit", fluid_name)
@@ -41,7 +54,14 @@ class ThermodynamicStateService:
         return True
 
     def set_reference_state(self, fluid_name: str, ref_state: str) -> None:
-        """Apply a reference state through the centralized mechanism."""
+        """透過集中管理的機制套用 reference state。
+
+參數：
+    fluid_name (str): 函數輸入值。
+    ref_state (str): 函數輸入值。
+
+回傳：
+    無。"""
         self.reference_state.set(fluid_name, ref_state)
 
     def calculate_properties(
@@ -51,14 +71,14 @@ class ThermodynamicStateService:
         is_ideal_gas: bool = False,
         reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
     ) -> dict[str, float | str]:
-        """Calculate a state from at least two known properties.
+        """由至少兩個已知性質計算狀態。
 
         Args:
             fluid: CoolProp fluid or supported ideal-gas name.
             known_props: Property code, display value and unit triples.
             is_ideal_gas: Select the built-in ideal-gas model.
 
-        Returns:
+        回傳：
             A dictionary of canonical SI values plus ``phase``.
 
         Raises:
@@ -97,7 +117,15 @@ class ThermodynamicStateService:
         known_props_si: list[tuple[str, float]],
         reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
     ) -> dict[str, float | str]:
-        """Calculate all configured properties in one synchronized transaction."""
+        """在單一同步 transaction 中計算所有已設定的性質。
+
+參數：
+    fluid (str): 函數輸入值。
+    known_props_si (list[tuple[str, float]]): 函數輸入值。
+    reference_state (ReferenceStatePolicy | str): 函數輸入值。
+
+回傳：
+    dict[str, float | str]：函數計算或處理後的結果。"""
         with self.reference_state.calculation_scope(fluid, reference_state):
             prop1, value1 = known_props_si[0]
             prop2, value2 = known_props_si[1]
@@ -118,7 +146,14 @@ class ThermodynamicStateService:
         fluid: str,
         input_values: dict[str, float],
     ) -> dict[str, float | str]:
-        """Calculate the supported ideal-gas state combinations."""
+        """計算支援的 ideal-gas 狀態組合。
+
+參數：
+    fluid (str): 函數輸入值。
+    input_values (dict[str, float]): 函數輸入值。
+
+回傳：
+    dict[str, float | str]：函數計算或處理後的結果。"""
         try:
             constants = self.ideal_gas_props[fluid]
         except KeyError as exc:

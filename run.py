@@ -1,7 +1,7 @@
-"""Application entry point for the Flet desktop/web application.
+"""Flet desktop/web application 的 application entry point。
 
-The Telegram bot remains an independent package, but this launcher intentionally
-starts only the Flet UI so there is one supported graphical entry point.
+Telegram bot 仍是獨立套件，但此 launcher 刻意
+只啟動 Flet UI，讓支援的圖形化 entry point 僅有一個。
 """
 
 import flet as ft
@@ -11,7 +11,10 @@ from infrastructure.logging import logger, setup_logging
 
 
 def main() -> None:
-    """Configure logging and run the Flet application."""
+    """設定 logging 並執行 Flet application。
+
+回傳：
+    無。"""
     setup_logging()
     logger.info("應用程式啟動...")
     ft.run(flet_main)

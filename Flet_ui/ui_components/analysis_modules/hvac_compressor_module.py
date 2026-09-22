@@ -45,16 +45,16 @@ class CompressorModule(BaseAnalysisModule):
         
         # --- 建立此模組所需的所有 UI 元件 (每個方法負責一個計算區塊) ---
         # 透過多個私有方法建立 UI，確保程式碼的模組化與可維護性
-        self._build_cr_ui()              # 建立壓縮比 (Compression Ratio) 相關 UI
-        self._build_ex_dest_ui()         # 建立火用破壞 (Exergy Destruction) 相關 UI
-        self._build_ex_eff_loss_ui()     # 建立火用效率損失 (Exergy Efficiency Loss) 相關 UI
-        self._build_ex_eff_ratio_ui()    # 建立火用效率比 (Exergy Efficiency Ratio) 相關 UI
-        self._build_isen_eff_ui()        # 建立等熵效率 (Isentropic Efficiency) 相關 UI
+        self._build_cr_ui()              # 建立壓縮比 （壓縮比） 相關 UI
+        self._build_ex_dest_ui()         # 建立火用破壞 相關 UI
+        self._build_ex_eff_loss_ui()     # 建立火用效率損失 相關 UI
+        self._build_ex_eff_ratio_ui()    # 建立火用效率比 相關 UI
+        self._build_isen_eff_ui()        # 建立等熵效率 相關 UI
         self._build_ref_cap_ui()         # 建立製冷能力 (Refrigeration Capacity) 相關 UI
-        self._build_rev_work_ui()        # 建立可逆功 (Reversible Work) 相關 UI
+        self._build_rev_work_ui()        # 建立可逆功 （可逆功） 相關 UI
         self._build_vol_eff_ui()         # 建立容積效率 (Volumetric Efficiency) 相關 UI
         self._build_work_ui()            # 建立壓縮功 (Work) 相關 UI
-        self._build_work_q_ui()          # 建立功與熱量 (Work and Heat) 相關 UI
+        self._build_work_q_ui()          # 建立功與熱量 （功與熱量） 相關 UI
         self._build_comp_example_ui()    # 建立一個綜合計算範例的 UI
         
         # --- 建立單位同步機制 ---
@@ -186,7 +186,7 @@ class CompressorModule(BaseAnalysisModule):
         try:
             self.cr_ui_container.update()
         except RuntimeError:
-            # Flet 1 rejects updates until the control is attached to a Page.
+            # Flet 1 在控制項附加到 Page 之前會拒絕更新。
             pass
 
     # --- 2. 壓縮機功 (W_in) [修正版] ---
@@ -312,7 +312,7 @@ class CompressorModule(BaseAnalysisModule):
         # Analyzer 期望: m^3/s, 0-1 ratio, kg/m^3, kJ/kg, kJ/kg
         
         v_dot_si = self.unit_converter.convert_to_si("VolumeFlow", v_dot_val, v_dot_unit) # m^3/s
-        eta_vol_si = self.unit_converter.convert_to_si("Eff", eta_vol_val, eta_vol_unit)    # 0-1 ratio (e.g., 80% -> 0.8)
+        eta_vol_si = self.unit_converter.convert_to_si("Eff", eta_vol_val, eta_vol_unit)    # 0-1 比率（例如 80% -> 0.8）
         rho1_si = self.unit_converter.convert_to_si("D", rho1_val, rho1_unit)       # kg/m^3
         h1_si_j = self.unit_converter.convert_to_si("H", h1_val, h1_unit)                 # J/kg
         h4_si_j = self.unit_converter.convert_to_si("H", h4_val, h4_unit)                 # J/kg
@@ -725,7 +725,7 @@ class CompressorModule(BaseAnalysisModule):
     
     # --- 11. 壓縮機 例題內容 [新] ---
     def _build_comp_example_ui(self):
-        # 使用 'ce_' (Compressor Example) 作為前綴
+        # 使用 'ce_' （壓縮機範例） 作為前綴
 
         # 輸入參數
         self.create_input_row("ce_r", "容積效率參數 R (Clearance Ratio)", "0.05", "Ratio", "—")
@@ -781,7 +781,13 @@ class CompressorModule(BaseAnalysisModule):
     )
 
     def _reference_state_for(self, fluid: str) -> str:
-        """Return the application-requested policy for the compressor fluid."""
+        """回傳應用程式針對壓縮機流體要求的 policy。
+
+參數：
+    fluid (str): 函數輸入值。
+
+回傳：
+    str：函數計算或處理後的結果。"""
         if self.reference_state_provider is None:
             requested_policy = "ASHRAE"
         else:
@@ -821,7 +827,7 @@ class CompressorModule(BaseAnalysisModule):
         t2_k = self.unit_converter.convert_to_si("T", t2_val, t2_unit)
         t0_k = self.unit_converter.convert_to_si("T", t0_val, t0_unit)
         
-        # 3. Read the application-owned requested policy, not a facade cache.
+        # 3. 讀取由 application 擁有的要求 policy，而不是 facade 快取。
         current_ref = self._reference_state_for(substance)
 
         v1_dot_si = self.unit_converter.convert_to_si("VolumeFlow", v1_dot_val, v1_dot_unit)
@@ -938,7 +944,13 @@ class CompressorModule(BaseAnalysisModule):
 
     # --- 13. 由 AnalysisTab 呼叫的特定方法 (不變) ---
     def update_atm_pressure_default(self, use_imperial: bool):
-        """由 AnalysisTab 呼叫，用於更新大氣壓力預設值"""
+        """由 AnalysisTab 呼叫，用於更新大氣壓力預設值
+
+參數：
+    use_imperial (bool): 函數輸入值。
+
+回傳：
+    無。"""
         atm_p_controls = self.all_entries["cr_atm_p"]
         atm_p_si_base = 101325.0
         

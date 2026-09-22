@@ -1,4 +1,4 @@
-"""Phase 2 tests for the shared thermodynamic service."""
+"""Phase 2 的 shared thermodynamic service test。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,10 @@ from Telegram_bot.thermo_calculator import ThermoCalculator
 
 
 def test_shared_service_calculates_ideal_gas_properties_headlessly() -> None:
-    """The domain service calculates without Flet or Telegram objects."""
+    """domain service 計算時不依賴 Flet 或 Telegram object。
+
+回傳：
+    無。"""
     service = ThermodynamicStateService(CanonicalUnitConverter())
     result = service.calculate_properties(
         "Air",
@@ -26,7 +29,10 @@ def test_shared_service_calculates_ideal_gas_properties_headlessly() -> None:
 
 
 def test_flet_and_telegram_property_calculators_delegate_shared_service() -> None:
-    """Both channel calculators expose the shared property result contract."""
+    """兩個 channel calculator 都提供 shared property result contract。
+
+回傳：
+    無。"""
     known_props = [("P", 101.325, "kPa"), ("T", 25.0, "°C")]
     flet = ThermoStateCalculator(CanonicalUnitConverter())
     telegram = ThermoCalculator()
@@ -38,7 +44,10 @@ def test_flet_and_telegram_property_calculators_delegate_shared_service() -> Non
 
 
 def test_reference_state_service_serializes_and_restores_reference_state() -> None:
-    """Reference-state mutation is centralized behind one explicit mechanism."""
+    """Reference-state mutation 集中於單一明確 mechanism。
+
+回傳：
+    無。"""
     service = ReferenceStateService()
     try:
         service.set("R134a", "ASHRAE")
@@ -52,7 +61,10 @@ def test_reference_state_service_serializes_and_restores_reference_state() -> No
 
 
 def test_reference_state_service_rejects_invalid_code() -> None:
-    """Invalid reference state codes fail before being recorded as current."""
+    """Invalid reference-state code 必須在記錄為 current 前失敗。
+
+回傳：
+    無。"""
     service = ReferenceStateService()
     with pytest.raises(ValueError, match="reference state"):
         service.set("R134a", "not-a-reference-state")

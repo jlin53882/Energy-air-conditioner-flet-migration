@@ -1,4 +1,4 @@
-"""Canonical unit services."""
+"""Canonical 單位服務。"""
 
 from .converter import CanonicalUnitConverter, UnitDefinition
 

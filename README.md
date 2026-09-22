@@ -1,20 +1,17 @@
 # Energy Air Conditioner
 
-## Project Overview
+## 專案概覽
 
-Energy Air Conditioner is a Flet-based HVAC and thermodynamic application. It
-provides property calculations, HVAC analyses, psychrometric calculations, and
-thermodynamic diagrams without a Tkinter UI entry point.
+Energy Air Conditioner 是以 Flet 為基礎的 HVAC 與熱力學應用程式。它提供物性計算、HVAC 分析、濕空氣計算與熱力學圖表，且不含 Tkinter UI 進入點。
 
-## Supported Interfaces
+## 支援的介面
 
-- **Flet:** interactive desktop application launched through `run.py`.
-- **Telegram:** bot interface under `Telegram_bot/`.
+- **Flet：** 透過 `run.py` 啟動的互動式桌面應用程式。
+- **Telegram：** 位於 `Telegram_bot/` 下的機器人介面。
 
-Both interfaces use shared application and domain services where the contract
-has been consolidated. Channel-specific formatting remains in the adapters.
+兩個介面會在契約已完成整合的部分使用共用的應用程式與領域服務。通道專用的格式化邏輯仍保留在各自的轉接層中。
 
-## High-level Architecture
+## 高階架構
 
 ```text
 Flet / Telegram adapters
@@ -28,52 +25,41 @@ infrastructure adapters ──┐
                     composition roots
 ```
 
-The detailed dependency rules and ownership boundaries are documented in
-[`docs/architecture.md`](docs/architecture.md).
+詳細的相依性規則與所有權邊界記錄於 [`docs/architecture.md`](docs/architecture.md)。
 
-## Run / Development
+## 執行／開發
 
-Install the locked environment with `uv`, then launch the Flet application:
+使用 `uv` 安裝鎖定的環境，然後啟動 Flet 應用程式：
 
 ```bash
 uv sync
 uv run python run.py
 ```
 
-The Telegram bot has its own entrypoint and configuration requirements. Do not
-make the Flet launcher depend on Telegram configuration for logging or startup.
+Telegram bot 有自己的進入點與設定需求。不要讓 Flet 啟動器為了記錄或啟動而依賴 Telegram 設定。
 
-## Testing
+## 測試
 
-Run the complete test suite with:
+使用以下命令執行完整測試套件：
 
 ```bash
 uv run pytest -q
 ```
 
-The full verification checklist is in [`docs/testing.md`](docs/testing.md).
+完整的驗證清單位於 [`docs/testing.md`](docs/testing.md)。
 
-## Documentation Index
+## 文件索引
 
-- [Architecture](docs/architecture.md)
-- [Domain contracts](docs/domain-contracts.md)
-- [Compatibility boundaries](docs/compatibility-boundaries.md)
-- [Testing strategy](docs/testing.md)
-- [Maintenance guide](docs/maintenance.md)
+- [架構](docs/architecture.md)
+- [領域契約](docs/domain-contracts.md)
+- [相容性邊界](docs/compatibility-boundaries.md)
+- [測試策略](docs/testing.md)
+- [維護指南](docs/maintenance.md)
 
-## Known Compatibility Boundaries
+## 已知的相容性邊界
 
-The intentionally retained Telegram specific-volume (`V`) behavior is an
-adapter boundary, not the canonical domain contract. Other current constraints
-and their removal criteria are listed in
-[`docs/compatibility-boundaries.md`](docs/compatibility-boundaries.md) and
-[`docs/maintenance.md`](docs/maintenance.md).
+刻意保留的 Telegram 專用比容積（`V`）行為屬於轉接層邊界，而不是規範性的領域契約。其他目前的限制及其移除條件列於 [`docs/compatibility-boundaries.md`](docs/compatibility-boundaries.md) 與 [`docs/maintenance.md`](docs/maintenance.md)。
 
-## Documentation Authority
+## 文件權威性
 
-Production code and executable tests are the executable truth. The documents
-under `docs/` describe intended architecture, domain contracts, accepted
-compatibility boundaries, and maintenance rules. If code and documentation
-diverge, treat the difference as architecture or contract drift and decide
-whether the code or the documentation must be updated; do not leave the
-disagreement silent.
+正式程式碼與可執行測試是可執行的真實依據。`docs/` 下的文件描述預期架構、領域契約、已接受的相容性邊界與維護規則。若程式碼與文件不一致，應將差異視為架構或契約漂移，並決定是否需要更新程式碼或文件；不要默默留下不一致。

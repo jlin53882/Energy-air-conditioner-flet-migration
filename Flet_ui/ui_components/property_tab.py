@@ -217,8 +217,8 @@ class PropertyTab(ft.Column):
 
     def get_prop_code(self, formatted_name):
         """
-        根據下拉選單中格式化的性質名稱 (e.g., 'Pressure (壓力), P')，
-        逆向查找並返回其單一字母的代碼 (e.g., 'P')。
+        根據下拉選單中格式化的性質名稱 (例如： 'Pressure (壓力), P')，
+        逆向查找並返回其單一字母的代碼 (例如： 'P')。
 
         :param formatted_name: 下拉選單中顯示的名稱字串
         :return: 性質代碼 (str) 或 None
@@ -260,7 +260,7 @@ class PropertyTab(ft.Column):
                     try:
                         # 1. 獲取當前選定的參考點代碼
                         selected_option = self.ref_state_dd.value
-                        ref_code = selected_option.split(' ')[0] # e.g., "ASHRAE"
+                        ref_code = selected_option.split(' ')[0] # 例如： "ASHRAE"
                         
                         # 2. 為這個 *新的* 物質 (fluid_name) 套用參考點
                         self.query_service.set_reference_state(fluid_name, ref_code)
@@ -291,7 +291,7 @@ class PropertyTab(ft.Column):
         
         # 處理單位選單的預設值設定
         if not units:
-             # 如果沒有可用單位 (e.g., 乾度 Q)，設置為預設的空字串
+             # 如果沒有可用單位 (例如： 乾度 Q)，設置為預設的空字串
              default_val = self.unit_converter.default_units.get(prop_code, "")
              row["unit"].value = default_val
              self._last_prop_units[row_index] = default_val # 記錄上次單位
@@ -358,7 +358,7 @@ class PropertyTab(ft.Column):
         # 只有在 CoolProp 模式下才需要設定參考點
         if self.mode_dd.value.startswith("CoolProp"):
             try:
-                # Application service owns the process-global CoolProp boundary.
+                # Application service 擁有 process-global CoolProp 邊界。
                 
                 # 執行關鍵步驟：設置 R134a 的參考點
                 self.query_service.set_reference_state(self.fluid_tf.value, ref_code)
@@ -380,7 +380,7 @@ class PropertyTab(ft.Column):
         :param row_index: 變動的輸入行索引 (0, 1, 2)
         """
         row = self.input_rows[row_index]
-        # 根據選單中顯示的名稱獲取性質代碼 (e.g., 'Pressure (壓力), P' -> 'P')
+        # 根據選單中顯示的名稱獲取性質代碼 (例如： 'Pressure (壓力), P' -> 'P')
         prop_code = self.get_prop_code(row["prop"].value)
         
         # 從核心計算器獲取該性質的所有可用單位列表
@@ -395,7 +395,7 @@ class PropertyTab(ft.Column):
              row["unit"].value = ""
              self._last_prop_units[row_index] = "" # 記錄上次單位為空
         else:
-             # 獲取該性質的預設單位 (e.g., 'kPa')
+             # 獲取該性質的預設單位 (例如： 'kPa')
              default_unit = self.unit_converter.default_units.get(prop_code)
              # 選擇新的單位：優先使用預設單位，否則使用列表中的第一個單位
              new_unit = default_unit if default_unit in units else units[0]
@@ -458,7 +458,7 @@ class PropertyTab(ft.Column):
                             # 更新數值，使用 .7g 格式保留足夠精度
                             row["val"].value = f"{new_val:.7g}" 
                         except ValueError: 
-                            # 忽略無效數值 (e.g., 使用者輸入了非數字)
+                            # 忽略無效數值 (例如： 使用者輸入了非數字)
                             pass
                             
                     self._last_prop_units[i] = new_unit # 更新該行上次單位記錄為新單位

@@ -1,4 +1,4 @@
-"""Phase 6C tests for explicit analysis dispatch metadata."""
+"""Phase 6C 的 explicit analysis dispatch metadata test。"""
 
 from __future__ import annotations
 
@@ -12,18 +12,24 @@ from Flet_ui.ui_components.unit.UnitConverter import UnitConverter
 
 
 class DummyPage:
-    """Provide the minimal page surface needed for analysis construction."""
+    """提供建立 analysis 所需的最小 page surface。"""
 
     def __init__(self) -> None:
         self.overlay = []
         self.controls = []
 
     def update(self) -> None:
-        """Accept headless updates."""
+        """接受 headless update。
+
+回傳：
+    無。"""
 
 
 def test_analysis_definitions_have_stable_ids_and_explicit_modes() -> None:
-    """Analysis dispatch metadata is independent of display-label prefixes."""
+    """Analysis dispatch metadata 不依賴 display-label prefix。
+
+回傳：
+    無。"""
     tab = AnalysisTab(
         unit_converter=UnitConverter(),
         page=DummyPage(),

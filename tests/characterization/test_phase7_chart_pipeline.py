@@ -1,4 +1,4 @@
-"""Phase 7 tests for headless chart input parsing."""
+"""Phase 7 的 headless chart input parsing test。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,10 @@ from chart.state_point_parser import StatePointParser
 
 
 def test_state_point_parser_has_no_flet_dependency() -> None:
-    """Chart input parsing returns neutral SI state-point models."""
+    """Chart input parsing 回傳中立 SI state-point model。
+
+回傳：
+    無。"""
     points = StatePointParser().parse(
         pressures="100, 200",
         temperatures="20, 30",
@@ -23,7 +26,10 @@ def test_state_point_parser_has_no_flet_dependency() -> None:
 
 
 def test_state_point_parser_rejects_mismatched_lengths() -> None:
-    """Each pressure must have a matching temperature."""
+    """每個壓力都必須有對應的溫度。
+
+回傳：
+    無。"""
     with pytest.raises(ValueError, match="same number"):
         StatePointParser().parse(
             pressures="100, 200",
@@ -34,7 +40,10 @@ def test_state_point_parser_rejects_mismatched_lengths() -> None:
 
 
 def test_state_point_parser_rejects_invalid_numeric_values() -> None:
-    """Malformed chart inputs fail before CoolProp or Matplotlib is called."""
+    """格式錯誤的 chart input 必須在呼叫 CoolProp 或 Matplotlib 前失敗。
+
+回傳：
+    無。"""
     with pytest.raises(ValueError, match="numeric"):
         StatePointParser().parse(
             pressures="not-a-number",
