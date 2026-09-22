@@ -244,7 +244,7 @@ workspace 備份目錄：`C:\Users\admin\workspace\Energy_air-conditioner_flet-m
 - `Dropdown(on_change=...)` 改為 Flet 1.0 的 `on_select=...`；`SegmentedButton` 保留 `on_change`。
 - `flet.matplotlib_chart.MatplotlibChart` 改為 `flet_charts.MatplotlibChart`。
 - 移除未被其他檔案引用且無法解析的 `Flet_ui/ui_components/analysis_modules/123.py`。
-- 移除 launcher 的 Tkinter 分支與失效模式呼叫；Telegram Bot package 仍保留為獨立功能。
+- 移除 launcher 的 Tkinter 分支與失效模式呼叫，並刪除 `Tkinter GUI/` 舊 UI；Telegram Bot package 仍保留為獨立功能。
 - 更新兩個 Nuitka bat，移除 Tkinter plugin 與 Flet + Tkinter 宣稱。
 - 修正 Flet 1.0 中未掛載到 Page 前讀取 `control.page` 會拋 `RuntimeError` 的初始化路徑。
 

@@ -69,3 +69,4 @@ def test_launcher_uses_flet_only_entrypoint() -> None:
     assert "ft.app" not in source
     assert "start_tkinter_gui" not in source
     assert "Tkinter" not in source
+    assert not (launcher.parent / "Tkinter GUI").exists()
