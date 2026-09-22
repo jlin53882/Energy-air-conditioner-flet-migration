@@ -7,11 +7,12 @@ import pytest
 from domain.psychrometrics.service import PsychrometricService
 from Flet_ui.ui_components.unit.PsychrometricCalculator import PsychrometricCalculator
 from Telegram_bot.thermo_calculator import ThermoCalculator
+from infrastructure.psychrometrics import LegacyPsychrometricModelAdapter
 
 
 def test_shared_psychrometric_service_returns_si_numeric_result() -> None:
     """The shared adapter hides the excluded model tuple contract."""
-    result = PsychrometricService().calculate_from_tdb_rh(
+    result = PsychrometricService(LegacyPsychrometricModelAdapter()).calculate_from_tdb_rh(
         tdb_k=298.15,
         rh=50.0,
         altitude_m=0.0,
@@ -25,7 +26,7 @@ def test_shared_psychrometric_service_returns_si_numeric_result() -> None:
 
 def test_flet_psychrometric_adapter_matches_shared_service() -> None:
     """The Flet adapter exposes the shared service result unchanged."""
-    expected = PsychrometricService().calculate_from_tdb_rh(298.15, 50.0, 0.0)
+    expected = PsychrometricService(LegacyPsychrometricModelAdapter()).calculate_from_tdb_rh(298.15, 50.0, 0.0)
     actual = PsychrometricCalculator().calculate_from_tdb_rh(298.15, 50.0, 0.0)
     assert actual == expected
 
