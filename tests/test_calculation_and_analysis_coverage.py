@@ -65,7 +65,8 @@ def test_unit_converter_round_trip_and_unknown_unit(analyzer: HVACAnalyzer) -> N
     for prop_code, value, unit in (("T", 25.0, "C"), ("P", 2.0, "bar"), ("H", 300.0, "kJ/kg")):
         si_value = converter.convert_to_si(prop_code, value, unit)
         assert converter.convert_from_si(prop_code, si_value, unit) == pytest.approx(value)
-    assert converter.convert_to_si("P", 1.0, "not-a-unit") == 1.0
+    with pytest.raises(ValueError):
+        converter.convert_to_si("P", 1.0, "not-a-unit")
 
 
 def test_thermo_state_validation_and_property_calculation() -> None:
