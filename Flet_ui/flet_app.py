@@ -35,7 +35,6 @@ def main(page: ft.Page):
     # 3. 建立兩個分頁的 UI 元件實例 (注入依賴)
     prop_tab_content = PropertyTab(
         unit_converter=unit_converter,
-        state_calculator=state_calculator,
         formatter=formatter,
         page=page,
         query_service=property_query_service

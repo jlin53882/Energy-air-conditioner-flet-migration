@@ -8,7 +8,6 @@ import flet as ft
 # PropertyTab 繼承自 ft.Column，使其可以直接作為 Flet UI 中的一個垂直佈局容器。
 # 導入新類別的 "合約" (interfaces)
 from ..ui_components.unit.UnitConverter import UnitConverter
-from ..ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
 from ..ui_components.unit.PropertyFormatter import PropertyFormatter
 from application.models import PropertyQueryRequest
 from application.property_queries import PropertyQueryService
@@ -16,10 +15,9 @@ from application.property_queries import PropertyQueryService
 # PropertyTab 繼承自 ft.Column，使其可以直接作為 Flet UI 中的一個垂直佈局容器。
 class PropertyTab(ft.Column):
     def __init__(self, unit_converter: UnitConverter, 
-                 state_calculator: ThermoStateCalculator, 
                  formatter: PropertyFormatter, 
                  page: ft.Page,
-                 query_service: PropertyQueryService | None = None):
+                 query_service: PropertyQueryService):
         """
         初始化 PropertyTab，設定 UI 組件和數據綁定。
 
@@ -31,9 +29,8 @@ class PropertyTab(ft.Column):
         
         # 分別儲存所需的服務
         self.unit_converter = unit_converter 
-        self.state_calculator = state_calculator
         self.formatter = formatter
-        self.query_service = query_service or PropertyQueryService(state_calculator.state_service)
+        self.query_service = query_service
         
         # 性質代碼到名稱的映射 (用於下拉選單顯示)
         # 格式為: {代碼: "名稱 (中文), 代碼"} (例如: 'P' -> 'Pressure (壓力), P')
@@ -208,8 +205,7 @@ class PropertyTab(ft.Column):
             # 預設的標準，即下拉選單的初始值 "ASHRAE"
             default_ref_state = "ASHRAE" 
             
-            # 呼叫您在 ThermoStateCalculator 中新增的方法
-            state_calculator.set_coolprop_ref_state(default_fluid, default_ref_state)
+            self.query_service.set_reference_state(default_fluid, default_ref_state)
             
         except Exception as e:
             # 如果預設流體無效或設定參考點失敗，顯示錯誤 (但不應該阻礙程式啟動)
@@ -361,10 +357,7 @@ class PropertyTab(ft.Column):
         # 只有在 CoolProp 模式下才需要設定參考點
         if self.mode_dd.value.startswith("CoolProp"):
             try:
-                # 假設 ThermoStateCalculator 實例中包含 set_coolprop_ref_state 方法
-                # 該方法應包裝 CoolProp.set_reference_state(fluid, ref_state)
-                # ❗ 這裡將使用 R134a 作為設定參考點的示範物質
-                # 💡 實際應用中，可以考慮使用當前選擇的流體 (self.fluid_tf.value)
+                # Application service owns the process-global CoolProp boundary.
                 
                 # 執行關鍵步驟：設置 R134a 的參考點
                 self.query_service.set_reference_state(self.fluid_tf.value, ref_code)
@@ -484,7 +477,7 @@ class PropertyTab(ft.Column):
         self.result_container.border_color = ft.Colors.BLUE_GREY_200 
 
         # 1. 檢查物質名稱是否有效
-        if not self.state_calculator.is_fluid_valid(fluid):
+        if not self.query_service.is_fluid_valid(fluid):
             # 物質無效時的錯誤處理和 UI 反饋
             self.show_error(f"錯誤：找不到流體 '{fluid}'") # 顯示 SnackBar 提示
             self.result_text.value = f"錯誤：找不到流體 '{fluid}'"
@@ -540,7 +533,12 @@ class PropertyTab(ft.Column):
         try:
             # 執行計算，將前兩個輸入性質傳遞給核心計算器
             si_results = self.query_service.query(
-                PropertyQueryRequest(fluid, tuple(known_props[:2]), is_ideal)
+                PropertyQueryRequest(
+                    fluid,
+                    tuple(known_props[:2]),
+                    is_ideal,
+                    self.ref_state_dd.value.split(" ")[0],
+                )
             )
             
             # 格式化比性質的輸出 (現在 use_imperial 來自 UI 切換按鈕)

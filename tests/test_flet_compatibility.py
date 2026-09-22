@@ -6,6 +6,7 @@ import flet as ft
 import flet_charts as fch
 
 from Flet_ui.flet_app import main as flet_main
+from application.property_queries import PropertyQueryService
 from Flet_ui.ui_components.analysis_tab import AnalysisTab
 from Flet_ui.ui_components.property_tab import PropertyTab
 from Flet_ui.ui_components.unit.HVACAnalyzer import HVACAnalyzer
@@ -51,9 +52,9 @@ def test_flet_tabs_and_analysis_controls_construct() -> None:
 
     property_tab = PropertyTab(
         unit_converter=converter,
-        state_calculator=state_calculator,
         formatter=PropertyFormatter(converter),
         page=page,
+        query_service=PropertyQueryService(state_calculator.state_service),
     )
     analysis_tab = AnalysisTab(
         unit_converter=converter,

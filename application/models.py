@@ -14,6 +14,7 @@ class PropertyQueryRequest:
     fluid: str
     known_properties: tuple[KnownProperty, ...]
     is_ideal_gas: bool = False
+    reference_state: str | None = None
 
 
 @dataclass(frozen=True)

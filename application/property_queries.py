@@ -37,4 +37,5 @@ class PropertyQueryService:
             request.fluid.strip(),
             request.known_properties,
             request.is_ideal_gas,
+            request.reference_state,
         )
