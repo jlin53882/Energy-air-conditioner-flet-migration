@@ -47,23 +47,26 @@ def main(page: ft.Page):
         state_calculator=state_calculator,
     )
 
-    # 4. 建立分頁控制器 (Tabs)
-    main_tabs = ft.Tabs(
-        selected_index=0, 
-        animation_duration=300, 
+    # 4. 建立 Flet 1.0 分頁控制器。
+    tab_bar = ft.TabBar(
         tabs=[
-            ft.Tab(
-                text="熱力性質查詢", 
-                icon=ft.Icons.BOOK_ONLINE, 
-                content=prop_tab_content
-            ),
-            ft.Tab(
-                text="冷凍空調分析", 
-                icon=ft.Icons.AC_UNIT, 
-                content=analysis_tab_content
-            ),
+            ft.Tab(label="熱力性質查詢", icon=ft.Icons.BOOK_ONLINE),
+            ft.Tab(label="冷凍空調分析", icon=ft.Icons.AC_UNIT),
         ],
-        expand=1, 
+    )
+    tab_view = ft.TabBarView(
+        controls=[prop_tab_content, analysis_tab_content],
+        expand=True,
+    )
+    main_tabs = ft.Tabs(
+        content=ft.Column(
+            controls=[tab_bar, tab_view],
+            expand=True,
+        ),
+        length=2,
+        selected_index=0,
+        animation_duration=300,
+        expand=1,
     )
 
     # 5. 將分頁控制器加入頁面
@@ -72,4 +75,4 @@ def main(page: ft.Page):
 
 
 if __name__ == "__main__":
-    ft.app(target=main)
+    ft.run(main)

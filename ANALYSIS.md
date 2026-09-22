@@ -205,10 +205,57 @@ workspace 備份目錄：`C:\Users\admin\workspace\Energy_air-conditioner_flet-m
 
 備份驗證：來源排除後 54 檔 / 69,016,226 bytes；備份同樣是 54 檔 / 69,016,226 bytes。
 
-## 11. 本輪未做的事
+## 11. 初始分析階段未做的事（歷史快照）
 
-- 沒有修改 Desktop 原始專案。
-- 沒有刪除 Tkinter。
-- 沒有修改 workspace 內的 source code；只建立備份與本分析報告。
-- 沒有把 Telegram Bot 自行判定為要刪除。
-- 沒有把 `123.py` 自行刪除，因為仍需先做引用確認。
+以下是初始分析完成時的狀態，不代表目前 workspace 狀態：
+
+- 當時沒有修改 Desktop 原始專案。
+- 當時沒有刪除 Tkinter。
+- 當時沒有修改 workspace 內的 source code。
+- 當時沒有把 Telegram Bot 自行判定為要刪除。
+- 當時沒有把 `123.py` 自行刪除，因為需要先做引用確認。
+
+## 12. Flet 1.0.0 與依賴更新結果（2026-09-22）
+
+本次更新在 workspace 分支 `chore/update-flet-and-dependencies` 執行，未修改 Desktop 原始專案。
+
+### 版本
+
+- `flet[all]`: `0.28.3` → `1.0.0`
+- 新增 `flet-charts>=1.0.0`：Flet 1.0 將 `MatplotlibChart` 移至獨立套件
+- `coolprop`: `7.1.0` → `8.0.0`
+- `matplotlib`: `3.10.7` → `3.11.2`
+- `nuitka`: `2.8.4` → `4.2.1`
+- `pytest`: `8.4.2` → `9.1.1`
+- `python-telegram-bot`: `22.5` → `22.8`
+- `requests`: `2.32.5` → `2.34.2`
+- `sccache`: `0.10.0` → `0.16.0`
+- 其餘 lock 依賴也由 `uv lock --upgrade` 更新
+
+### Flet 1.0 遷移修正
+
+- `ft.app()` 啟動器改用 `ft.run()`。
+- 舊版 `ft.Tabs(tabs=[ft.Tab(content=...)])` 改為 `TabBar` + `TabBarView`。
+- `Tab(text=...)` 改為 `Tab(label=...)`。
+- `ft.ElevatedButton` 改為 `ft.Button(content=...)`。
+- `ft.border.all` / `ft.border_radius.all` 改為 `ft.Border.all` / `ft.BorderRadius.all`。
+- `ft.padding.all/only` 改為 `ft.Padding.all/only`。
+- `ft.alignment.*` 改為 `ft.Alignment.*`。
+- `Dropdown(on_change=...)` 改為 Flet 1.0 的 `on_select=...`；`SegmentedButton` 保留 `on_change`。
+- `flet.matplotlib_chart.MatplotlibChart` 改為 `flet_charts.MatplotlibChart`。
+- 移除未被其他檔案引用且無法解析的 `Flet_ui/ui_components/analysis_modules/123.py`。
+- 移除 launcher 的 Tkinter 分支與失效模式呼叫；Telegram Bot package 仍保留為獨立功能。
+- 更新兩個 Nuitka bat，移除 Tkinter plugin 與 Flet + Tkinter 宣稱。
+- 修正 Flet 1.0 中未掛載到 Page 前讀取 `control.page` 會拋 `RuntimeError` 的初始化路徑。
+
+### 驗證結果
+
+- `uv lock --check`: 通過
+- `uv run pytest -q`: `3 passed`
+- `uv run pytest --collect-only -q`: `3 tests collected`
+- `uv run python -m compileall -q Flet_ui Telegram_bot run.py telegeram_chatid.py`: 通過
+- Flet 1.0 控件 smoke test：`PropertyTab` 與 `AnalysisTab` 成功建立，控制項數量分別為 11、7
+- `uv run` environment import：`flet 1.0.0`、`flet-charts 1.0.0`、`CoolProp 8.0.0` 成功
+- 舊 API 靜態掃描：`ft.ElevatedButton`、`ft.border.all`、`ft.border_radius.all`、`ft.padding.all/only`、`ft.alignment.*`、`flet.matplotlib_chart` 均為 0
+
+尚未進行真人桌面視窗操作驗收；目前完成的是 compile、import、控制項建構與測試層驗證。

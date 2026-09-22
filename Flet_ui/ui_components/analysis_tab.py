@@ -26,7 +26,6 @@ class AnalysisTab(ft.Column):
                  analyzer: HVACAnalyzer, psy_calculator: PsychrometricCalculator,state_calculator: ThermoStateCalculator):
         
         super().__init__(scroll=ft.ScrollMode.AUTO, expand=True)
-        self.page = page
         
         # --- 2. 實例化所有 "功能群組" 模組 ---
         self.modules_to_load = [
@@ -60,7 +59,7 @@ class AnalysisTab(ft.Column):
             # 從映射的鍵動態產生選項
             options=[ft.dropdown.Option(name) for name in self.analysis_map.keys()],
             value=list(self.analysis_map.keys())[0], # 預設選中第一個
-            on_change=self.on_analysis_change
+            on_select=self.on_analysis_change
         )
         
         # --- 5. 動態建立 UI 容器 (Stack) ---
@@ -69,8 +68,8 @@ class AnalysisTab(ft.Column):
         )
         
         # --- 6. 建立統一的計算按鈕和結果區 (同上一個版本) ---
-        self.calc_button = ft.ElevatedButton(
-            text="執行分析", 
+        self.calc_button = ft.Button(
+            content="執行分析",
             on_click=self.calculate_analysis, 
             icon=ft.Icons.ANALYTICS_OUTLINED
         )
@@ -88,18 +87,18 @@ class AnalysisTab(ft.Column):
         self.result_text = ft.Text("請選擇分析項目並點擊執行...", font_family="Courier New", selectable=True, color=ft.Colors.GREY_600)
         self.result_container = ft.Container(
             content=self.result_text,
-            border=ft.border.all(1, ft.Colors.BLUE_GREY_200),
-            border_radius=ft.border_radius.all(8), 
-            padding=ft.padding.all(15), 
+            border=ft.Border.all(1, ft.Colors.BLUE_GREY_200),
+            border_radius=ft.BorderRadius.all(8),
+            padding=ft.Padding.all(15),
             expand=True,
-            alignment=ft.alignment.top_left
+            alignment=ft.Alignment.TOP_LEFT
         )
 
         # --- 7. 組合 AnalysisTab 自己的 UI ---
         self.controls = [
             ft.Container(
                 content=self.analysis_dd,
-                padding=ft.padding.only(top=10, bottom=5)
+                padding=ft.Padding.only(top=10, bottom=5)
             ),
             ft.Divider(height=1),
             ft.Text("參數輸入", style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_600),
@@ -108,8 +107,8 @@ class AnalysisTab(ft.Column):
             
             ft.Container(
                 content=self.calc_button,
-                padding=ft.padding.only(top=15, bottom=15),
-                alignment=ft.alignment.center
+                padding=ft.Padding.only(top=15, bottom=15),
+                alignment=ft.Alignment.CENTER
             ),
             
             ft.Row(
@@ -178,7 +177,7 @@ class AnalysisTab(ft.Column):
             self.result_container.border_color = ft.Colors.BLUE_GREY_200 
 
             # 只有在 Flet 頁面存在時 (即非 __init__ 期間) 才更新
-            if self.uid:
+            if self.parent:
                 self.update()
 
     def calculate_analysis(self, e):

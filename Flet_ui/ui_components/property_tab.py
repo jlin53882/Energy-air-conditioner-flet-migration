@@ -30,8 +30,6 @@ class PropertyTab(ft.Column):
         self.unit_converter = unit_converter 
         self.state_calculator = state_calculator
         self.formatter = formatter
-        self.page = page
-        self.page = page             # 儲存頁面實例，用於 SnackBar 和 UI 更新
         
         # 性質代碼到名稱的映射 (用於下拉選單顯示)
         # 格式為: {代碼: "名稱 (中文), 代碼"} (例如: 'P' -> 'Pressure (壓力), P')
@@ -51,7 +49,7 @@ class PropertyTab(ft.Column):
         self.mode_dd = ft.Dropdown(
             label="計算模式", value="CoolProp (冷媒)",
             options=[ft.dropdown.Option("CoolProp (冷媒)"), ft.dropdown.Option("Water (水/水蒸氣)")],
-            on_change=self.on_mode_change, 
+            on_select=self.on_mode_change,
             expand=True, # 佔滿同行剩餘空間
         )
         self.fluid_tf = ft.TextField(label="物質名稱", value="R32", expand=True, on_change=self.on_fluid_change)
@@ -68,7 +66,7 @@ class PropertyTab(ft.Column):
                 ft.dropdown.Option("ASHRAE (美國暖通空調學會標準)"), # 預設值
                 ft.dropdown.Option("NBP (正常沸點)"),
             ],
-            on_change=self.on_ref_state_change, 
+            on_select=self.on_ref_state_change,
             expand=True, # 佔滿同行剩餘空間
             width=250, # 調整寬度以容納長名稱
         )
@@ -103,8 +101,8 @@ class PropertyTab(ft.Column):
         self.mass_unit_dd = ft.Dropdown(label="單位", value="kg", options=[ft.dropdown.Option("kg"), ft.dropdown.Option("lbm")], width=100)
 
         # 4. 計算按鈕 (Calculation Button)
-        self.calc_button = ft.ElevatedButton(
-            text="執行計算", 
+        self.calc_button = ft.Button(
+            content="執行計算",
             on_click=self.perform_calculation, 
             icon=ft.Icons.CALCULATE_OUTLINED, # 使用計算圖標
             height=40,
@@ -133,11 +131,11 @@ class PropertyTab(ft.Column):
         self.result_container = ft.Container(
             content=self.result_text,
             # 結果區視覺優化：增加邊框和圓角
-            border=ft.border.all(1, ft.Colors.BLUE_GREY_200),
-            border_radius=ft.border_radius.all(8), 
-            padding=ft.padding.all(15), # 內邊距
+            border=ft.Border.all(1, ft.Colors.BLUE_GREY_200),
+            border_radius=ft.BorderRadius.all(8),
+            padding=ft.Padding.all(15), # 內邊距
             expand=True,
-            alignment=ft.alignment.top_left # 文字靠左上對齊
+            alignment=ft.Alignment.TOP_LEFT # 文字靠左上對齊
         )
 
         # 初始化模式設定 (設定 fluid_tf 和 ideal_gas_cb 的初始狀態)
@@ -148,7 +146,7 @@ class PropertyTab(ft.Column):
             # 模式和物質輸入 (並排佈局)
             ft.Container(
                 content=ft.Row(controls=[self.mode_dd, self.fluid_tf, self.ideal_gas_cb], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                padding=ft.padding.only(top=10, bottom=5)
+                padding=ft.Padding.only(top=10, bottom=5)
             ),
             # --- 新增 3: 參考點下拉選單佈局 ---            
             ft.Row(controls=[self.ref_state_dd], alignment=ft.MainAxisAlignment.START),
@@ -172,8 +170,8 @@ class PropertyTab(ft.Column):
             # 計算按鈕容器 (居中顯示按鈕)
             ft.Container(
                 content=self.calc_button,
-                padding=ft.padding.only(top=15, bottom=15),
-                alignment=ft.alignment.center
+                padding=ft.Padding.only(top=15, bottom=15),
+                alignment=ft.Alignment.CENTER
             ),
 
             
@@ -209,7 +207,6 @@ class PropertyTab(ft.Column):
             
             # 呼叫您在 ThermoStateCalculator 中新增的方法
             state_calculator.set_coolprop_ref_state(default_fluid, default_ref_state)
-            self.page.update() # 更新 UI
             
         except Exception as e:
             # 如果預設流體無效或設定參考點失敗，顯示錯誤 (但不應該阻礙程式啟動)
@@ -342,7 +339,7 @@ class PropertyTab(ft.Column):
         首先執行內部邏輯更新，然後觸發 UI 更新。
         """
         self.on_mode_change_internal(e) # 執行模式切換的邏輯 (如改變物質名稱、理想氣體核取方塊可見性等)
-        if self.page: self.update()      # 更新 UI，反映模式變更 (如物質名稱改變)
+        if self.parent: self.update()      # 更新 UI，反映模式變更 (如物質名稱改變)
 
 # --- 新增 2: 參考點變更事件處理器 ---
     def on_ref_state_change(self, e):
@@ -377,7 +374,7 @@ class PropertyTab(ft.Column):
                 self.show_error(f"設定參考點錯誤: {err}")
                 
             finally:
-                if self.page: self.update() # 更新 UI
+                if self.parent: self.update() # 更新 UI
         
     def update_units_menu(self, row_index):
         """
@@ -408,7 +405,7 @@ class PropertyTab(ft.Column):
              row["unit"].value = new_unit               # 設定單位下拉選單的值
              self._last_prop_units[row_index] = new_unit # 記錄本次單位，供下次換算使用
             
-        if self.page: self.update() # 更新 UI，顯示新的單位選單內容和選定值
+        if self.parent: self.update() # 更新 UI，顯示新的單位選單內容和選定值
 
     def create_prop_change_handler(self, index):
         """
@@ -470,7 +467,7 @@ class PropertyTab(ft.Column):
                     self._last_prop_units[i] = new_unit # 更新該行上次單位記錄為新單位
         
         self._is_updating_units = False # 釋放鎖定
-        if self.page: self.update() # 更新 UI
+        if self.parent: self.update() # 更新 UI
 
     def perform_calculation(self, e):
         """

@@ -17,7 +17,6 @@ class BaseAnalysisModule:
         :param kwargs: 其他服務, 例如 'analyzer' 或 'psy_calculator'
         """
         self.unit_converter = unit_converter
-        self.page = page
         
         # 儲存傳入的其他服務 (例如 self.analyzer)
         self.services = kwargs
@@ -129,7 +128,7 @@ class BaseAnalysisModule:
 
             finally:
                 self._is_updating_units = False
-                if self.page:
+                if self.parent:
                     self.page.update()
 
         return on_change

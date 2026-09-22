@@ -162,8 +162,11 @@ class CompressorModule(BaseAnalysisModule):
     def on_pressure_type_change(self, e):
         is_gauge = "Gauge" in self.cr_pressure_type_toggle.selected
         self.all_entries["cr_atm_p"]["ui_row"].visible = is_gauge
-        if self.cr_ui_container.page: # 安全檢查
+        try:
             self.cr_ui_container.update()
+        except RuntimeError:
+            # Flet 1 rejects updates until the control is attached to a Page.
+            pass
 
     # --- 2. 壓縮機功 (W_in) [修正版] ---
     def _build_work_ui(self):
@@ -732,7 +735,7 @@ class CompressorModule(BaseAnalysisModule):
                     ),
                     # 設定與 create_input_row 內部標籤相同的寬度，例如 150
                     width=80, 
-                    alignment=ft.alignment.center_left, # 靠左對齊
+                    alignment=ft.Alignment.CENTER_LEFT, # 靠左對齊
                 ),
                 self.ce_substance_tf, # 實際的輸入框
             ],
@@ -921,5 +924,5 @@ class CompressorModule(BaseAnalysisModule):
         atm_p_controls["unit"].value = new_unit
         self._last_units["cr_atm_p"] = new_unit
         
-        if self.cr_ui_container.page: # 安全檢查
+        if self.cr_ui_container.parent: # 安全檢查
             self.cr_ui_container.update()

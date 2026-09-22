@@ -1,9 +1,9 @@
 @echo off
 chcp 65001 >nul
-title 🚀 一鍵打包 ERAP 程式（Flet + Tkinter + Telegram 最終穩定版）
+title 🚀 一鍵打包 ERAP 程式（Flet + Telegram 最終穩定版）
 
 echo ===============================================
-echo  🚀 開始一鍵打包 ERAP 程式（Flet + Tkinter + Telegram）
+echo  🚀 開始一鍵打包 ERAP 程式（Flet + Telegram）
 echo ===============================================
 
 REM 1️⃣ 檢查 uv 是否存在
@@ -54,8 +54,7 @@ if exist icon.ico (
   --jobs=16 ^
   --windows-console-mode=force ^
   --show-progress ^
-  --enable-plugin=tk-inter ^
-  --enable-plugin=pylint-warnings ^
+    --enable-plugin=pylint-warnings ^
   --enable-plugin=anti-bloat ^
   --include-package=matplotlib.backends ^
   --include-package=matplotlib.pyplot ^

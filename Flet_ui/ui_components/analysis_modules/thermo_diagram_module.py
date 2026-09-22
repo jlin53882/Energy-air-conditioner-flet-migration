@@ -1,6 +1,6 @@
 import flet as ft
 import matplotlib.pyplot as plt
-from flet.matplotlib_chart import MatplotlibChart
+import flet_charts as fch
 from .base_analysis_module import BaseAnalysisModule
 from ..unit.thermo_draw.coolprop_utils import generate_thermo_diagram, safe_props, check_coolprop_fluid 
 import traceback # 用於印出詳細錯誤
@@ -99,7 +99,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
             ],
             value="Compressor", 
             width=390, 
-            on_change=self._on_input_mode_change
+            on_select=self._on_input_mode_change
         )
 
         # --- 建立所有輸入欄 ---
@@ -116,13 +116,13 @@ class ThermoDiagramModule(BaseAnalysisModule):
 
         # --- 結果輸出與按鈕 ---
         self.result_text = ft.Text("請輸入參數並點擊繪圖。", selectable=True)
-        self.plot_btn = ft.ElevatedButton("繪圖", icon=ft.Icons.AUTO_GRAPH, on_click=self._on_plot_click)
+        self.plot_btn = ft.Button("繪圖", icon=ft.Icons.AUTO_GRAPH, on_click=self._on_plot_click)
         self.connect_points_cb = ft.Checkbox(label="連接狀態點", value=True)
 
         # --- 初始空圖 ---
         fig, ax = plt.subplots(figsize=(8, 6))
         ax.text(0.5, 0.5, "尚未繪製", ha="center", va="center", color="gray")
-        self.chart = MatplotlibChart(fig, expand=True, isolated=True)
+        self.chart = fch.MatplotlibChart(figure=fig, expand=True)
         chart_container = ft.Container(self.chart, expand=True, height=480)
 
         # --- 版面配置 ---
@@ -145,7 +145,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
             self.all_entries["td_S"]["ui_row"],
             self.all_entries["td_V"]["ui_row"],
             ft.Row([self.plot_btn, self.connect_points_cb], spacing=15, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            ft.Container(self.result_text, padding=ft.padding.only(top=5)),
+            ft.Container(self.result_text, padding=ft.Padding.only(top=5)),
             ft.Divider(),
             chart_container
         ], spacing=5) 
@@ -161,7 +161,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
         if not fluid_name:
             self.fluid_check_result.value = "請輸入冷媒名稱"
             self.fluid_check_result.color = "red"
-            if self.page: self.page.update()
+            if self.parent: self.page.update()
             return
 
         is_valid, msg = check_coolprop_fluid(fluid_name)
@@ -173,7 +173,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
             self.fluid_check_result.value = f"'{fluid_name}' 無效: {msg}"
             self.fluid_check_result.color = "red"
         
-        if self.page: self.page.update()
+        if self.parent: self.page.update()
 
     # ======================================================
     # 1b. UI 模式切換 (無變更)
@@ -213,7 +213,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
             self.all_entries["td_V"]["ui_row"].visible = True
             
         
-        if self.page: self.page.update()
+        if self.parent: self.page.update()
 
     # ======================================================
     # 2️⃣ 繪圖邏輯：事件觸發 (無變更)
@@ -224,7 +224,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
         self.result_text.value = "繪製中..."
         self.result_text.color = "blue"
         self.plot_btn.disabled = True
-        if self.page: self.page.update()
+        if self.parent: self.page.update()
 
         try:
             result_str = self.calculate_thermo_diagram(use_imperial=False)
@@ -239,7 +239,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
         
         finally:
             self.plot_btn.disabled = False
-            if self.page: self.page.update()
+            if self.parent: self.page.update()
 
     # ======================================================
     # 3️⃣ 核心邏輯：計算並繪製圖形 (無變更)
@@ -258,12 +258,12 @@ class ThermoDiagramModule(BaseAnalysisModule):
             if not is_valid:
                 self.fluid_check_result.value = f"'{fluid}' 無效: {msg}"
                 self.fluid_check_result.color = "red"
-                if self.page: self.page.update()
+                if self.parent: self.page.update()
                 raise ValueError(f"冷媒 '{fluid}' 無效: {msg}")
             else:
                 self.fluid_check_result.value = f"'{fluid}' 驗證成功"
                 self.fluid_check_result.color = "green"
-                if self.page: self.page.update()
+                if self.parent: self.page.update()
             # --- 驗證結束 ---
 
             # 取得 UI 選項
@@ -461,7 +461,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
                     if self.all_entries[key].get("unit"):
                         setattr(self.all_entries[key]["unit"], "previous_unit", new_unit)
 
-            if self.page:
+            if self.parent:
                 self.page.update()
         
         # --- End of on_change_handler ---

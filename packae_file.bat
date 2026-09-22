@@ -1,9 +1,9 @@
 @echo off
 chcp 65001 >nul
-title 🚀 一鍵打包 ERAP 程式（Flet + Tkinter + Telegram 最終穩定版）
+title 🚀 一鍵打包 ERAP 程式（Flet + Telegram 最終穩定版）
 
 echo ===============================================
-echo  🚀 開始一鍵打包 ERAP 程式（Flet + Tkinter + Telegram）
+echo  🚀 開始一鍵打包 ERAP 程式（Flet + Telegram）
 echo ===============================================
 
 REM 1️⃣ 檢查 uv 是否存在
@@ -29,7 +29,7 @@ echo 🔄 同步打包環境套件 (含 extras)...
 uv sync --all-extras
 
 echo.
-echo 🔧 開始使用 Nuitka 打包 (支援 Flet + Tkinter + Telegram)...
+echo 🔧 開始使用 Nuitka 打包 (支援 Flet + Telegram)...
 
 set PYTHON_EXE=.venv\Scripts\python.exe
 set OUTPUT_DIR=AutoPunch_Output
@@ -45,7 +45,6 @@ if exist icon.ico (
 --standalone ^
 --jobs=16 ^
 --windows-console-mode=force ^
---enable-plugin=tk-inter ^
 --enable-plugin=anti-bloat ^
 --enable-plugin=pylint-warnings ^
 --include-package=matplotlib.backends ^
