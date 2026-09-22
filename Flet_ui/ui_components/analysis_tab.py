@@ -47,15 +47,20 @@ class AnalysisTab(ft.Column):
         
         for module in self.modules_to_load:
             definitions = module.get_analysis_definitions()
-            for index, (name, raw_definition) in enumerate(definitions.items()):
-                # Keep the display label for the existing dropdown contract, but
-                # attach stable metadata for control flow and future ID migration.
+            for name, raw_definition in definitions.items():
                 definition = dict(raw_definition)
                 definition.setdefault("calculation_mode", "standard")
-                definition["analysis_id"] = f"{module.__class__.__name__}.{index}"
+                analysis_id = definition.get("analysis_id")
+                if not isinstance(analysis_id, str) or not analysis_id.strip():
+                    raise ValueError(f"Analysis '{name}' is missing analysis_id")
+                if any(
+                    existing.get("analysis_id") == analysis_id
+                    for existing in self.analysis_map.values()
+                ):
+                    raise ValueError(f"Duplicate analysis_id: {analysis_id}")
                 self.analysis_map[name] = definition
                 all_ui_controls.append(definition["ui"])
-        
+
         # --- 4. 動態建立下拉選單 ---
         self.analysis_dd = ft.Dropdown(
             label="分析項目",

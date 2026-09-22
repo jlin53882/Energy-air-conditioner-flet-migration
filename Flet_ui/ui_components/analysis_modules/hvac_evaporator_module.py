@@ -17,6 +17,7 @@ class EvaporatorModule(BaseAnalysisModule):
     def get_analysis_definitions(self) -> dict:
         return {
             "蒸發器熱交換率 (Qe)": {
+                "analysis_id": "evaporator.heat_rate",
                 "ui": self.qe_ui_container,
                 "calc_func": self.calculate_qe
             }

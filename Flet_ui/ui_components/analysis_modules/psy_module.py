@@ -34,11 +34,13 @@ class PsyModule(BaseAnalysisModule):
         """回報此模組提供的 *兩種* 濕空氣計算模式"""
         return {
             "濕空氣性質 (已知乾濕球)": {
+                "analysis_id": "psychrometrics.tdb_twb",
                 "ui": self.ui_container,
                 "calc_func": self.calculate_psy,
                 "calculation_mode": "psychrometric"
             },
             "濕空氣性質 (已知乾球與相對濕度)": {
+                "analysis_id": "psychrometrics.tdb_rh",
                 "ui": self.ui_container,
                 "calc_func": self.calculate_psy,
                 "calculation_mode": "psychrometric"

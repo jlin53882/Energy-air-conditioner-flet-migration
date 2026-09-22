@@ -68,46 +68,57 @@ class CompressorModule(BaseAnalysisModule):
         """
         return {
             "壓縮比 (CR)": {
+                "analysis_id": "compressor.compression_ratio",
                 "ui": self.cr_ui_container,
                 "calc_func": self.calculate_cr
             },
             "壓縮機功 (W_in)": {
+                "analysis_id": "compressor.work",
                 "ui": self.work_ui_container,
                 "calc_func": self.calculate_work
             },
             "壓縮機等熵效率 (η_isen)": {
+                "analysis_id": "compressor.isentropic_efficiency",
                 "ui": self.isen_eff_ui_container,
                 "calc_func": self.calculate_isen_eff
             },
             "系統冷凍能力 (Q_L_dot)蒸發器": {
+                "analysis_id": "compressor.refrigeration_capacity",
                 "ui": self.ref_cap_ui_container,
                 "calc_func": self.calculate_ref_cap
             },
             "壓縮機功 (考慮熱傳 Q_dot)": {
+                "analysis_id": "compressor.work_heat_transfer",
                 "ui": self.work_q_ui_container,
                 "calc_func": self.calculate_work_q
             },
             "壓縮機可逆功 (W_rev_dot)": {
+                "analysis_id": "compressor.reversible_work",
                 "ui": self.rev_work_ui_container,
                 "calc_func": self.calculate_rev_work
             },
             "壓縮機㶲破壞 Ex_dest": {
+                "analysis_id": "compressor.exergy_destruction",
                 "ui": self.ex_dest_ui_container,
                 "calc_func": self.calculate_ex_dest
             },
             "壓縮機容積效率 (η_vol)": {
+                "analysis_id": "compressor.volumetric_efficiency",
                 "ui": self.vol_eff_ui_container,
                 "calc_func": self.calculate_vol_eff
             },
             "壓縮機效能損失 (實際 W_in 損失)": {
+                "analysis_id": "compressor.exergy_efficiency_loss",
                 "ui": self.ex_eff_loss_ui_container,
                 "calc_func": self.calculate_ex_eff_loss
             },
             "壓縮機㶲效率 (η_ex)": {
+                "analysis_id": "compressor.exergy_efficiency_ratio",
                 "ui": self.ex_eff_ratio_ui_container,
                 "calc_func": self.calculate_ex_eff_ratio
             },
             "壓縮機綜合分析範例": {
+                "analysis_id": "compressor.combined_example",
                 "ui": self.comp_example_ui_container,
                 "calc_func": self.calculate_comp_example
             },

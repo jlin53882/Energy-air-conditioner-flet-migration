@@ -21,6 +21,7 @@ class CondenserModule(BaseAnalysisModule):
     def get_analysis_definitions(self) -> dict:
         return {
             "冷凝器交換率 (Qcon)": {
+                "analysis_id": "condenser.heat_rate",
                 "ui": self.qc_ui_container,
                 "calc_func": self.calculate_qe
             }
