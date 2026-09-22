@@ -6,12 +6,13 @@ The application has two channel interfaces, a neutral application layer, shared
 domain services, and infrastructure adapters for legacy integrations.
 
 ```text
-Flet_ui/ ------------------┐
-                           ├──> application/ ───> domain/
-Telegram_bot/ -------------┘          │
-                                      └──> infrastructure/
+Flet adapter -----------┐
+                         ├──> application/ ───> domain/
+Telegram adapter -------┘
 
-run.py and channel entrypoints are composition roots.
+Composition roots construct channel/application/domain services and inject
+infrastructure implementations; infrastructure is not discovered by
+application or domain code.
 chart/ provides headless chart state models and parsing for chart adapters.
 ```
 
@@ -124,7 +125,7 @@ CoolProp reference state is process-global. `ReferenceStateService` owns:
 Mutation and the complete dependent `PropsSI`/`PhaseSI` transaction run inside
 one shared `calculation_scope`. Synchronization is distinct from request
 policy: ordinary entrypoints choose a concrete policy (`DEF`, `ASHRAE`, `IIR`,
-`NBP`, or `IAPWS`), while only explicitly internal operations may use `CURRENT`.
+`NBP`), while only explicitly internal operations may use `CURRENT`.
 No ordinary request inherits the state left by a previous request.
 
 ## 10. Analysis Registration

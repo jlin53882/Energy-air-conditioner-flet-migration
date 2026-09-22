@@ -10,10 +10,11 @@ from pathlib import Path
 import CoolProp.CoolProp as CP
 import pytest
 
-from domain.thermodynamics.reference_state import ReferenceStateService
+from domain.thermodynamics.reference_state import ReferenceStatePolicy, ReferenceStateService
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units.converter import CanonicalUnitConverter
 from application.models import PropertyQueryRequest
+from application.property_queries import PropertyQueryService
 from Flet_ui.ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
 from Flet_ui.ui_components.unit.UnitConverter import UnitConverter
 from Telegram_bot.thermo_calculator import ThermoCalculator
@@ -24,6 +25,56 @@ ROOT = Path(__file__).parents[2]
 def test_reference_state_services_share_process_lock() -> None:
     """Every service instance must serialize the same CoolProp process state."""
     assert ReferenceStateService().lock is ReferenceStateService().lock
+
+
+def test_iapws_is_not_a_reference_state_policy() -> None:
+    """Only CoolProp predefined states plus CURRENT belong to the policy enum."""
+    service = ReferenceStateService()
+    assert {
+        ReferenceStatePolicy.DEFAULT.value,
+        ReferenceStatePolicy.ASHRAE.value,
+        ReferenceStatePolicy.IIR.value,
+        ReferenceStatePolicy.NBP.value,
+        ReferenceStatePolicy.CURRENT.value,
+    } == {"DEF", "ASHRAE", "IIR", "NBP", "CURRENT"}
+    for policy in ("DEF", "ASHRAE", "IIR", "NBP"):
+        assert service._normalize_policy(policy) == policy
+    with pytest.raises(ValueError):
+        service.set("R134a", "IAPWS")
+
+
+def test_water_property_request_uses_default_not_ambient_state() -> None:
+    """Water ordinary queries reset to CoolProp's explicit default policy."""
+    from Flet_ui.ui_components.property_tab import resolve_property_reference_state
+
+    service = ThermodynamicStateService(CanonicalUnitConverter())
+    query_service = PropertyQueryService(service)
+    known_props = (("T", 25.0, "°C"), ("P", 1.0, "bar"))
+    assert resolve_property_reference_state("Water", "ASHRAE") == ReferenceStatePolicy.DEFAULT
+    assert resolve_property_reference_state("Water", "ASHRAE") != ReferenceStatePolicy.CURRENT
+    try:
+        service.set_reference_state("Water", "NBP")
+        actual = query_service.query(PropertyQueryRequest("Water", known_props))
+        expected = service.calculate_properties(
+            "Water", known_props, reference_state=ReferenceStatePolicy.DEFAULT
+        )
+    finally:
+        service.set_reference_state("Water", "DEF")
+
+    assert actual["H"] == pytest.approx(expected["H"])
+    assert actual["S"] == pytest.approx(expected["S"])
+
+
+def test_chart_auto_policy_is_explicit_for_water() -> None:
+    """Chart Auto selects concrete defaults and rejects IAPWS as a policy code."""
+    from Flet_ui.ui_components.unit.thermo_draw.coolprop_utils import (
+        _effective_reference_state,
+    )
+
+    assert _effective_reference_state("Water", "Auto") == ReferenceStatePolicy.DEFAULT
+    assert _effective_reference_state("R134a", "Auto") == ReferenceStatePolicy.ASHRAE
+    with pytest.raises(ValueError):
+        _effective_reference_state("Water", "IAPWS")
 
 
 def test_reference_state_registry_is_process_global() -> None:

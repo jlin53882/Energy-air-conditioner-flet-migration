@@ -11,8 +11,18 @@ from ..ui_components.unit.UnitConverter import UnitConverter
 from ..ui_components.unit.PropertyFormatter import PropertyFormatter
 from application.models import PropertyQueryRequest
 from application.property_queries import PropertyQueryService
+from domain.thermodynamics.reference_state import ReferenceStatePolicy
 
 # PropertyTab 繼承自 ft.Column，使其可以直接作為 Flet UI 中的一個垂直佈局容器。
+def resolve_property_reference_state(
+    fluid: str, selected_policy: str
+) -> ReferenceStatePolicy | str:
+    """Resolve the explicit policy for an ordinary PropertyTab request."""
+    if fluid == "Water":
+        return ReferenceStatePolicy.DEFAULT
+    return selected_policy
+
+
 class PropertyTab(ft.Column):
     def __init__(self, unit_converter: UnitConverter, 
                  formatter: PropertyFormatter, 
@@ -537,10 +547,8 @@ class PropertyTab(ft.Column):
                     fluid,
                     tuple(known_props[:2]),
                     is_ideal,
-                    (
-                        "CURRENT"
-                        if fluid == "Water"
-                        else self.ref_state_dd.value.split(" ")[0]
+                    resolve_property_reference_state(
+                        fluid, self.ref_state_dd.value.split(" ")[0]
                     ),
                 )
             )

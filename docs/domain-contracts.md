@@ -60,9 +60,12 @@ are selected by the request. Channel adapters own display conversion and error
 presentation.
 
 Reference-state-sensitive calculations must carry an explicit request policy.
-Ordinary requests use a concrete policy such as `DEF`, `ASHRAE`, `IIR`, `NBP`, or
-`IAPWS`; internal probes may explicitly use `CURRENT`. No ordinary calculation
-may depend on whichever state a previous request left in the process.
+Ordinary requests use a concrete policy such as `DEF`, `ASHRAE`, `IIR`, or
+`NBP`. Internal operations may explicitly use `CURRENT`, which means that the
+scope does not mutate the process reference state. No ordinary calculation may
+depend on whichever state a previous request left in the process. `Water` is an
+ordinary fluid request and uses the explicit `DEF` policy; backend or
+equation-model selection is a separate concern from reference-state policy.
 
 ## 5. Reference-State Contract
 

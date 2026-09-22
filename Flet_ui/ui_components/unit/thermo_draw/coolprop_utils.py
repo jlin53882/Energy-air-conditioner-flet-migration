@@ -20,8 +20,10 @@ def _effective_reference_state(
 ) -> ReferenceStatePolicy | str:
     """Resolve chart UI reference-state semantics to a shared policy code."""
     if ref_state == "Auto":
-        return ReferenceStatePolicy.CURRENT if fluid == "Water" else ReferenceStatePolicy.ASHRAE
-    return ref_state if ref_state in {"ASHRAE", "IAPWS", "NBP", "IIR", "DEF"} else None
+        return ReferenceStatePolicy.DEFAULT if fluid == "Water" else ReferenceStatePolicy.ASHRAE
+    if ref_state in {"ASHRAE", "NBP", "IIR", "DEF"}:
+        return ref_state
+    raise ValueError(f"Unsupported chart reference-state policy: {ref_state}")
 
 
 # ======================================================

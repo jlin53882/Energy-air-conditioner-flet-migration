@@ -67,9 +67,8 @@ class ThermoDiagramModule(BaseAnalysisModule):
         self.ref_state_dd = ft.Dropdown(
             label="參考狀態 (Reference State)",
             options=[
-                ft.dropdown.Option("Auto", "自動 (冷媒:ASHRAE, 水:IAPWS)"),
+                ft.dropdown.Option("Auto", "自動 (冷媒:ASHRAE, 水:Default)"),
                 ft.dropdown.Option("ASHRAE", "ASHRAE (冷媒常用)"),
-                ft.dropdown.Option("IAPWS", "IAPWS (水/水蒸氣標準)"),
                 ft.dropdown.Option("NBP", "NBP (常壓沸點為 0)"),
                 ft.dropdown.Option("IIR", "IIR (0°C 飽和液體為基準)"),
             ],

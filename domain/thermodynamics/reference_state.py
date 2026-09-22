@@ -19,7 +19,6 @@ class ReferenceStatePolicy(str, Enum):
 
     DEFAULT = "DEF"
     ASHRAE = "ASHRAE"
-    IAPWS = "IAPWS"
     IIR = "IIR"
     NBP = "NBP"
     CURRENT = "CURRENT"
@@ -28,7 +27,7 @@ class ReferenceStatePolicy(str, Enum):
 class ReferenceStateService:
     """Serialize CoolProp transactions and record process-global state policy."""
 
-    VALID_CODES = frozenset({"DEF", "ASHRAE", "IAPWS", "IIR", "NBP"})
+    VALID_CODES = frozenset({"DEF", "ASHRAE", "IIR", "NBP"})
 
     @property
     def lock(self) -> RLock:
