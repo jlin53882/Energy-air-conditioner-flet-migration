@@ -247,7 +247,7 @@ class PropertyTab(ft.Column):
     
             # 僅在 CoolProp 模式下 (即非 Water 模式) 執行檢查
             if self.mode_dd.value.startswith("CoolProp"):
-                if not self.state_calculator.is_fluid_valid(fluid_name):
+                if not self.query_service.is_fluid_valid(fluid_name):
                     # 物質無效：顯示紅色錯誤提示
                     self.fluid_tf.error_text = f"錯誤：CoolProp 資料庫中找不到物質 '{fluid_name}'"
                     self.fluid_tf.border_color = ft.Colors.RED_700
@@ -266,7 +266,7 @@ class PropertyTab(ft.Column):
                         ref_code = selected_option.split(' ')[0] # e.g., "ASHRAE"
                         
                         # 2. 為這個 *新的* 物質 (fluid_name) 套用參考點
-                        self.state_calculator.set_coolprop_ref_state(fluid_name, ref_code)
+                        self.query_service.set_reference_state(fluid_name, ref_code)
                     
                     except Exception as err:
                         # 即使設定參考點失敗 (例如某些流體不支援)，也應顯示錯誤
@@ -367,7 +367,7 @@ class PropertyTab(ft.Column):
                 # 💡 實際應用中，可以考慮使用當前選擇的流體 (self.fluid_tf.value)
                 
                 # 執行關鍵步驟：設置 R134a 的參考點
-                self.state_calculator.set_coolprop_ref_state(self.fluid_tf.value, ref_code) 
+                self.query_service.set_reference_state(self.fluid_tf.value, ref_code)
                 
                 # 可選：顯示成功的 SnackBar 提示
                 #self.page.snack_bar = ft.SnackBar(ft.Text(f"參考點已設定為: {ref_code} {self.fluid_tf.value}"))
@@ -549,7 +549,9 @@ class PropertyTab(ft.Column):
             # 處理廣延性質計算 (如果輸入了總質量)
             if self.mass_tf.value.strip():
                 # 將總質量值換算為 SI 單位 (kg)
-                total_mass_kg = float(self.mass_tf.value) * (0.453592 if self.mass_unit_dd.value == 'lbm' else 1)
+                total_mass_kg = self.unit_converter.convert_to_si(
+                    "Mass", float(self.mass_tf.value), self.mass_unit_dd.value
+                )
                 # 將廣延性質結果追加到輸出字串
                 final_output += self.formatter.format_extensive_properties(si_results, total_mass_kg, use_imperial)
             

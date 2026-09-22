@@ -14,6 +14,19 @@ class PropertyQueryService:
         """Initialize with an explicit shared thermodynamic service."""
         self.state_service = state_service
 
+    def is_fluid_valid(self, fluid_name: str) -> bool:
+        """Validate a fluid through the shared thermodynamic service."""
+        return self.state_service.is_fluid_valid(fluid_name)
+
+    @property
+    def reference_state(self):
+        """Expose the service-owned reference-state registry for composition/tests."""
+        return self.state_service.reference_state
+
+    def set_reference_state(self, fluid_name: str, ref_state: str) -> None:
+        """Apply reference-state policy through the shared service."""
+        self.state_service.set_reference_state(fluid_name, ref_state)
+
     def query(self, request: PropertyQueryRequest) -> dict[str, float | str]:
         """Validate a request and return a neutral thermodynamic result."""
         if not request.fluid.strip():
