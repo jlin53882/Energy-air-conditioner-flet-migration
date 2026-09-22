@@ -84,6 +84,63 @@ def test_flet_tabs_and_analysis_controls_construct() -> None:
     assert not property_tab.result_container.expand
 
 
+def test_property_dropdown_selection_refreshes_units_through_flet_event() -> None:
+    """Property Dropdown 的 `on_select` 必須更新 options、預設值與 tracking state。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    converter = UnitConverter()
+    state_calculator = ThermoStateCalculator(converter)
+    property_tab = PropertyTab(
+        unit_converter=converter,
+        formatter=PropertyFormatter(converter),
+        page=page,
+        query_service=PropertyQueryService(state_calculator.state_service),
+    )
+
+    row = property_tab.input_rows[0]
+    row["prop"].value = property_tab.prop_names_map["T"]
+    assert row["prop"].on_select is not None
+    row["prop"].on_select(None)
+
+    option_values = [option.key for option in row["unit"].options]
+    assert option_values == ["K", "°C", "°F"]
+    assert row["unit"].value == "°C"
+    assert property_tab._last_prop_units[0] == "°C"
+
+
+def test_property_dropdown_transitions_keep_default_units() -> None:
+    """T→H、H→V 與 D→V 都必須沿用 UnitConverter 的 default unit。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    converter = UnitConverter()
+    state_calculator = ThermoStateCalculator(converter)
+    property_tab = PropertyTab(
+        unit_converter=converter,
+        formatter=PropertyFormatter(converter),
+        page=page,
+        query_service=PropertyQueryService(state_calculator.state_service),
+    )
+
+    row = property_tab.input_rows[0]
+    for prop_code, expected_unit in (("T", "°C"), ("H", "kJ/kg"), ("V", "m³/kg")):
+        row["prop"].value = property_tab.prop_names_map[prop_code]
+        row["prop"].on_select(None)
+        assert row["unit"].value == expected_unit
+        assert property_tab._last_prop_units[0] == expected_unit
+
+    second_row = property_tab.input_rows[1]
+    second_row["prop"].value = property_tab.prop_names_map["D"]
+    second_row["prop"].on_select(None)
+    second_row["prop"].value = property_tab.prop_names_map["V"]
+    second_row["prop"].on_select(None)
+    assert second_row["unit"].value == "m³/kg"
+    assert property_tab._last_prop_units[1] == "m³/kg"
+
+
 def test_tab_views_wrap_content_for_flet_layout_constraints() -> None:
     """限制 tab content 範圍，讓 Flet 1 能渲染完整的可捲動 tabs。
 

@@ -24,6 +24,28 @@ class ReferenceStatePolicy(str, Enum):
     CURRENT = "CURRENT"
 
 
+def normalize_reference_state_policy(policy: ReferenceStatePolicy | str) -> str:
+    """將 reference-state policy 正規化為 application 可保存的 canonical code。
+
+    參數：
+        policy (ReferenceStatePolicy | str): UI alias、enum 或 policy code。
+
+    回傳：
+        str：`DEF`、`ASHRAE`、`IIR`、`NBP` 或內部使用的 `CURRENT`。
+
+    例外：
+        ValueError：policy 不在支援的 reference-state code 中。
+    """
+    normalized = policy.value if isinstance(policy, ReferenceStatePolicy) else policy.strip().upper()
+    if normalized == "DEFAULT":
+        normalized = ReferenceStatePolicy.DEFAULT.value
+    if normalized == ReferenceStatePolicy.CURRENT.value:
+        return normalized
+    if normalized not in ReferenceStateService.VALID_CODES:
+        raise ValueError(f"Unsupported reference state policy '{policy}'")
+    return normalized
+
+
 class ReferenceStateService:
     """序列化 CoolProp transactions，並記錄 process-global state policy。"""
 
@@ -46,14 +68,7 @@ class ReferenceStateService:
 
 回傳：
     str：函數計算或處理後的結果。"""
-        normalized = policy.value if isinstance(policy, ReferenceStatePolicy) else policy.upper()
-        if normalized == "DEFAULT":
-            normalized = ReferenceStatePolicy.DEFAULT.value
-        if normalized == ReferenceStatePolicy.CURRENT.value:
-            return normalized
-        if normalized not in ReferenceStateService.VALID_CODES:
-            raise ValueError(f"Unsupported reference state policy '{policy}'")
-        return normalized
+        return normalize_reference_state_policy(policy)
 
     def _set_unlocked(self, fluid_name: str, ref_state: ReferenceStatePolicy | str) -> None:
         """持有共用 lock 時套用具體的 CoolProp mutation。

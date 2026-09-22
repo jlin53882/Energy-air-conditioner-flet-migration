@@ -89,12 +89,12 @@ class PropertyTab(ft.Column):
             unit_dd = ft.Dropdown(label="單位", width=120) 
             
             # 設置事件處理器 (使用閉包確保傳遞正確的索引 i)
-            prop_dd.on_change = self.create_prop_change_handler(i)
+            prop_dd.on_select = self.create_prop_change_handler(i)
             unit_dd.on_change = self.create_unit_change_handler(i)
 
             self.input_rows.append({"prop": prop_dd, "val": val_tf, "unit": unit_dd})
             # 初始化時為單位選單載入選項和預設值
-            self._update_units_menu_content(i) 
+            self.update_units_menu(i, update_view=False)
             
         # 3. 廣延性質區塊 (Extensive Property Block)
         # 總質量輸入框
@@ -273,37 +273,6 @@ class PropertyTab(ft.Column):
     
             self.update() # 更新 UI，讓錯誤提示或邊框變化立即顯示
     
-    def _update_units_menu_content(self, row_index):
-        """
-        內部輔助方法：根據當前選定的性質，初始化或更新該行單位選單的選項和預設值。
-        此方法通常在 __init__ 或性質改變時被呼叫，且不觸發外部 UI 更新。
-        
-        :param row_index: 輸入行索引
-        """
-        row = self.input_rows[row_index]
-        prop_code = self.get_prop_code(row["prop"].value)
-        
-        # 獲取該性質的所有可用單位列表
-        units = self.unit_converter.get_available_units(prop_code) 
-        
-        # 更新單位下拉選單的選項
-        row["unit"].options = [ft.dropdown.Option(u) for u in units]
-        
-        # 處理單位選單的預設值設定
-        if not units:
-             # 如果沒有可用單位 (例如： 乾度 Q)，設置為預設的空字串
-             default_val = self.unit_converter.default_units.get(prop_code, "")
-             row["unit"].value = default_val
-             self._last_prop_units[row_index] = default_val # 記錄上次單位
-        else:
-             # 嘗試使用定義的預設單位
-             default_unit = self.unit_converter.default_units.get(prop_code)
-             # 選擇新的單位：如果預設單位存在於可用列表中，則使用；否則使用列表中的第一個
-             new_unit = default_unit if default_unit in units else units[0]
-             row["unit"].value = new_unit
-             self._last_prop_units[row_index] = new_unit # 記錄上次單位
-
-    # 輔助方法：顯示錯誤訊息 SnackBar
     def show_error(self, message):
         """
         在 Flet 頁面底部以 SnackBar 的形式顯示錯誤訊息。
@@ -373,36 +342,26 @@ class PropertyTab(ft.Column):
             finally:
                 if self.parent: self.update() # 更新 UI
         
-    def update_units_menu(self, row_index):
+    def update_units_menu(self, row_index, *, update_view=True):
         """
-        當性質下拉選單 (prop_dd) 改變時，更新對應的單位下拉選單內容和預設值。
-        
+        根據輸入行目前的性質，更新單位選項、預設值與 tracking state。
+        初始化與性質變更事件都使用同一套單位解析邏輯；只有事件路徑會要求 UI refresh。
+
         :param row_index: 變動的輸入行索引 (0, 1, 2)
+        :param update_view: 是否在更新後刷新 Flet UI
         """
         row = self.input_rows[row_index]
-        # 根據選單中顯示的名稱獲取性質代碼 (例如： 'Pressure (壓力), P' -> 'P')
         prop_code = self.get_prop_code(row["prop"].value)
-        
-        # 從核心計算器獲取該性質的所有可用單位列表
-        units = self.unit_converter.get_available_units(prop_code) 
-        
-        # 更新單位下拉選單的選項
-        row["unit"].options = [ft.dropdown.Option(u) for u in units]
-        
-        # 處理沒有單位或設置預設單位的情況
-        if not units:
-             # 如果沒有可用單位 (例如乾度 Q)，則設置為空值
-             row["unit"].value = ""
-             self._last_prop_units[row_index] = "" # 記錄上次單位為空
-        else:
-             # 獲取該性質的預設單位 (例如： 'kPa')
-             default_unit = self.unit_converter.default_units.get(prop_code)
-             # 選擇新的單位：優先使用預設單位，否則使用列表中的第一個單位
-             new_unit = default_unit if default_unit in units else units[0]
-             row["unit"].value = new_unit               # 設定單位下拉選單的值
-             self._last_prop_units[row_index] = new_unit # 記錄本次單位，供下次換算使用
-            
-        if self.parent: self.update() # 更新 UI，顯示新的單位選單內容和選定值
+        units = self.unit_converter.get_available_units(prop_code)
+        row["unit"].options = [ft.dropdown.Option(unit) for unit in units]
+
+        default_unit = self.unit_converter.default_units.get(prop_code, "")
+        new_unit = default_unit if default_unit in units else (units[0] if units else "")
+        row["unit"].value = new_unit
+        self._last_prop_units[row_index] = new_unit
+
+        if update_view and self.parent:
+            self.update()
 
     def create_prop_change_handler(self, index):
         """

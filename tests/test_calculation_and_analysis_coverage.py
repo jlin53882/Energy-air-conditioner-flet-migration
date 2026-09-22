@@ -6,6 +6,7 @@ import math
 
 import pytest
 
+from Flet_ui.ui_components.analysis_modules.psy_module import PsyModule
 from Flet_ui.ui_components.analysis_tab import AnalysisTab
 from Flet_ui.ui_components.unit.HVACAnalyzer import HVACAnalyzer
 from Flet_ui.ui_components.unit.PsychrometricCalculator import PsychrometricCalculator
@@ -105,6 +106,17 @@ def test_unit_converter_round_trip_and_unknown_unit(analyzer: HVACAnalyzer) -> N
         converter.convert_to_si("P", 1.0, "not-a-unit")
 
 
+def test_relative_humidity_percentage_round_trip() -> None:
+    """RH 的 display percentage 與 canonical fraction 必須雙向正確轉換。
+
+回傳：
+    無。"""
+    converter = UnitConverter()
+    for display_value, canonical_value in ((0.0, 0.0), (50.0, 0.5), (88.0, 0.88), (100.0, 1.0)):
+        assert converter.convert_to_si("RH", display_value, "%") == pytest.approx(canonical_value)
+        assert converter.convert_from_si("RH", canonical_value, "%") == pytest.approx(display_value)
+
+
 def test_thermo_state_validation_and_property_calculation() -> None:
     """執行 CoolProp-backed state validation 與一次一般 property query。
 
@@ -133,6 +145,22 @@ def test_psychrometric_calculator_returns_finite_properties() -> None:
         numeric_values = [value for value in result.values() if isinstance(value, (int, float))]
         assert numeric_values
         assert all(math.isfinite(value) for value in numeric_values)
+
+
+def test_psychrometric_relative_humidity_renders_percentage() -> None:
+    """Canonical RH fraction 0.88 必須在實際 PsyModule output path 顯示為 88%。
+
+回傳：
+    無。"""
+    module = PsyModule(UnitConverter(), DummyPage(), PsychrometricCalculator())
+    mode = "濕空氣性質 (已知乾球與相對濕度)"
+    module.configure_ui_for_mode(mode)
+    module.all_entries["psy_rh"]["val"].value = "88"
+
+    output = module.calculate_psy(use_imperial=False, mode_name=mode)
+
+    assert "88.00 %" in output
+    assert "0.88 %" not in output
 
 
 def test_every_analysis_option_switches_and_calculates() -> None:

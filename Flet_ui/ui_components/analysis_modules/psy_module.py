@@ -166,6 +166,7 @@ class PsyModule(BaseAnalysisModule):
         pws_wd_si = si_results['Pws_wd']
         ws_si = si_results['Ws']
         wss_si = si_results['Wss']
+        rh_val = self.unit_converter.convert_from_si("RH", rh_si, "%")
 
         # 3. 將所有數值轉換為目標顯示單位 (省略... 如同您原始碼)
         alt_val = self.unit_converter.convert_from_si("L", alt_si, l_unit)
@@ -190,7 +191,7 @@ class PsyModule(BaseAnalysisModule):
         lines.append(f"{'乾球溫度 (Dry-Bulb Temperature)':<{title_width}}: {tdb_val:.2f} {t_unit}")
         lines.append(f"{'計算濕球溫度 (Calculated Wet-Bulb Temp)':<{title_width}}: {twb_val:.2f} {t_unit}")
         lines.append(f"{'露點溫度 (Dew Point Temperature)':<{title_width}}: {tdp_val:.2f} {t_unit}")
-        lines.append(f"{'相對濕度 (Relative Humidity)':<{title_width}}: {rh_si:.2f} %") 
+        lines.append(f"{'相對濕度 (Relative Humidity)':<{title_width}}: {rh_val:.2f} %")
         lines.append(f"{'濕度比 (Humidity Ratio)':<{title_width}}: {w_val:.6f} {w_unit}")
         lines.append(f"{'濕空氣之焓值 (Enthalpy)':<{title_width}}: {h_val:.4f} {h_unit}")
         lines.append(f"{'濕空氣之比容 (Specific Volume)':<{title_width}}: {v_val:.4f} {v_unit}")
