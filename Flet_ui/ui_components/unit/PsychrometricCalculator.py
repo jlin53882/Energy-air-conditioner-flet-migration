@@ -2,6 +2,7 @@
 # 職責：封裝 shared psychrometric domain service，提供 Flet 相容介面。
 
 from domain.psychrometrics.service import PsychrometricService
+from infrastructure.psychrometrics import LegacyPsychrometricModelAdapter
 
 
 class PsychrometricCalculator:
@@ -9,7 +10,7 @@ class PsychrometricCalculator:
 
     def __init__(self, service: PsychrometricService | None = None) -> None:
         """Initialize the adapter with an injectable psychrometric service."""
-        self._service = service or PsychrometricService()
+        self._service = service or PsychrometricService(LegacyPsychrometricModelAdapter())
 
     def calculate_pressure_from_altitude(self, altitude_m):
         """Return atmospheric pressure in pascals."""

@@ -2,17 +2,31 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol
 
-from Flet_ui.PsychrometricChart import PsychrometricChart_01_ASHF_model as legacy_model
+
+class PsychrometricModel(Protocol):
+    """Protocol implemented by the injected legacy psychrometric adapter."""
+
+    def cal_p(self, altitude_m: float) -> float: ...
+
+    def Calculation_process_m_Tdb_Twb(self, **kwargs: Any) -> tuple[Any, ...]: ...
+
+    def Calculation_process_m_Tdb_RH(self, **kwargs: Any) -> tuple[Any, ...]: ...
+
+    def cal_Tdp_from_Pw(self, vapor_pressure: float) -> float: ...
 
 
 class PsychrometricService:
-    """Return numeric SI-oriented psychrometric results for all channels."""
+    """Return numeric SI-oriented results for an injected model boundary."""
+
+    def __init__(self, model: PsychrometricModel) -> None:
+        """Initialize with a neutral adapter for the legacy model."""
+        self._model = model
 
     def calculate_pressure_from_altitude(self, altitude_m: float) -> float:
         """Return atmospheric pressure in pascals for an altitude in metres."""
-        return legacy_model.cal_p(altitude_m) * 1000.0
+        return self._model.cal_p(altitude_m) * 1000.0
 
     def calculate_from_tdb_twb(
         self,
@@ -24,13 +38,13 @@ class PsychrometricService:
         tdb_c = tdb_k - 273.15
         twb_c = twb_k - 273.15
         pressure, vapor_pressure, pws_db, pws_wb, w, ws, wss, rh, enthalpy, volume = (
-            legacy_model.Calculation_process_m_Tdb_Twb(
+            self._model.Calculation_process_m_Tdb_Twb(
                 m=altitude_m,
                 T_db=tdb_c,
                 T_wb=twb_c,
             )
         )
-        dew_point_c = legacy_model.cal_Tdp_from_Pw(vapor_pressure)
+        dew_point_c = self._model.cal_Tdp_from_Pw(vapor_pressure)
         return self._build_result(
             altitude_m=altitude_m,
             pressure=pressure,
@@ -57,13 +71,13 @@ class PsychrometricService:
         """Calculate psychrometric properties from dry-bulb/RH inputs."""
         tdb_c = tdb_k - 273.15
         twb_c, pressure, vapor_pressure, pws_db, pws_wb, w, ws, wss, _, enthalpy, volume = (
-            legacy_model.Calculation_process_m_Tdb_RH(
+            self._model.Calculation_process_m_Tdb_RH(
                 m=altitude_m,
                 T_db=tdb_c,
                 RH=rh,
             )
         )
-        dew_point_c = legacy_model.cal_Tdp_from_Pw(vapor_pressure)
+        dew_point_c = self._model.cal_Tdp_from_Pw(vapor_pressure)
         return self._build_result(
             altitude_m=altitude_m,
             pressure=pressure,
