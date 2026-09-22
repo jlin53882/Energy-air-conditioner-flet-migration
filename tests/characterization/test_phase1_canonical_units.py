@@ -51,7 +51,7 @@ def test_flet_converter_delegates_core_quantities_to_canonical_contract() -> Non
     converter = UnitConverter()
     canonical = CanonicalUnitConverter()
 
-    for prop_code, value, unit_code in (("P", 1.2, "bar"), ("T", 25.0, "°C"), ("H", 250.0, "kJ/kg")):
+    for prop_code, value, unit_code in (("P", 1.2, "bar"), ("T", 25.0, "°C"), ("H", 250.0, "kJ/kg"), ("V", 16.0185, "ft³/lbm")):
         assert converter.convert_to_si(prop_code, value, unit_code) == pytest.approx(
             canonical.convert_to_si(prop_code, value, unit_code)
         )
@@ -71,6 +71,15 @@ def test_telegram_converter_delegates_core_quantities_to_canonical_contract() ->
             canonical.convert_to_si(prop_code, value, unit_code),
             unit_code,
         ) == pytest.approx(value)
+
+
+def test_flet_converter_rejects_unknown_specific_volume_units() -> None:
+    """Flet V conversion must use the canonical explicit-error contract."""
+    converter = UnitConverter()
+    with pytest.raises(ValueError, match="Unknown unit"):
+        converter.convert_to_si("V", 1.0, "not-a-unit")
+    with pytest.raises(ValueError, match="Unknown unit"):
+        converter.convert_from_si("V", 1.0, "not-a-unit")
 
 
 def test_canonical_converter_rejects_unknown_units() -> None:

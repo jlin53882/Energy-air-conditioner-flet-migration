@@ -15,6 +15,9 @@ from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units.converter import CanonicalUnitConverter
 from application.models import PropertyQueryRequest
 from application.property_queries import PropertyQueryService
+from Flet_ui.ui_components.analysis_modules.hvac_compressor_module import CompressorModule
+from Flet_ui.ui_components.property_tab import PropertyTab
+from Flet_ui.ui_components.unit.PropertyFormatter import PropertyFormatter
 from Flet_ui.ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
 from Flet_ui.ui_components.unit.UnitConverter import UnitConverter
 from Telegram_bot.thermo_calculator import ThermoCalculator
@@ -45,13 +48,13 @@ def test_iapws_is_not_a_reference_state_policy() -> None:
 
 def test_water_property_request_uses_default_not_ambient_state() -> None:
     """Water ordinary queries reset to CoolProp's explicit default policy."""
-    from Flet_ui.ui_components.property_tab import resolve_property_reference_state
+    from domain.thermodynamics.fluid_policy import resolve_reference_state_policy
 
     service = ThermodynamicStateService(CanonicalUnitConverter())
     query_service = PropertyQueryService(service)
     known_props = (("T", 25.0, "°C"), ("P", 1.0, "bar"))
-    assert resolve_property_reference_state("Water", "ASHRAE") == ReferenceStatePolicy.DEFAULT
-    assert resolve_property_reference_state("Water", "ASHRAE") != ReferenceStatePolicy.CURRENT
+    assert resolve_reference_state_policy("Water", "ASHRAE") == ReferenceStatePolicy.DEFAULT
+    assert resolve_reference_state_policy("Water", "ASHRAE") != ReferenceStatePolicy.CURRENT
     try:
         service.set_reference_state("Water", "NBP")
         actual = query_service.query(PropertyQueryRequest("Water", known_props))
@@ -75,6 +78,135 @@ def test_chart_auto_policy_is_explicit_for_water() -> None:
     assert _effective_reference_state("R134a", "Auto") == ReferenceStatePolicy.ASHRAE
     with pytest.raises(ValueError):
         _effective_reference_state("Water", "IAPWS")
+
+
+@pytest.mark.parametrize("fluid", ["Water", "water", "WATER", " Water "])
+def test_property_water_aliases_use_default_reference_state(fluid: str) -> None:
+    """Property requests use one Water policy regardless of fluid spelling."""
+    from domain.thermodynamics.fluid_policy import resolve_reference_state_policy
+
+    assert resolve_reference_state_policy(fluid) == ReferenceStatePolicy.DEFAULT
+
+
+@pytest.mark.parametrize("fluid", ["Water", "water", "WATER", " Water "])
+def test_chart_auto_water_aliases_use_default_reference_state(fluid: str) -> None:
+    """Chart Auto shares the neutral Water policy resolver."""
+    from Flet_ui.ui_components.unit.thermo_draw.coolprop_utils import (
+        _effective_reference_state,
+    )
+
+    assert _effective_reference_state(fluid, "Auto") == ReferenceStatePolicy.DEFAULT
+    assert _effective_reference_state("R134a", "Auto") == ReferenceStatePolicy.ASHRAE
+
+
+def test_property_selection_policy_is_shared_with_compressor_example() -> None:
+    """A PropertyTab selection is the policy consumed by the compressor page."""
+    class DummyPage:
+        overlay = []
+
+    class ValueControl:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class CapturingAnalyzer:
+        def __init__(self) -> None:
+            self.reference_states: list[str] = []
+
+        def calculate_compressor_example(self, *args, ref_state_code: str):
+            self.reference_states.append(ref_state_code)
+            return 0.8, 1.0, 0.7, 2.0, 0.6
+
+    converter = UnitConverter()
+    state_calculator = ThermoStateCalculator(converter)
+    query_service = PropertyQueryService(state_calculator.state_service)
+    property_tab = PropertyTab(
+        unit_converter=converter,
+        formatter=PropertyFormatter(converter),
+        page=DummyPage(),
+        query_service=query_service,
+    )
+    property_tab.mode_dd.value = "CoolProp (冷媒)"
+    property_tab.fluid_tf.value = "R134a"
+    property_tab.ref_state_dd.value = "IIR"
+    property_tab.on_ref_state_change(None)
+
+    compressor = CompressorModule.__new__(CompressorModule)
+    compressor.reference_state_provider = query_service
+    compressor.unit_converter = converter
+    compressor.analyzer = CapturingAnalyzer()
+    compressor.ce_substance_tf = ValueControl("R134a")
+    compressor.all_entries = {
+        key: {"val": ValueControl(value), "unit": ValueControl(unit)}
+        for key, value, unit in (
+            ("ce_r", "8", ""),
+            ("ce_p1", "1", converter.default_units["P"]),
+            ("ce_p2", "2", converter.default_units["P"]),
+            ("ce_p0", "1", converter.default_units["P"]),
+            ("ce_t1", "20", converter.default_units["T"]),
+            ("ce_t2", "40", converter.default_units["T"]),
+            ("ce_t0", "20", converter.default_units["T"]),
+            ("ce_v1_dot", "1", converter.default_units["VolumeFlow"]),
+        )
+    }
+    compressor._reference_state_for("R134a")
+    assert compressor._reference_state_for(" water ") == ReferenceStatePolicy.DEFAULT
+    compressor.calculate_comp_example(use_imperial=False)
+    assert compressor.analyzer.reference_states == ["IIR"]
+
+    property_tab.ref_state_dd.value = "NBP"
+    property_tab.on_ref_state_change(None)
+    compressor.calculate_comp_example(use_imperial=False)
+    assert compressor.analyzer.reference_states == ["IIR", "NBP"]
+
+
+def test_t_s_renderer_path_returns_figure_without_residual_count_access(monkeypatch) -> None:
+    """T-s renderer path executes after set_ylim no longer returns an attribute."""
+    from Flet_ui.ui_components.unit import UnitConverter as unit_converter_module
+    from Flet_ui.ui_components.unit.thermo_draw import coolprop_utils
+
+    converter = unit_converter_module.UnitConverter()
+    monkeypatch.setattr(
+        coolprop_utils,
+        "get_saturation_curve",
+        lambda *args, **kwargs: (
+            [300.0, 320.0],
+            [100000.0, 200000.0],
+            [300.0, 320.0],
+            [100000.0, 200000.0],
+        ),
+    )
+    monkeypatch.setattr(
+        coolprop_utils,
+        "safe_props",
+        lambda output, *args, **kwargs: {
+            "S": 1000.0,
+            "H": 250000.0,
+            "D": 1.0,
+        }.get(output, 300.0),
+    )
+    monkeypatch.setattr(
+        coolprop_utils.CP,
+        "PropsSI",
+        lambda output, *args: {
+            "Tcrit": 500.0,
+            "pcrit": 5.0e6,
+            "ptriple": 1.0e3,
+            "Ttriple": 250.0,
+        }[output],
+    )
+
+    figure = coolprop_utils.generate_thermo_diagram(
+        "R134a",
+        "T-s",
+        [{"input_type": "T-P", "T_K": 300.0, "P_Pa": 1.0e5, "label": "1"}],
+        converter,
+        ref_state="Auto",
+    )
+    assert figure.axes
+    source = (ROOT / "Flet_ui/ui_components/unit/thermo_draw/coolprop_utils.py").read_text(
+        encoding="utf-8"
+    )
+    assert "set_ylim(bottom=None, top=max(current_ymax, display_T_max * 1.05)) .count" not in source
 
 
 def test_reference_state_registry_is_process_global() -> None:
@@ -317,10 +449,14 @@ def test_analysis_ids_are_semantic_and_unique() -> None:
 
 
 def test_property_tab_uses_property_query_service_for_lifecycle() -> None:
-    """PropertyTab must not directly call ThermoStateCalculator lifecycle APIs."""
-    source = (ROOT / "Flet_ui/ui_components/property_tab.py").read_text(encoding="utf-8")
-    assert "state_calculator.set_coolprop_ref_state" not in source
-    assert "self.state_calculator.is_fluid_valid" not in source
+    """PropertyTab and compressor pages must not use facade state as truth."""
+    property_source = (ROOT / "Flet_ui/ui_components/property_tab.py").read_text(encoding="utf-8")
+    calculator_source = (ROOT / "Flet_ui/ui_components/unit/ThermoStateCalculator.py").read_text(encoding="utf-8")
+    compressor_source = (ROOT / "Flet_ui/ui_components/analysis_modules/hvac_compressor_module.py").read_text(encoding="utf-8")
+    assert "state_calculator.set_coolprop_ref_state" not in property_source
+    assert "self.state_calculator.is_fluid_valid" not in property_source
+    assert "current_ref_code" not in calculator_source
+    assert "self.state_calculator.current_ref_code" not in compressor_source
 
 
 def test_readme_and_project_description_exist() -> None:

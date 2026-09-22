@@ -79,7 +79,8 @@ The mechanism and policy are separate:
 - **Mechanism:** shared lock, controlled mutation, and process-global observed
   registry owned by `ReferenceStateService`.
 - **Policy:** the caller/application decides which reference state the request
-  requires.
+  requires and keeps that requested policy for the user flow; `current()` is
+  only an observed process-state report, not a user-preference store.
 
 Creating another service instance must not create another lock or another
 process-local interpretation of `current()`.

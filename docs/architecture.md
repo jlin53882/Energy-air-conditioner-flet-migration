@@ -124,9 +124,11 @@ CoolProp reference state is process-global. `ReferenceStateService` owns:
 
 Mutation and the complete dependent `PropsSI`/`PhaseSI` transaction run inside
 one shared `calculation_scope`. Synchronization is distinct from request
-policy: ordinary entrypoints choose a concrete policy (`DEF`, `ASHRAE`, `IIR`,
-`NBP`), while only explicitly internal operations may use `CURRENT`.
-No ordinary request inherits the state left by a previous request.
+policy: application services own the requested policy for a user flow, while
+`ReferenceStateService.current()` reports only the observed process state.
+Ordinary entrypoints choose a concrete policy (`DEF`, `ASHRAE`, `IIR`, `NBP`),
+while only explicitly internal operations may use `CURRENT`. No ordinary
+request inherits the state left by a previous request.
 
 ## 10. Analysis Registration
 

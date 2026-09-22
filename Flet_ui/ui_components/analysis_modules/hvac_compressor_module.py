@@ -15,6 +15,8 @@ from ..unit.UnitConverter import UnitConverter
 from ..unit.ThermoStateCalculator import ThermoStateCalculator
 from application.analysis_services import CompressionRatioService
 from application.models import CompressionRatioRequest
+from application.property_queries import PropertyQueryService
+from domain.thermodynamics.fluid_policy import resolve_reference_state_policy
 
 # CompressorModule 繼承自 BaseAnalysisModule，專門處理壓縮機相關的 UI 與邏輯
 class CompressorModule(BaseAnalysisModule):
@@ -25,7 +27,8 @@ class CompressorModule(BaseAnalysisModule):
                  page: ft.Page,                      # 接收 Flet 頁面物件
                  analyzer: HVACAnalyzer,             # 接收 HVAC 分析器服務
                  state_calculator: ThermoStateCalculator,
-                 compression_ratio_service: CompressionRatioService | None = None): # 接收熱力學狀態計算服務
+                 compression_ratio_service: CompressionRatioService | None = None,
+                 property_query_service: PropertyQueryService | None = None): # 接收熱力學狀態計算服務
         
         # 呼叫基類的構造函數，將所有服務傳入，通常會將它們儲存在 self.services 字典中
         super().__init__(unit_converter, page, analyzer=analyzer,state_calculator=state_calculator) 
@@ -38,6 +41,7 @@ class CompressorModule(BaseAnalysisModule):
         # 這樣就能在類別的其他方法中，方便地調用其熱力學計算功能
         self.state_calculator: ThermoStateCalculator = self.services.get("state_calculator")
         self.compression_ratio_service = compression_ratio_service or CompressionRatioService()
+        self.reference_state_provider = property_query_service
         
         # --- 建立此模組所需的所有 UI 元件 (每個方法負責一個計算區塊) ---
         # 透過多個私有方法建立 UI，確保程式碼的模組化與可維護性
@@ -776,6 +780,14 @@ class CompressorModule(BaseAnalysisModule):
             ), visible=False
     )
 
+    def _reference_state_for(self, fluid: str) -> str:
+        """Return the application-requested policy for the compressor fluid."""
+        if self.reference_state_provider is None:
+            requested_policy = "ASHRAE"
+        else:
+            requested_policy = self.reference_state_provider.requested_reference_state(fluid)
+        return resolve_reference_state_policy(fluid, requested_policy)
+
     def calculate_comp_example(self, use_imperial: bool) -> str:
         # 1. 獲取並轉換輸入值
         r_val = float(self.all_entries["ce_r"]["val"].value)
@@ -809,8 +821,8 @@ class CompressorModule(BaseAnalysisModule):
         t2_k = self.unit_converter.convert_to_si("T", t2_val, t2_unit)
         t0_k = self.unit_converter.convert_to_si("T", t0_val, t0_unit)
         
-        # 3. 從 state_calculator 獲取當前設定的參考點代碼 冷媒參考
-        current_ref = self.state_calculator.current_ref_code
+        # 3. Read the application-owned requested policy, not a facade cache.
+        current_ref = self._reference_state_for(substance)
 
         v1_dot_si = self.unit_converter.convert_to_si("VolumeFlow", v1_dot_val, v1_dot_unit)
 

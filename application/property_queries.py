@@ -13,6 +13,7 @@ class PropertyQueryService:
     def __init__(self, state_service: ThermodynamicStateService) -> None:
         """Initialize with an explicit shared thermodynamic service."""
         self.state_service = state_service
+        self._requested_reference_states: dict[str, str] = {}
 
     def is_fluid_valid(self, fluid_name: str) -> bool:
         """Validate a fluid through the shared thermodynamic service."""
@@ -24,8 +25,20 @@ class PropertyQueryService:
         return self.state_service.reference_state
 
     def set_reference_state(self, fluid_name: str, ref_state: str) -> None:
-        """Apply reference-state policy through the shared service."""
-        self.state_service.set_reference_state(fluid_name, ref_state)
+        """Apply and record the requested policy through the shared service."""
+        normalized_fluid = fluid_name.strip()
+        self.state_service.set_reference_state(normalized_fluid, ref_state)
+        self._requested_reference_states[normalized_fluid.casefold()] = ref_state
+
+    def requested_reference_state(
+        self, fluid_name: str, default: str = "ASHRAE"
+    ) -> str:
+        """Return the application-owned requested policy for a fluid.
+
+        This is distinct from ``ReferenceStateService.current()``, which reports
+        the observed process state rather than the user's requested policy.
+        """
+        return self._requested_reference_states.get(fluid_name.strip().casefold(), default)
 
     def query(self, request: PropertyQueryRequest) -> dict[str, float | str]:
         """Validate a request and return a neutral thermodynamic result."""

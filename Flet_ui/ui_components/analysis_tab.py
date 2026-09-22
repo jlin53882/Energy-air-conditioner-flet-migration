@@ -6,6 +6,7 @@ from .unit.HVACAnalyzer import HVACAnalyzer
 from .unit.PsychrometricCalculator import PsychrometricCalculator
 # --- ✨ 新增這一行 ---
 from .unit.ThermoStateCalculator import ThermoStateCalculator
+from application.property_queries import PropertyQueryService
 # --- 新增結束 ---
 
 # --- 1. 匯入您所有的 "功能群組" 模組 ---
@@ -23,13 +24,21 @@ from .analysis_modules.thermo_diagram_module import ThermoDiagramModule
 class AnalysisTab(ft.Column):
      #新增state_calculator: ThermoStateCalculator  獲取 熱力學查表標準
     def __init__(self, unit_converter: UnitConverter, page: ft.Page, 
-                 analyzer: HVACAnalyzer, psy_calculator: PsychrometricCalculator,state_calculator: ThermoStateCalculator):
+                 analyzer: HVACAnalyzer, psy_calculator: PsychrometricCalculator,
+                 state_calculator: ThermoStateCalculator,
+                 property_query_service: PropertyQueryService | None = None):
         
         super().__init__(scroll=ft.ScrollMode.AUTO, expand=True)
         
         # --- 2. 實例化所有 "功能群組" 模組 ---
         self.modules_to_load = [
-            CompressorModule(unit_converter=unit_converter, page=page, analyzer=analyzer,state_calculator=state_calculator),
+            CompressorModule(
+                unit_converter=unit_converter,
+                page=page,
+                analyzer=analyzer,
+                state_calculator=state_calculator,
+                property_query_service=property_query_service,
+            ),
             EvaporatorModule(unit_converter=unit_converter, page=page, analyzer=analyzer),
             CondenserModule(unit_converter=unit_converter, page=page, analyzer=analyzer,state_calculator=state_calculator),
             PsyModule(unit_converter=unit_converter, page=page, psy_calculator=psy_calculator),

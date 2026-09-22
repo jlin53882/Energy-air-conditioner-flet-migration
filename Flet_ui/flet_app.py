@@ -47,6 +47,7 @@ def main(page: ft.Page):
         analyzer=hvac_analyzer,         # <-- 注入 HVAC 分析器
         psy_calculator=psy_calculator,  # <-- 注入 濕空氣 分析器
         state_calculator=state_calculator,
+        property_query_service=property_query_service,
     )
 
     # 4. 建立 Flet 1.0 分頁控制器。

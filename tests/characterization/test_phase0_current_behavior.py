@@ -134,12 +134,12 @@ def test_reference_state_selector_updates_current_flet_state(
     flet_thermo: ThermoStateCalculator,
 ) -> None:
     """Record the current mutable reference-state behavior for a pure fluid."""
-    original = flet_thermo.current_ref_code
+    original = flet_thermo.state_service.reference_state.current("R134a") or "DEF"
     try:
         flet_thermo.set_coolprop_ref_state("R134a", "IIR")
-        assert flet_thermo.current_ref_code == "IIR"
+        assert flet_thermo.state_service.reference_state.current("R134a") == "IIR"
         flet_thermo.set_coolprop_ref_state("R134a", "Default")
-        assert flet_thermo.current_ref_code == "Default"
+        assert flet_thermo.state_service.reference_state.current("R134a") == "DEF"
     finally:
         flet_thermo.set_coolprop_ref_state("R134a", original)
 

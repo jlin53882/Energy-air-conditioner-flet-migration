@@ -11,6 +11,7 @@ import CoolProp.CoolProp as CP
 import numpy as np
 from functools import lru_cache
 
+from domain.thermodynamics.fluid_policy import resolve_reference_state_policy
 from domain.thermodynamics.reference_state import ReferenceStatePolicy, ReferenceStateService
 
 _REFERENCE_STATE = ReferenceStateService()
@@ -20,7 +21,7 @@ def _effective_reference_state(
 ) -> ReferenceStatePolicy | str:
     """Resolve chart UI reference-state semantics to a shared policy code."""
     if ref_state == "Auto":
-        return ReferenceStatePolicy.DEFAULT if fluid == "Water" else ReferenceStatePolicy.ASHRAE
+        return resolve_reference_state_policy(fluid)
     if ref_state in {"ASHRAE", "NBP", "IIR", "DEF"}:
         return ref_state
     raise ValueError(f"Unsupported chart reference-state policy: {ref_state}")
@@ -411,7 +412,7 @@ def _generate_thermo_diagram_unlocked(fluid, diagram, state_points_si, unit_conv
         if diagram in ["T-s", "T-v"]:
             current_ymin, current_ymax = ax.get_ylim()
             display_T_max = unit_converter.convert_from_si("T", T_max_K, target_T_unit)
-            ax.set_ylim(bottom=None, top=max(current_ymax, display_T_max * 1.05)) .count
+            ax.set_ylim(bottom=None, top=max(current_ymax, display_T_max * 1.05))
         
         # ---- 修正版：T-s 圖手動繪製等壓線 ----
         if diagram == "T-s" and connect_points and input_mode == "Compressor":

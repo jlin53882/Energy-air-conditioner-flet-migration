@@ -47,9 +47,6 @@ class ThermoStateCalculator:
             "Water": {"R": 461.5, "Cp": 1870} # J/(kg·K)
 
         }
-        # 預設的參考點標準
-        self.current_ref_code = "ASHRAE" 
-        # --- 新增結束 ---
 
     @property
     def state_service(self) -> ThermodynamicStateService:
@@ -63,7 +60,6 @@ class ThermoStateCalculator:
     def set_coolprop_ref_state(self, fluid_name: str, ref_state: str):
         """Set a CoolProp reference state through the shared mechanism."""
         self._service.set_reference_state(fluid_name, ref_state)
-        self.current_ref_code = ref_state
         
     def calculate_properties(
         self,
