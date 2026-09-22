@@ -1,12 +1,17 @@
 """Flet 1.0 migration boundary 的 regression test。"""
 
 from pathlib import Path
+from subprocess import run
+from sys import executable
+from types import SimpleNamespace
 
 import flet as ft
 import flet_charts as fch
+import pytest
 
 from Flet_ui.flet_app import main as flet_main
 from application.property_queries import PropertyQueryService
+from Flet_ui.ui_components.analysis_modules.psy_module import PsyModule
 from Flet_ui.ui_components.analysis_tab import AnalysisTab
 from Flet_ui.ui_components.property_tab import PropertyTab
 from Flet_ui.ui_components.unit.HVACAnalyzer import HVACAnalyzer
@@ -56,6 +61,23 @@ def test_flet_1_api_surface_is_available() -> None:
     assert not hasattr(ft, "ElevatedButton")
 
 
+def test_flet_matplotlib_backend_survives_chart_helper_import() -> None:
+    """ThermoDiagramModule 載入後不得把 Flet Charts backend 覆蓋成 SVG。
+
+回傳：
+    無。"""
+    result = run(
+        [
+            executable,
+            "-c",
+            "import matplotlib; import Flet_ui.ui_components.analysis_modules.thermo_diagram_module; print(matplotlib.get_backend())",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "module://flet_charts.matplotlib_backends.backend_flet_agg" in result.stdout
 def test_flet_tabs_and_analysis_controls_construct() -> None:
     """不開啟 desktop session 建構兩個已遷移的 tabs。
 
@@ -141,6 +163,132 @@ def test_property_dropdown_transitions_keep_default_units() -> None:
     assert property_tab._last_prop_units[1] == "m³/kg"
 
 
+def test_property_unit_dropdown_selection_converts_and_syncs_values() -> None:
+    """Property unit Dropdown 的 production selection event 必須換算並同步同 property rows。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    converter = UnitConverter()
+    state_calculator = ThermoStateCalculator(converter)
+    property_tab = PropertyTab(
+        unit_converter=converter,
+        formatter=PropertyFormatter(converter),
+        page=page,
+        query_service=PropertyQueryService(state_calculator.state_service),
+    )
+    first, second = property_tab.input_rows[:2]
+    for row, value in ((first, "25"), (second, "20")):
+        row["prop"].value = property_tab.prop_names_map["T"]
+        row["prop"].on_select(None)
+        row["val"].value = value
+        assert row["unit"].value == "°C"
+        assert row["unit"].on_select is not None
+
+    first["unit"].value = "°F"
+    first["unit"].on_select(None)
+
+    assert float(first["val"].value) == pytest.approx(77.0)
+    assert float(second["val"].value) == pytest.approx(68.0)
+    assert first["unit"].value == second["unit"].value == "°F"
+    assert property_tab._last_prop_units[:2] == ["°F", "°F"]
+
+
+def test_property_pressure_unit_dropdown_converts_kpa_to_bar() -> None:
+    """Pressure unit selection 必須透過 production event 將 kPa 換算為 bar。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    converter = UnitConverter()
+    state_calculator = ThermoStateCalculator(converter)
+    property_tab = PropertyTab(
+        unit_converter=converter,
+        formatter=PropertyFormatter(converter),
+        page=page,
+        query_service=PropertyQueryService(state_calculator.state_service),
+    )
+    row = property_tab.input_rows[0]
+    row["val"].value = "100"
+    assert row["unit"].value == "kPa"
+    assert row["unit"].on_select is not None
+    row["unit"].value = "bar"
+    row["unit"].on_select(None)
+    assert float(row["val"].value) == pytest.approx(1.0)
+    assert property_tab._last_prop_units[0] == "bar"
+
+
+def test_psychrometric_unit_dropdowns_use_selection_event_and_sync_temperature() -> None:
+    """PsyModule 的乾球／濕球與海拔 unit Dropdown 必須使用 selection event。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    analysis_tab = AnalysisTab(
+        unit_converter=UnitConverter(),
+        page=page,
+        analyzer=HVACAnalyzer(),
+        psy_calculator=PsychrometricCalculator(),
+        state_calculator=ThermoStateCalculator(UnitConverter()),
+    )
+    module = next(item for item in analysis_tab.modules_to_load if isinstance(item, PsyModule))
+    tdb = module.all_entries["psy_tdb"]
+    twb = module.all_entries["psy_twb"]
+    altitude = module.all_entries["psy_alt"]
+    assert tdb["unit"].on_select is not None
+    assert twb["unit"].on_select is not None
+    assert altitude["unit"].on_select is not None
+
+    tdb["val"].value = "25"
+    twb["val"].value = "20"
+    tdb["unit"].value = "°F"
+    tdb["unit"].on_select(SimpleNamespace(control=tdb["unit"]))
+    assert float(tdb["val"].value) == pytest.approx(77.0)
+    assert float(twb["val"].value) == pytest.approx(68.0)
+    assert tdb["unit"].value == twb["unit"].value == "°F"
+
+    altitude["val"].value = "1"
+    altitude["unit"].value = "ft"
+    altitude["unit"].on_select(SimpleNamespace(control=altitude["unit"]))
+    assert float(altitude["val"].value) == pytest.approx(3.28084, rel=1e-5)
+
+
+def test_dropdown_unit_bindings_do_not_use_on_change() -> None:
+    """所有 analysis unit Dropdown selection 都必須綁定 `on_select`。
+
+回傳：
+    無。"""
+    root = Path(__file__).parents[1] / "Flet_ui"
+    for path in root.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        assert '"unit"].on_change' not in source, path
+        assert "unit_dd.on_change" not in source, path
+def test_analysis_output_toggle_reformats_existing_result() -> None:
+    """SI/Imperial selection event 必須重新格式化已存在的分析結果。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    converter = UnitConverter()
+    analysis_tab = AnalysisTab(
+        unit_converter=converter,
+        page=page,
+        analyzer=HVACAnalyzer(),
+        psy_calculator=PsychrometricCalculator(),
+        state_calculator=ThermoStateCalculator(converter),
+    )
+    module = next(item for item in analysis_tab.modules_to_load if isinstance(item, PsyModule))
+    analysis_tab.analysis_dd.value = "濕空氣性質 (已知乾球與相對濕度)"
+    analysis_tab.on_analysis_change(None)
+    module.all_entries["psy_tdb"]["val"].value = "25"
+    module.all_entries["psy_rh"]["val"].value = "88"
+    analysis_tab.calculate_analysis(None)
+    si_result = analysis_tab.result_text.value
+    analysis_tab.output_unit_toggle.selected = ["Imperial"]
+    analysis_tab.output_unit_toggle.on_change(None)
+    imperial_result = analysis_tab.result_text.value
+    assert imperial_result != si_result
+    assert "°F" in imperial_result
 def test_tab_views_wrap_content_for_flet_layout_constraints() -> None:
     """限制 tab content 範圍，讓 Flet 1 能渲染完整的可捲動 tabs。
 

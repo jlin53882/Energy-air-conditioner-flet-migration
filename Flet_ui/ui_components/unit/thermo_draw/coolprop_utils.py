@@ -4,7 +4,10 @@
 # ======================================================
 
 import matplotlib
-matplotlib.use("svg")
+# Flet Charts 會在此 helper 載入前安裝相容 WebAgg 的 backend。
+# 只有獨立／headless 圖表才使用 SVG，不能覆蓋 live Flet backend。
+if not str(matplotlib.get_backend()).startswith("module://flet_charts"):
+    matplotlib.use("svg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter, ScalarFormatter
 import CoolProp.CoolProp as CP

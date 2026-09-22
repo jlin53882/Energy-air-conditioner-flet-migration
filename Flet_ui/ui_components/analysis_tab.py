@@ -102,6 +102,7 @@ class AnalysisTab(ft.Column):
         )
 
         self.result_text = ft.Text("請選擇分析項目並點擊執行...", font_family="Courier New", selectable=True, color=ft.Colors.GREY_600)
+        self._has_calculated_result = False
         self.result_container = ft.Container(
             content=self.result_text,
             border=ft.Border.all(1, ft.Colors.BLUE_GREY_200),
@@ -159,8 +160,15 @@ class AnalysisTab(ft.Column):
             if hasattr(module, 'update_atm_pressure_default') and callable(module.update_atm_pressure_default):
                 module.update_atm_pressure_default(use_imperial)
         
-        if e is not None and self.page:
-            self.update()
+        if self._has_calculated_result:
+            self.calculate_analysis(None)
+        elif e is not None:
+            try:
+                attached_page = self.page
+            except RuntimeError:
+                attached_page = None
+            if attached_page:
+                self.update()
 
     def on_analysis_change(self, e):
             """切換顯示的 UI 模組 (已修正共用 UI 的邏輯)
@@ -212,6 +220,7 @@ class AnalysisTab(ft.Column):
         執行計算
         *** 程式碼永不需修改 ***
         """
+        self._has_calculated_result = False
         try:
             # 1. 找到當前選中的功能定義
             selected_name = self.analysis_dd.value
@@ -233,6 +242,7 @@ class AnalysisTab(ft.Column):
             self.result_text.value = result_string
             self.result_text.color = ft.Colors.BLACK
             self.result_container.border_color = ft.Colors.GREEN_700
+            self._has_calculated_result = True
 
         except ValueError as ve: 
             error_message = f"輸入/計算錯誤: {ve}" 
@@ -245,7 +255,12 @@ class AnalysisTab(ft.Column):
             self.result_text.color = ft.Colors.RED_700
             self.result_container.border_color = ft.Colors.RED_700
             
-        self.update()
+        try:
+            attached_page = self.page
+        except RuntimeError:
+            attached_page = None
+        if attached_page:
+            self.update()
 
     def show_error(self, message):
         snack = ft.SnackBar(ft.Text(message), bgcolor=ft.Colors.ERROR)

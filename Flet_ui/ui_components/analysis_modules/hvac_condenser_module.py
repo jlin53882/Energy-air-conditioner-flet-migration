@@ -72,7 +72,7 @@ class CondenserModule(BaseAnalysisModule):
     # --- 2. 單位同步 ---
     def _setup_unit_sync(self):
         qc_h_sync_group = ["qc_h1", "qc_h2"]
-        self.all_entries["qc_h1"]["unit"].on_change = self._create_unit_sync_handler("H", qc_h_sync_group)
-        self.all_entries["qc_h2"]["unit"].on_change = self._create_unit_sync_handler("H", qc_h_sync_group)
+        self.all_entries["qc_h1"]["unit"].on_select = self._create_unit_sync_handler("H", qc_h_sync_group)
+        self.all_entries["qc_h2"]["unit"].on_select = self._create_unit_sync_handler("H", qc_h_sync_group)
         
-        self.all_entries["qc_m_dot"]["unit"].on_change = self._create_unit_sync_handler("MassFlow", ["qc_m_dot"])
+        self.all_entries["qc_m_dot"]["unit"].on_select = self._create_unit_sync_handler("MassFlow", ["qc_m_dot"])

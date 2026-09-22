@@ -57,17 +57,17 @@ class PsychrometricService:
     dict[str, Any]：函數計算或處理後的結果。"""
         tdb_c = tdb_k - 273.15
         twb_c = twb_k - 273.15
-        pressure, vapor_pressure, pws_db, pws_wb, w, ws, wss, rh, enthalpy, volume = (
+        pressure_kpa, vapor_pressure_kpa, pws_db_kpa, pws_wb_kpa, w, ws, wss, rh, enthalpy, volume = (
             self._model.Calculation_process_m_Tdb_Twb(
                 m=altitude_m,
                 T_db=tdb_c,
                 T_wb=twb_c,
             )
         )
-        dew_point_c = self._model.cal_Tdp_from_Pw(vapor_pressure)
+        dew_point_c = self._model.cal_Tdp_from_Pw(vapor_pressure_kpa)
         return self._build_result(
             altitude_m=altitude_m,
-            pressure=pressure,
+            pressure=pressure_kpa * 1000.0,
             tdb_k=tdb_k,
             twb_k=twb_k,
             dew_point_k=dew_point_c + 273.15,
@@ -75,9 +75,9 @@ class PsychrometricService:
             w=w,
             enthalpy=enthalpy * 1000.0,
             volume=volume,
-            vapor_pressure=vapor_pressure,
-            pws_db=pws_db,
-            pws_wb=pws_wb,
+            vapor_pressure=vapor_pressure_kpa * 1000.0,
+            pws_db=pws_db_kpa * 1000.0,
+            pws_wb=pws_wb_kpa * 1000.0,
             ws=ws,
             wss=wss,
         )
@@ -98,27 +98,28 @@ class PsychrometricService:
 回傳：
     dict[str, Any]：函數計算或處理後的結果。"""
         tdb_c = tdb_k - 273.15
-        twb_c, pressure, vapor_pressure, pws_db, pws_wb, w, ws, wss, _, enthalpy, volume = (
+        rh_fraction = rh if 0.0 <= rh <= 1.0 else rh / 100.0
+        twb_c, pressure_kpa, vapor_pressure_kpa, pws_db_kpa, pws_wb_kpa, w, ws, wss, _, enthalpy, volume = (
             self._model.Calculation_process_m_Tdb_RH(
                 m=altitude_m,
                 T_db=tdb_c,
-                RH=rh,
+                RH=rh_fraction * 100.0,
             )
         )
-        dew_point_c = self._model.cal_Tdp_from_Pw(vapor_pressure)
+        dew_point_c = self._model.cal_Tdp_from_Pw(vapor_pressure_kpa)
         return self._build_result(
             altitude_m=altitude_m,
-            pressure=pressure,
+            pressure=pressure_kpa * 1000.0,
             tdb_k=tdb_k,
             twb_k=twb_c + 273.15,
             dew_point_k=dew_point_c + 273.15,
-            rh=rh,
+            rh=rh_fraction if rh <= 1.0 else rh,
             w=w,
             enthalpy=enthalpy * 1000.0,
             volume=volume,
-            vapor_pressure=vapor_pressure,
-            pws_db=pws_db,
-            pws_wb=pws_wb,
+            vapor_pressure=vapor_pressure_kpa * 1000.0,
+            pws_db=pws_db_kpa * 1000.0,
+            pws_wb=pws_wb_kpa * 1000.0,
             ws=ws,
             wss=wss,
         )

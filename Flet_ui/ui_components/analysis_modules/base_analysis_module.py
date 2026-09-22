@@ -141,7 +141,12 @@ class BaseAnalysisModule:
                             val_si = self.unit_converter.convert_to_si(prop_code, val, current_old_unit)
                             new_val = self.unit_converter.convert_from_si(prop_code, val_si, new_unit)
                             val_tf.value = f"{new_val:.7g}"
-                            val_tf.update()
+                            try:
+                                attached_page = val_tf.page
+                            except RuntimeError:
+                                attached_page = None
+                            if attached_page:
+                                val_tf.update()
                         except (ValueError, TypeError, ZeroDivisionError):
                             pass
                     

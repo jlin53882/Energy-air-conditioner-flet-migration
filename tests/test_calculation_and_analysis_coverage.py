@@ -163,6 +163,25 @@ def test_psychrometric_relative_humidity_renders_percentage() -> None:
     assert "0.88 %" not in output
 
 
+def test_psychrometric_ui_matches_trusted_model_contract() -> None:
+    """Flet RH UI 輸入 15.5°C／88% 必須得到 trusted model 對應的 SI 結果。
+
+回傳：
+    無。"""
+    module = PsyModule(UnitConverter(), DummyPage(), PsychrometricCalculator())
+    mode = "濕空氣性質 (已知乾球與相對濕度)"
+    module.configure_ui_for_mode(mode)
+    module.all_entries["psy_tdb"]["val"].value = "15.5"
+    module.all_entries["psy_rh"]["val"].value = "88"
+
+    output = module.calculate_psy(use_imperial=False, mode_name=mode)
+
+    assert "大氣壓力 (Atmospheric Pressure)" in output
+    assert "101325.0000 Pa" in output
+    assert "計算濕球溫度 (Calculated Wet-Bulb Temp)" in output
+    assert "14.29 °C" in output
+    assert "0.009662 kg/kg" in output
+    assert "40.0372 kJ/kg" in output
 def test_every_analysis_option_switches_and_calculates() -> None:
     """Smoke-test 每個已註冊 analysis page 與其 default calculation path。
 

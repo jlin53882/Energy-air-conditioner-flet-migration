@@ -66,9 +66,9 @@ class PsyModule(BaseAnalysisModule):
 回傳：
     無。"""
         psy_t_sync_group = ["psy_tdb", "psy_twb"]
-        self.all_entries["psy_tdb"]["unit"].on_change = self._create_unit_sync_handler("T", psy_t_sync_group)
-        self.all_entries["psy_twb"]["unit"].on_change = self._create_unit_sync_handler("T", psy_t_sync_group)
-        self.all_entries["psy_alt"]["unit"].on_change = self._create_unit_sync_handler("L", ["psy_alt"])
+        self.all_entries["psy_tdb"]["unit"].on_select = self._create_unit_sync_handler("T", psy_t_sync_group)
+        self.all_entries["psy_twb"]["unit"].on_select = self._create_unit_sync_handler("T", psy_t_sync_group)
+        self.all_entries["psy_alt"]["unit"].on_select = self._create_unit_sync_handler("L", ["psy_alt"])
 
     def configure_ui_for_mode(self, mode_name: str):
         """

@@ -1,6 +1,6 @@
 import flet as ft
-import matplotlib.pyplot as plt
 import flet_charts as fch
+import matplotlib.pyplot as plt
 from .base_analysis_module import BaseAnalysisModule
 from ..unit.thermo_draw.coolprop_utils import generate_thermo_diagram, safe_props, check_coolprop_fluid 
 from chart.state_point_parser import StatePointParser
@@ -508,23 +508,23 @@ class ThermoDiagramModule(BaseAnalysisModule):
         """
         # 壓力 (P)
         p_sync_group = ["td_P"]
-        self.all_entries["td_P"]["unit"].on_change = self._create_unit_sync_handler("P", p_sync_group)
+        self.all_entries["td_P"]["unit"].on_select = self._create_unit_sync_handler("P", p_sync_group)
         
         # 焓 (H)
         h_sync_group = ["td_H"] 
-        self.all_entries["td_H"]["unit"].on_change = self._create_unit_sync_handler("H", h_sync_group)
+        self.all_entries["td_H"]["unit"].on_select = self._create_unit_sync_handler("H", h_sync_group)
 
         # 熵 (S)
         s_sync_group = ["td_S"]
-        self.all_entries["td_S"]["unit"].on_change = self._create_unit_sync_handler("S", s_sync_group)
+        self.all_entries["td_S"]["unit"].on_select = self._create_unit_sync_handler("S", s_sync_group)
 
         # 溫度 (T)
         t_sync_group = ["td_T"]
-        self.all_entries["td_T"]["unit"].on_change = self._create_unit_sync_handler("T", t_sync_group)
+        self.all_entries["td_T"]["unit"].on_select = self._create_unit_sync_handler("T", t_sync_group)
 
         # 比容 (V)
         v_sync_group = ["td_V"]
-        self.all_entries["td_V"]["unit"].on_change = self._create_unit_sync_handler("V", v_sync_group)
+        self.all_entries["td_V"]["unit"].on_select = self._create_unit_sync_handler("V", v_sync_group)
         
         def setup_sync_for_group(unit_type, sync_group):
             """輔助函式：綁定 handler 並設定初始單位
@@ -542,8 +542,8 @@ class ThermoDiagramModule(BaseAnalysisModule):
             initial_unit = None
             for key in sync_group:
                 if key in self.all_entries and self.all_entries[key].get("unit"):
-                    # 2. 綁定 on_change 事件
-                    self.all_entries[key]["unit"].on_change = handler
+                    # 2. 綁定 on_select 事件
+                    self.all_entries[key]["unit"].on_select = handler
                     
                     # 3. 獲取初始單位
                     if initial_unit is None:

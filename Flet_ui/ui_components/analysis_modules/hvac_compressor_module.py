@@ -893,51 +893,51 @@ class CompressorModule(BaseAnalysisModule):
     def _setup_unit_sync(self):
         # 壓力 (P)
         cr_sync_group = ["cr_pe", "cr_pc", "cr_atm_p","ce_p1", "ce_p2", "ce_p0"]
-        self.all_entries["cr_pe"]["unit"].on_change = self._create_unit_sync_handler("P", cr_sync_group)
-        self.all_entries["cr_pc"]["unit"].on_change = self._create_unit_sync_handler("P", cr_sync_group)
-        self.all_entries["cr_atm_p"]["unit"].on_change = self._create_unit_sync_handler("P", cr_sync_group)
-        self.all_entries["ce_p1"]["unit"].on_change = self._create_unit_sync_handler("P", cr_sync_group)
-        self.all_entries["ce_p2"]["unit"].on_change = self._create_unit_sync_handler("P", cr_sync_group)
-        self.all_entries["ce_p0"]["unit"].on_change = self._create_unit_sync_handler("P", cr_sync_group)
+        self.all_entries["cr_pe"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
+        self.all_entries["cr_pc"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
+        self.all_entries["cr_atm_p"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
+        self.all_entries["ce_p1"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
+        self.all_entries["ce_p2"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
+        self.all_entries["ce_p0"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
 
         
         # 焓 (H)
         h_sync_group = ["win_h1", "win_h2", "isen_h1", "isen_h2", "isen_h2s", "ref_h1", "ref_h4", "wq_h1", "wq_h2", "rev_h1", "rev_h2"]
         for key in h_sync_group:
             if key in self.all_entries:
-                self.all_entries[key]["unit"].on_change = self._create_unit_sync_handler("H", h_sync_group)
+                self.all_entries[key]["unit"].on_select = self._create_unit_sync_handler("H", h_sync_group)
 
         # 質量流率 (MassFlow)
         m_dot_sync_group = ["win_m_dot", "ref_m_dot", "wq_m_dot", "rev_m_dot", "exd_m_dot"]
         for key in m_dot_sync_group:
              if key in self.all_entries:
-                self.all_entries[key]["unit"].on_change = self._create_unit_sync_handler("MassFlow", m_dot_sync_group)
+                self.all_entries[key]["unit"].on_select = self._create_unit_sync_handler("MassFlow", m_dot_sync_group)
 
         # 熵 (S)
         s_sync_group = ["rev_s1", "rev_s2", "exd_s1", "exd_s2"]
         for key in s_sync_group:
             if key in self.all_entries:
-                self.all_entries[key]["unit"].on_change = self._create_unit_sync_handler("S", s_sync_group)
+                self.all_entries[key]["unit"].on_select = self._create_unit_sync_handler("S", s_sync_group)
 
         # 溫度 (T)
         t_sync_group = ["rev_t0", "exd_t0","ce_t1", "ce_t2", "ce_t0"]
         for key in t_sync_group:
             if key in self.all_entries:
-                self.all_entries[key]["unit"].on_change = self._create_unit_sync_handler("T", t_sync_group)
+                self.all_entries[key]["unit"].on_select = self._create_unit_sync_handler("T", t_sync_group)
         
          # 體積流率 (VolumeFlow)
         # * 新增 ce_v1_dot *
         v_dot_sync_group = ["ref_v_dot", "ce_v1_dot"]
         for key in v_dot_sync_group:
             if key in self.all_entries:
-                self.all_entries[key]["unit"].on_change = self._create_unit_sync_handler("VolumeFlow", v_dot_sync_group)        
+                self.all_entries[key]["unit"].on_select = self._create_unit_sync_handler("VolumeFlow", v_dot_sync_group)
 
         # 功率 (Power)
-        self.all_entries["wq_q_out"]["unit"].on_change = self._create_unit_sync_handler("Power", ["wq_q_out"])
+        self.all_entries["wq_q_out"]["unit"].on_select = self._create_unit_sync_handler("Power", ["wq_q_out"])
 
         # --- 新增 "冷凍能力" 的單位同步 ---
-        self.all_entries["ref_v_dot"]["unit"].on_change = self._create_unit_sync_handler("VolumeFlow", ["ref_v_dot"])
-        self.all_entries["ref_rho1"]["unit"].on_change = self._create_unit_sync_handler("D", ["ref_rho1"])
+        self.all_entries["ref_v_dot"]["unit"].on_select = self._create_unit_sync_handler("VolumeFlow", ["ref_v_dot"])
+        self.all_entries["ref_rho1"]["unit"].on_select = self._create_unit_sync_handler("D", ["ref_rho1"])
 
         # "ref_eta_vol" (效率) 使用 "RH" 代理，單位下拉選單被禁用，無需同步
 

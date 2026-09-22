@@ -90,7 +90,7 @@ class PropertyTab(ft.Column):
             
             # 設置事件處理器 (使用閉包確保傳遞正確的索引 i)
             prop_dd.on_select = self.create_prop_change_handler(i)
-            unit_dd.on_change = self.create_unit_change_handler(i)
+            unit_dd.on_select = self.create_unit_change_handler(i)
 
             self.input_rows.append({"prop": prop_dd, "val": val_tf, "unit": unit_dd})
             # 初始化時為單位選單載入選項和預設值
@@ -120,6 +120,7 @@ class PropertyTab(ft.Column):
                 ft.Segment(value="Imperial", label=ft.Text("Imperial (英制)")),
             ],
             selected=["SI"], # 預設選中 SI
+            on_change=self.on_output_unit_change,
         )
         # --- 新增結束 ---
 
@@ -130,6 +131,7 @@ class PropertyTab(ft.Column):
             selectable=True, 
             color=ft.Colors.GREY_600 # 初始提示文字使用灰色
         )
+        self._has_calculated_result = False
         self.result_container = ft.Container(
             content=self.result_text,
             # 結果區視覺優化：增加邊框和圓角
@@ -365,7 +367,7 @@ class PropertyTab(ft.Column):
 
     def create_prop_change_handler(self, index):
         """
-        使用閉包為每個性質下拉選單創建 on_change 事件處理器。
+        使用閉包為每個性質下拉選單創建 on_select 事件處理器。
         
         :param index: 輸入行索引
         :return: 處理函數 (handler)
@@ -376,7 +378,7 @@ class PropertyTab(ft.Column):
 
     def create_unit_change_handler(self, index):
         """
-        使用閉包為每個單位下拉選單創建 on_change 事件處理器。
+        使用閉包為每個單位下拉選單創建 on_select 事件處理器。
         
         :param index: 輸入行索引
         :return: 處理函數 (handler)
@@ -425,11 +427,23 @@ class PropertyTab(ft.Column):
         self._is_updating_units = False # 釋放鎖定
         if self.parent: self.update() # 更新 UI
 
+    def on_output_unit_change(self, e):
+        """在已有成功結果上重新套用選定的輸出單位。
+
+參數：
+    e (未指定型別): Flet selection event。
+
+回傳：
+    無。"""
+        if self._has_calculated_result:
+            self.perform_calculation(None)
+
     def perform_calculation(self, e):
         """
         執行熱力學性質計算的主方法。
         負責輸入驗證、錯誤處理、UI 反饋和結果展示。
         """
+        self._has_calculated_result = False
         fluid = self.fluid_tf.value.strip()
         
         # UI 重設：在每次計算開始前，將結果文本和容器邊框重設為預設顏色
@@ -519,6 +533,7 @@ class PropertyTab(ft.Column):
             self.result_text.value = f"--- 輸入 ---\n物質: {fluid}{calc_type}\n已知: {', '.join(display_inputs[:2])}\n\n{final_output}"
             self.result_text.color = ft.Colors.BLACK # 成功結果使用黑色
             self.result_container.border_color = ft.Colors.GREEN_700 # 成功邊框色
+            self._has_calculated_result = True
             
         except Exception as err:
             # 8. 捕獲計算錯誤
