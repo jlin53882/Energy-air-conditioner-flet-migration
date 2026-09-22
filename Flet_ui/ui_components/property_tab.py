@@ -10,13 +10,16 @@ import flet as ft
 from ..ui_components.unit.UnitConverter import UnitConverter
 from ..ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
 from ..ui_components.unit.PropertyFormatter import PropertyFormatter
+from application.models import PropertyQueryRequest
+from application.property_queries import PropertyQueryService
 
 # PropertyTab 繼承自 ft.Column，使其可以直接作為 Flet UI 中的一個垂直佈局容器。
 class PropertyTab(ft.Column):
     def __init__(self, unit_converter: UnitConverter, 
                  state_calculator: ThermoStateCalculator, 
                  formatter: PropertyFormatter, 
-                 page: ft.Page):
+                 page: ft.Page,
+                 query_service: PropertyQueryService | None = None):
         """
         初始化 PropertyTab，設定 UI 組件和數據綁定。
 
@@ -30,6 +33,7 @@ class PropertyTab(ft.Column):
         self.unit_converter = unit_converter 
         self.state_calculator = state_calculator
         self.formatter = formatter
+        self.query_service = query_service or PropertyQueryService(state_calculator.state_service)
         
         # 性質代碼到名稱的映射 (用於下拉選單顯示)
         # 格式為: {代碼: "名稱 (中文), 代碼"} (例如: 'P' -> 'Pressure (壓力), P')
@@ -535,7 +539,9 @@ class PropertyTab(ft.Column):
         # 6. 執行核心熱力學計算
         try:
             # 執行計算，將前兩個輸入性質傳遞給核心計算器
-            si_results = self.state_calculator.calculate_properties(fluid, known_props[:2], is_ideal)
+            si_results = self.query_service.query(
+                PropertyQueryRequest(fluid, tuple(known_props[:2]), is_ideal)
+            )
             
             # 格式化比性質的輸出 (現在 use_imperial 來自 UI 切換按鈕)
             final_output = self.formatter.format_specific_properties(si_results, use_imperial)

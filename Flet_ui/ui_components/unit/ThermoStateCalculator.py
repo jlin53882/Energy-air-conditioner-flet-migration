@@ -50,6 +50,11 @@ class ThermoStateCalculator:
         self.current_ref_code = "ASHRAE" 
         # --- 新增結束 ---
 
+    @property
+    def state_service(self) -> ThermodynamicStateService:
+        """Expose the shared service for application composition."""
+        return self._service
+
     def is_fluid_valid(self, fluid_name: str) -> bool:
         """Return whether the shared service recognizes a fluid."""
         return self._service.is_fluid_valid(fluid_name)

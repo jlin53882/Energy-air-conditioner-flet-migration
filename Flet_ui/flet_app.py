@@ -8,6 +8,7 @@ from .ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
 from .ui_components.unit.PropertyFormatter import PropertyFormatter
 from .ui_components.unit.HVACAnalyzer import HVACAnalyzer
 from .ui_components.unit.PsychrometricCalculator import PsychrometricCalculator
+from application.property_queries import PropertyQueryService
 
 # 從 "ui_components" 套件導入 UI 類
 from .ui_components.property_tab import PropertyTab #熱力學分析
@@ -25,6 +26,7 @@ def main(page: ft.Page):
     unit_converter = UnitConverter()
     state_calculator = ThermoStateCalculator(unit_converter)
     formatter = PropertyFormatter(unit_converter)
+    property_query_service = PropertyQueryService(state_calculator.state_service)
     
     # --- 在這裡建立 "服務"，而不是在 Tab 內部 ---
     hvac_analyzer = HVACAnalyzer()
@@ -35,7 +37,8 @@ def main(page: ft.Page):
         unit_converter=unit_converter,
         state_calculator=state_calculator,
         formatter=formatter,
-        page=page
+        page=page,
+        query_service=property_query_service
     )
 
     # --- 將 "服務" 注入到 AnalysisTab ---
