@@ -2,10 +2,10 @@
 # 核心計算引擎：負責所有熱力學性質的計算，與使用者介面分離。
 
 import CoolProp.CoolProp as CP
-from Flet_ui.PsychrometricChart import PsychrometricChart_01_ASHF_model as psy
 import math
 import numpy as np
 from domain.thermodynamics.state_service import ThermodynamicStateService
+from domain.psychrometrics.service import PsychrometricService
 from domain.hvac.basic import (
     calculate_compression_ratio_si,
     calculate_compressor_work_si,
@@ -21,6 +21,7 @@ class ThermoCalculator:
         """
         self._canonical_converter = CanonicalUnitConverter()
         self._shared_state_service = ThermodynamicStateService(self._canonical_converter)
+        self._psychrometric_service = PsychrometricService()
         # --- 屬性與單位定義 ---
         self.properties = ["P", "T", "H", "S", "D", "Q", "V", "U"]
         self.prop_names = {
@@ -600,79 +601,37 @@ class ThermoCalculator:
 
 
     def calculate_psychrometric_properties(self, known_props: dict):
-        """
-        使用外部提供的 PsychrometricChart_01_ASHF_model.py 模型計算濕空氣性質。
-        
-        :param known_props: 一個包含已知性質的字典，必須包含:
-                              'altitude': 海拔高度 (m)
-                              'Tdb': 乾球溫度 (°C)
-                              以及 'Twb': 濕球溫度 (°C) 或 'RH': 相對濕度 (%)
-        :return: 一個包含所有計算結果的字典
-        """
-        altitude = known_props.get('altitude')
-        tdb = known_props.get('Tdb')
-        
-        # 根據是提供了濕球溫度(Twb)還是相對濕度(RH)來決定呼叫哪個計算流程
-        if 'Twb' in known_props:
-            twb = known_props.get('Twb')
-            # 呼叫模型中的函數，獲取所有計算過程中的變數
-            P, Pw, Pws_db, Pws_wd, W, Ws, Wss, RH, h, v = psy.Calculation_process_m_Tdb_Twb(
-                m=altitude, T_db=tdb, T_wb=twb
+        """Format shared psychrometric results for Telegram responses."""
+        altitude = known_props.get("altitude")
+        tdb_c = known_props.get("Tdb")
+        if "Twb" in known_props:
+            result = self._psychrometric_service.calculate_from_tdb_twb(
+                tdb_c + 273.15, known_props["Twb"] + 273.15, altitude
             )
-            # 額外計算露點溫度
-            tdp = psy.cal_Tdp_from_Pw(Pw)
-    
-            # 建立一個包含所有詳細結果的字典
-            return {
-                # --- 主要性質 ---
-                "海拔高度 (Altitude)": f"{altitude:.2f} m",
-                "大氣壓力 (Atmospheric Pressure)": f"{P:.4f} Pa",
-                "乾球溫度 (Dry-Bulb Temperature)": f"{tdb:.2f} °C",
-                "濕球溫度 (Wet-Bulb Temperature)": f"{twb:.2f} °C",
-                "露點溫度 (Dew Point Temperature)": f"{tdp:.2f} °C",
-                "相對濕度 (Relative Humidity)": f"{RH:.2f} %",
-                "濕度比 (Humidity Ratio)": f"{W:.6f} kg/kg",
-                "濕空氣之焓值 (Enthalpy)": f"{h:.4f} kJ/kg",
-                "濕空氣之比容 (Specific Volume)": f"{v:.4f} m³/kg",
-                # --- 中間過程壓力值 ---
-                "水蒸氣分壓 (Vapor Pressure)": f"{Pw:.4f} Pa",
-                "飽和狀態之水蒸氣分壓 (Saturation Pressure at Tdb)": f"{Pws_db:.4f} Pa",
-                "濕球溫度下，飽和狀態之水蒸氣分壓 (Saturation Pressure at Twb)": f"{Pws_wd:.4f} Pa",
-                # --- 中間過程濕度比 ---
-                "飽和濕空氣之濕度比 (Saturation Humidity Ratio at Tdb)": f"{Ws:.6f} kg/kg",
-                "濕球溫度下，飽和狀態之濕度比 (Saturation Humidity Ratio at Twb)": f"{Wss:.6f} kg/kg"
-            }
-            
-        elif 'RH' in known_props:
-            rh = known_props.get('RH')
-            # 呼叫模型中的函數，獲取所有計算過程中的變數
-            twb_calc, P, Pw, Pws_db, Pws_wd, W, Ws, Wss, _, h, v = psy.Calculation_process_m_Tdb_RH(
-                m=altitude, T_db=tdb, RH=rh
+            wet_bulb_label = "濕球溫度 (Wet-Bulb Temperature)"
+            wet_bulb_value = result["Twb"] - 273.15
+        elif "RH" in known_props:
+            result = self._psychrometric_service.calculate_from_tdb_rh(
+                tdb_c + 273.15, known_props["RH"], altitude
             )
-            # 額外計算露點溫度
-            tdp = psy.cal_Tdp_from_Pw(Pw)
-    
-            # 建立一個與上面結構完全相同的字典
-            return {
-                # --- 主要性質 ---
-                "海拔高度 (Altitude)": f"{altitude:.2f} m",
-                "大氣壓力 (Atmospheric Pressure)": f"{P:.4f} Pa",
-                "乾球溫度 (Dry-Bulb Temperature)": f"{tdb:.2f} °C",
-                "計算濕球溫度 (Calculated Wet-Bulb Temp)": f"{twb_calc:.2f} °C",
-                "露點溫度 (Dew Point Temperature)": f"{tdp:.2f} °C",
-                "相對濕度 (Relative Humidity)": f"{rh:.2f} %",
-                "濕度比 (Humidity Ratio)": f"{W:.6f} kg/kg",
-                "濕空氣之焓值 (Enthalpy)": f"{h:.4f} kJ/kg",
-                "濕空氣之比容 (Specific Volume)": f"{v:.4f} m³/kg",
-                # --- 中間過程壓力值 ---
-                "水蒸氣分壓 (Vapor Pressure)": f"{Pw:.4f} Pa",
-                "飽和狀態之水蒸氣分壓 (Saturation Pressure at Tdb)": f"{Pws_db:.4f} Pa",
-                "濕球溫度下，飽和狀態之水蒸氣分壓 (Saturation Pressure at Twb)": f"{Pws_wd:.4f} Pa",
-                # --- 中間過程濕度比 ---
-                "飽和濕空氣之濕度比 (Saturation Humidity Ratio at Tdb)": f"{Ws:.6f} kg/kg",
-                "濕球溫度下，飽和狀態之濕度比 (Saturation Humidity Ratio at Twb)": f"{Wss:.6f} kg/kg"
-            }
+            wet_bulb_label = "計算濕球溫度 (Calculated Wet-Bulb Temp)"
+            wet_bulb_value = result["Twb"] - 273.15
         else:
             raise ValueError("請提供濕球溫度 (Twb) 或相對濕度 (RH) 其中之一。")
 
-
+        return {
+            "海拔高度 (Altitude)": f"{altitude:.2f} m",
+            "大氣壓力 (Atmospheric Pressure)": f"{result['P']:.4f} Pa",
+            "乾球溫度 (Dry-Bulb Temperature)": f"{tdb_c:.2f} °C",
+            wet_bulb_label: f"{wet_bulb_value:.2f} °C",
+            "露點溫度 (Dew Point Temperature)": f"{result['Tdp'] - 273.15:.2f} °C",
+            "相對濕度 (Relative Humidity)": f"{result['RH']:.2f} %",
+            "濕度比 (Humidity Ratio)": f"{result['W']:.6f} kg/kg",
+            "濕空氣之焓值 (Enthalpy)": f"{result['H'] / 1000.0:.4f} kJ/kg",
+            "濕空氣之比容 (Specific Volume)": f"{result['V']:.4f} m³/kg",
+            "水蒸氣分壓 (Vapor Pressure)": f"{result['Pw']:.4f} Pa",
+            "飽和狀態之水蒸氣分壓 (Saturation Pressure at Tdb)": f"{result['Pws_db']:.4f} Pa",
+            "濕球溫度下，飽和狀態之水蒸氣分壓 (Saturation Pressure at Twb)": f"{result['Pws_wd']:.4f} Pa",
+            "飽和濕空氣之濕度比 (Saturation Humidity Ratio at Tdb)": f"{result['Ws']:.6f} kg/kg",
+            "濕球溫度下，飽和狀態之濕度比 (Saturation Humidity Ratio at Twb)": f"{result['Wss']:.6f} kg/kg",
+        }
