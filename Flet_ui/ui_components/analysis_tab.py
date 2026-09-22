@@ -101,7 +101,7 @@ class AnalysisTab(ft.Column):
                 padding=ft.Padding.only(top=10, bottom=5)
             ),
             ft.Divider(height=1),
-            ft.Text("參數輸入", style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_600),
+            ft.Text("參數輸入", theme_style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_600),
             
             self.controls_stack, # 包含所有模組 UI 的容器
             
@@ -113,7 +113,7 @@ class AnalysisTab(ft.Column):
             
             ft.Row(
                 controls=[
-                    ft.Text("分析結果", style=ft.TextThemeStyle.TITLE_LARGE, weight=ft.FontWeight.W_900, expand=True),
+                    ft.Text("分析結果", theme_style=ft.TextThemeStyle.TITLE_LARGE, weight=ft.FontWeight.W_900, expand=True),
                     self.output_unit_toggle,
                 ],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,

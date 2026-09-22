@@ -5,6 +5,7 @@ from pathlib import Path
 import flet as ft
 import flet_charts as fch
 
+from Flet_ui.flet_app import main as flet_main
 from Flet_ui.ui_components.analysis_tab import AnalysisTab
 from Flet_ui.ui_components.property_tab import PropertyTab
 from Flet_ui.ui_components.unit.HVACAnalyzer import HVACAnalyzer
@@ -18,7 +19,12 @@ class DummyPage:
     """Provide the minimal page surface used by control construction tests."""
 
     def __init__(self) -> None:
+        self.controls = []
         self.overlay = []
+
+    def add(self, *controls) -> None:
+        """Collect controls added by the application entry point."""
+        self.controls.extend(controls)
 
     def update(self) -> None:
         """Match the page update method without starting a Flet session."""
@@ -59,6 +65,31 @@ def test_flet_tabs_and_analysis_controls_construct() -> None:
 
     assert property_tab.controls
     assert analysis_tab.controls
+    assert not property_tab.result_container.expand
+
+
+def test_tab_views_wrap_content_for_flet_layout_constraints() -> None:
+    """Keep tab content bounded so Flet 1 renders the complete scrollable tabs."""
+    page = DummyPage()
+    flet_main(page)
+
+    tabs = page.controls[0]
+    tab_bar_view = tabs.content.controls[1]
+    assert all(isinstance(control, ft.Container) for control in tab_bar_view.controls)
+    assert all(control.expand for control in tab_bar_view.controls)
+    assert isinstance(tab_bar_view.controls[0].content, PropertyTab)
+    assert isinstance(tab_bar_view.controls[1].content, AnalysisTab)
+
+
+def test_flet_text_theme_styles_use_theme_style_parameter() -> None:
+    """Prevent Flet 1 from treating TextThemeStyle as a TextStyle object."""
+    for relative_path in (
+        "Flet_ui/ui_components/property_tab.py",
+        "Flet_ui/ui_components/analysis_tab.py",
+    ):
+        source = (Path(__file__).parents[1] / relative_path).read_text(encoding="utf-8")
+        assert ", style=ft.TextThemeStyle" not in source
+        assert "theme_style=ft.TextThemeStyle" in source
 
 
 def test_launcher_uses_flet_only_entrypoint() -> None:

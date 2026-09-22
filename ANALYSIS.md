@@ -259,3 +259,44 @@ workspace 備份目錄：`C:\Users\admin\workspace\Energy_air-conditioner_flet-m
 - 舊 API 靜態掃描：`ft.ElevatedButton`、`ft.border.all`、`ft.border_radius.all`、`ft.padding.all/only`、`ft.alignment.*`、`flet.matplotlib_chart` 均為 0
 
 尚未進行真人桌面視窗操作驗收；目前完成的是 compile、import、控制項建構與測試層驗證。
+
+## 13. Flet 1.0 大面積灰色區塊修復（2026-09-22）
+
+### 根因
+
+原始 Flet 0.28.3 畫面有完整的熱力學輸入表單；Flet 1.0 畫面只顯示上方三個欄位，下面被大面積灰色區塊取代。交叉測試確認問題不是 `PropertyTab` 控制項未建立，而是 Flet 1.0 的 `Text` API 參數遷移錯誤：
+
+- `Text(style=ft.TextThemeStyle.TITLE_MEDIUM)` 把 `TextThemeStyle` enum 傳給了 `style`（`TextStyle` 參數）。
+- Flet 1.0 正確參數是 `theme_style=ft.TextThemeStyle.TITLE_MEDIUM`。
+- 第一個錯誤用法位於分隔線後的「熱力學性質輸入」標題，因此後續控制項全部被推離可視範圍，形成大面積灰色區塊。
+- `analysis_tab.py` 也有相同的兩處錯誤，會造成冷凍空調分析頁面相同回歸。
+
+### 修復
+
+- `property_tab.py` 3 處 `style=ft.TextThemeStyle.*` 改為 `theme_style=ft.TextThemeStyle.*`。
+- `analysis_tab.py` 2 處 `style=ft.TextThemeStyle.*` 改為 `theme_style=ft.TextThemeStyle.*`。
+- 移除結果容器在 Flet 1.0 中不應使用的 `expand=True`，避免結果面板搶占可視高度。
+- `flet_app.py` 的兩個 `TabBarView` 子頁面以 `ft.Container(expand=True)` 包裝，明確建立 Flet 1.0 的頁面 layout boundary。
+
+### 實際 UI 驗證
+
+使用乾淨、單一 listener 的 Flet Web runtime：
+
+```text
+uv run flet run --web --port 8550 run.py
+```
+
+實際瀏覽器驗證結果：
+
+- 「熱力性質查詢」：完整顯示熱力學性質輸入標題、3 組性質／數值／單位、廣延性質、總質量、執行計算。
+- 「冷凍空調分析」：可切換分頁，顯示分析項目、參數輸入、入口／出口壓力、執行分析、分析結果與 SI／Imperial 切換。
+- 原本大面積灰色區塊：已消失。
+- 啟動端點：HTTP 200。
+- Flet server log：正常啟動，無 traceback。
+
+### 回歸測試
+
+- 新增 TabBarView layout boundary assertion。
+- 新增 Flet 1.0 `theme_style` 參數 assertion。
+- 原始 bug 測試先得到 RED；修正後得到 GREEN。
+- 最終 `uv run pytest -q`: `5 passed`。

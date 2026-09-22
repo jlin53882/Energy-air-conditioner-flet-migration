@@ -55,7 +55,10 @@ def main(page: ft.Page):
         ],
     )
     tab_view = ft.TabBarView(
-        controls=[prop_tab_content, analysis_tab_content],
+        controls=[
+            ft.Container(content=prop_tab_content, expand=True),
+            ft.Container(content=analysis_tab_content, expand=True),
+        ],
         expand=True,
     )
     main_tabs = ft.Tabs(

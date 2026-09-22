@@ -134,7 +134,6 @@ class PropertyTab(ft.Column):
             border=ft.Border.all(1, ft.Colors.BLUE_GREY_200),
             border_radius=ft.BorderRadius.all(8),
             padding=ft.Padding.all(15), # 內邊距
-            expand=True,
             alignment=ft.Alignment.TOP_LEFT # 文字靠左上對齊
         )
 
@@ -153,7 +152,7 @@ class PropertyTab(ft.Column):
             ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
             
             # 性質輸入區塊標題
-            ft.Text("熱力學性質輸入 (至少兩組)", style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_600),
+            ft.Text("熱力學性質輸入 (至少兩組)", theme_style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_600),
             
             # 性質輸入行 (垂直堆疊三行輸入 Row)
             ft.Column(controls=[
@@ -164,7 +163,7 @@ class PropertyTab(ft.Column):
             ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
             
             # 廣延性質區塊標題
-            ft.Text("廣延性質 (可選)", style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_600),
+            ft.Text("廣延性質 (可選)", theme_style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_600),
             ft.Row(controls=[self.mass_tf, self.mass_unit_dd]),
             
             # 計算按鈕容器 (居中顯示按鈕)
@@ -182,7 +181,7 @@ class PropertyTab(ft.Column):
                 controls=[
                     ft.Text(
                         "計算結果", 
-                        style=ft.TextThemeStyle.TITLE_LARGE, 
+                        theme_style=ft.TextThemeStyle.TITLE_LARGE,
                         weight=ft.FontWeight.W_900,     
                         color=ft.Colors.BLUE_GREY_900,
                         expand=True, # 讓標題佔用多餘空間
