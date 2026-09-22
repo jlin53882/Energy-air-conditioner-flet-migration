@@ -1,7 +1,7 @@
 [project]
 name = "energy-air-conditioner"
 version = "0.1.0"
-description = "Add your description here"
+description = "Tkinter-free Flet migration of the Energy Air Conditioner application"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

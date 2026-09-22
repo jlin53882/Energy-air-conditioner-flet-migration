@@ -7,7 +7,19 @@
 - Shared domain code lives in `domain/`; application orchestration lives in `application/`.
 - Channel-specific UI and handlers remain adapters.
 
-## Migration status
+## Current synchronization and adapter contracts
+
+- CoolProp reference state is process-global. `ReferenceStateService` exposes one
+  process-wide `RLock`; mutation plus dependent `PropsSI`/`PhaseSI` queries must
+  run inside its `calculation_scope`.
+- The excluded legacy psychrometric model is imported only by
+  `infrastructure.psychrometrics.LegacyPsychrometricModelAdapter`. Domain code
+  consumes its neutral protocol and does not import Flet or Telegram modules.
+- Analysis definitions own stable semantic `analysis_id` values. `AnalysisTab`
+  validates and registers them but does not derive IDs from class names or order.
+- `PropertyTab` receives `PropertyQueryService`; fluid validation, reference-state
+  setup, and property queries cross the application boundary through that service.
+
 
 Completed slices are recorded by commit and verified by the focused/full test suite:
 
