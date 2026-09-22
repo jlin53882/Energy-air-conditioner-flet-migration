@@ -5,12 +5,14 @@ import CoolProp.CoolProp as CP
 from Flet_ui.PsychrometricChart import PsychrometricChart_01_ASHF_model as psy
 import math
 import numpy as np
+from domain.units.converter import CanonicalUnitConverter
 
 class ThermoCalculator:
     def __init__(self):
         """
         初始化熱力學計算器，包含所有需要的常數、單位定義和轉換邏輯。
         """
+        self._canonical_converter = CanonicalUnitConverter()
         # --- 屬性與單位定義 ---
         self.properties = ["P", "T", "H", "S", "D", "Q", "V", "U"]
         self.prop_names = {
@@ -200,6 +202,12 @@ class ThermoCalculator:
         :param unit_code: 輸入值的單位代碼 (e.g., 'kPa', 'C')
         :return: 轉換為 SI 單位後的值 (CoolProp 標準)
         """
+        if prop_code in self._canonical_converter.CORE_PROPERTIES - {"V"}:
+            try:
+                return self._canonical_converter.convert_to_si(prop_code, value, unit_code)
+            except ValueError:
+                pass
+
         if prop_code == 'V': # 特殊處理比容 (Specific Volume) V
             # 註解：在 calculate_properties 函數中，V 會被轉換為密度 D，
             # 但這裡的邏輯看起來是為了在 _convert_to_si 內部完成 V 到 D 的 SI 轉換。
@@ -237,6 +245,12 @@ class ThermoCalculator:
         :return: 轉換為目標單位後的值
         """
         # 尋找並執行定義在 self.conversion_map 字典中的轉換函數
+        if prop_code in self._canonical_converter.CORE_PROPERTIES - {"V"}:
+            try:
+                return self._canonical_converter.convert_from_si(prop_code, value_si, unit_code)
+            except ValueError:
+                pass
+
         if prop_code in self.conversion_map and unit_code in self.conversion_map[prop_code]["from_si"]:
             return self.conversion_map[prop_code]["from_si"][unit_code](value_si)
             

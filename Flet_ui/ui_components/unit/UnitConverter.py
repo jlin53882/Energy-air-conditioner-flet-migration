@@ -1,4 +1,5 @@
 # UnitConverter.py
+from domain.units.converter import CanonicalUnitConverter
 # 職責：只處理單位轉換。不認識 CoolProp，也不執行任何熱力學計算。
 
 class UnitConverter:
@@ -117,6 +118,7 @@ class UnitConverter:
         
         # 建立完整的轉換映射表
         self.conversion_map = self._build_conversion_map()
+        self._canonical_converter = CanonicalUnitConverter()
 
     def _build_conversion_map(self):
         """
@@ -277,6 +279,11 @@ class UnitConverter:
         """
         將顯示單位值轉換為 SI 基礎單位 (比性質)。
         """
+        if prop_code in self._canonical_converter.CORE_PROPERTIES - {"V"}:
+            try:
+                return self._canonical_converter.convert_to_si(prop_code, value, unit_code)
+            except ValueError:
+                pass
         if prop_code in self.conversion_map and unit_code in self.conversion_map[prop_code]["to_si"]:
             return self.conversion_map[prop_code]["to_si"][unit_code](value)
         return value # 如果找不到轉換，返回原值
@@ -285,6 +292,11 @@ class UnitConverter:
         """
         將 SI 單位值轉換為目標顯示單位 (比性質)。
         """
+        if prop_code in self._canonical_converter.CORE_PROPERTIES - {"V"}:
+            try:
+                return self._canonical_converter.convert_from_si(prop_code, value_si, unit_code)
+            except ValueError:
+                pass
         if prop_code in self.conversion_map and unit_code in self.conversion_map[prop_code]["from_si"]:
             return self.conversion_map[prop_code]["from_si"][unit_code](value_si)
         return value_si # 如果找不到轉換，返回原值
