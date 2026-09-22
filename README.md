@@ -1,45 +1,79 @@
-# Energy Air Conditioner — Tkinter-free Flet migration
+# Energy Air Conditioner
 
-This repository is the Flet migration of the Energy Air Conditioner application.
-It removes the Tkinter desktop entry point while preserving the existing
-thermodynamic, HVAC, psychrometric, and chart behavior.
+## Project Overview
 
-## Architecture
+Energy Air Conditioner is a Flet-based HVAC and thermodynamic application. It
+provides property calculations, HVAC analyses, psychrometric calculations, and
+thermodynamic diagrams without a Tkinter UI entry point.
 
-The migration uses the following dependency direction:
+## Supported Interfaces
+
+- **Flet:** interactive desktop application launched through `run.py`.
+- **Telegram:** bot interface under `Telegram_bot/`.
+
+Both interfaces use shared application and domain services where the contract
+has been consolidated. Channel-specific formatting remains in the adapters.
+
+## High-level Architecture
 
 ```text
-Flet / Telegram adapters -> application -> domain
-                                  ^
-                         infrastructure adapters
+Flet / Telegram adapters
+            ↓
+       application
+            ↓
+          domain
+
+infrastructure adapters ──┐
+                           ↑
+                    composition roots
 ```
 
-- `domain/` contains canonical units, thermodynamics, HVAC equations, and
-  psychrometric contracts.
-- `application/` coordinates neutral property and analysis requests.
-- `Flet_ui/` and `Telegram_bot/` remain channel adapters.
-- `infrastructure/` contains concrete adapters for legacy integrations,
-  including the excluded legacy psychrometric model.
-- `chart/` contains headless chart state parsing; existing rendering and
-  sampling behavior remains unchanged in this migration.
+The detailed dependency rules and ownership boundaries are documented in
+[`docs/architecture.md`](docs/architecture.md).
 
-CoolProp reference state is process-global. Mutation and every dependent
-`PropsSI`/`PhaseSI` transaction use the shared synchronization boundary in
-`domain/thermodynamics/reference_state.py`. Synchronization is separate from
-request policy: ordinary property entrypoints explicitly use a concrete policy
-(`DEF`, `ASHRAE`, `IIR`, `NBP`, or `IAPWS`), while only internal probes may use
-the explicitly named `CURRENT` policy. No ordinary request inherits the state
-left by a previous request, and the observed state registry is process-global.
+## Run / Development
 
-## Run tests
+Install the locked environment with `uv`, then launch the Flet application:
+
+```bash
+uv sync
+uv run python run.py
+```
+
+The Telegram bot has its own entrypoint and configuration requirements. Do not
+make the Flet launcher depend on Telegram configuration for logging or startup.
+
+## Testing
+
+Run the complete test suite with:
 
 ```bash
 uv run pytest -q
 ```
 
-## Scope notes
+The full verification checklist is in [`docs/testing.md`](docs/testing.md).
 
-This branch does not claim to complete every deferred migration. Telegram
-specific-volume (`V`) semantics, remaining compressor analyses, full Telegram
-constructor dependency injection, complete chart renderer decomposition, and
-packaging-target redesign remain explicit follow-up work.
+## Documentation Index
+
+- [Architecture](docs/architecture.md)
+- [Domain contracts](docs/domain-contracts.md)
+- [Compatibility boundaries](docs/compatibility-boundaries.md)
+- [Testing strategy](docs/testing.md)
+- [Maintenance guide](docs/maintenance.md)
+
+## Known Compatibility Boundaries
+
+The intentionally retained Telegram specific-volume (`V`) behavior is an
+adapter boundary, not the canonical domain contract. Other current constraints
+and their removal criteria are listed in
+[`docs/compatibility-boundaries.md`](docs/compatibility-boundaries.md) and
+[`docs/maintenance.md`](docs/maintenance.md).
+
+## Documentation Authority
+
+Production code and executable tests are the executable truth. The documents
+under `docs/` describe intended architecture, domain contracts, accepted
+compatibility boundaries, and maintenance rules. If code and documentation
+diverge, treat the difference as architecture or contract drift and decide
+whether the code or the documentation must be updated; do not leave the
+disagreement silent.
