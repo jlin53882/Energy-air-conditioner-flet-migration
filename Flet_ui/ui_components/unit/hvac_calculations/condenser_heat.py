@@ -1,30 +1,12 @@
 # 職責：冷凝器計算
 #condenser_heat_rate.py
 from .exergy import calculate_specific_exerpy,calculate_change_specific_exerpy1_2_simple
+from domain.hvac.basic import calculate_condenser_heat_rate_si
 import CoolProp.CoolProp as CP
 
-def calculate_condenser_heat_rate( mass_flow_rate,h1, h2):
-    """
-    計算冷凝器熱交換率 (Qe)。
-    公式: Qcond = ṁ * (h1 - h2)
-    :param mass_flow_rate: 質量流率 (單位: kg/s)
-    :param h1: 冷氣器器入口焓值 (單位: kJ/kg)
-    :param h2: 冷凝器出口焓值 (單位: kJ/kg)
-    :return: 冷凝器熱交換率 (單位: kW)
-    """
-    
-    if mass_flow_rate < 0 or h1 < 0 or h2 < 0:
-        raise ValueError("質量流率和焓值必須為正數。")
-    elif h1<h2:
-        raise ValueError("入口焓值必須大於出口焓值。")
-    #print("h1:",h1)
-    #print("h2:",h2)
-    #print("mass_flow_rate:",mass_flow_rate)
-    heat_rate_kw = mass_flow_rate * ( h1 - h2)
-
-   
-    return heat_rate_kw
-
+def calculate_condenser_heat_rate(mass_flow_rate, h1, h2):
+    """Return condenser heat rate in kW for the legacy kJ/kg API."""
+    return calculate_condenser_heat_rate_si(mass_flow_rate, h1 * 1000.0, h2 * 1000.0) / 1000.0
 
 def ebe_water_cooled_condenser(m_dot_R, h1, h2, m_dot_w, h3, h4):
     """

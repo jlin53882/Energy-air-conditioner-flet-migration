@@ -6,6 +6,12 @@ from Flet_ui.PsychrometricChart import PsychrometricChart_01_ASHF_model as psy
 import math
 import numpy as np
 from domain.thermodynamics.state_service import ThermodynamicStateService
+from domain.hvac.basic import (
+    calculate_compression_ratio_si,
+    calculate_compressor_work_si,
+    calculate_condenser_heat_rate_si,
+    calculate_evaporator_heat_rate_si,
+)
 from domain.units.converter import CanonicalUnitConverter
 
 class ThermoCalculator:
@@ -497,90 +503,18 @@ class ThermoCalculator:
 # --- [新功能] 冷凍空調原理分析 ---
     
     def calculate_compressor_work(self, mass_flow_rate, h1, h2):
-        """
-        計算壓縮機所作的功 (Win)。
-        公式: Win = ṁ * (h2 - h1)
-        :param mass_flow_rate: 質量流率 (單位: kg/s)
-        :param h1: 壓縮機入口焓值 (單位: kJ/kg)
-        :param h2: 壓縮機出口焓值 (單位: kJ/kg)
-        :return: 壓縮機功 (單位: kW)
-        """
-        # ṁ (kg/s) * (h2 (kJ/kg) - h1 (kJ/kg)) 的結果直接就是 kJ/s，即 kW
-        if mass_flow_rate < 0 or h1 < 0 or h2 < 0:
-            raise ValueError("質量流率和焓值必須為正數。")
-        
-        work_kw = mass_flow_rate * (h2 - h1)
-        return work_kw
-
+        """Return compressor work in kW for the legacy kJ/kg API."""
+        return calculate_compressor_work_si(mass_flow_rate, h1 * 1000.0, h2 * 1000.0) / 1000.0
     def calculate_compression_ratio(self, p_suction_abs, p_discharge_abs):
-        """
-        計算壓縮比 (CR)。
-        公式: CR = P_discharge_abs / P_suction_abs
-        :param p_suction_abs: 壓縮機入口絕對壓力 (任何單位)
-        :param p_discharge_abs: 壓縮機出口絕對壓力 (相同單位)
-        :return: 壓縮比 (無單位)
-        """
-        if p_suction_abs <= 0 or p_discharge_abs <= 0:
-            raise ValueError("絕對壓力必須大於零。")
-            
-        if p_suction_abs > p_discharge_abs:
-            raise ValueError("出口壓力必須大於或等於入口壓力。")
+        """Return the compression ratio through the shared SI equation."""
+        return calculate_compression_ratio_si(p_suction_abs, p_discharge_abs)
+    def calculate_evaporator_heat_rate(self, mass_flow_rate, h1, h2):
+        """Return evaporator heat rate in kW for the legacy kJ/kg API."""
+        return calculate_evaporator_heat_rate_si(mass_flow_rate, h1 * 1000.0, h2 * 1000.0) / 1000.0
+    def calculate_condenser_heat_rate(self, mass_flow_rate, h1, h2):
+        """Return condenser heat rate in kW for the legacy kJ/kg API."""
+        return calculate_condenser_heat_rate_si(mass_flow_rate, h1 * 1000.0, h2 * 1000.0) / 1000.0
 
-        # 只要單位一致，比值就成立
-        ratio = p_discharge_abs / p_suction_abs
-        return ratio
-    
-    def calculate_evaporator_heat_rate(self, mass_flow_rate: float, h1: float, h2: float) -> float:
-        """
-        計算蒸發器熱交換率 (Qe)。
-        公式: Qeva = ṁ * (h2 - h1)
-        :param mass_flow_rate: 質量流率 (單位: kg/s)
-        :param h1: 蒸發器入口焓值 (單位: kJ/kg)
-        :param h2: 蒸發器出口焓值 (單位: kJ/kg)
-        :return: 蒸發器熱交換率 (單位: kW)
-        """
-        if mass_flow_rate < 0 or h1 < 0 or h2 < 0:
-            raise ValueError("質量流率和焓值必須為正數。")
-        elif h2 < h1:
-            raise ValueError("出口焓值必須大於入口焓值。")
-        heat_rate_kw = mass_flow_rate * (h2 - h1)
-       
-        return heat_rate_kw
-    
-    def calculate_condenser_heat_rate(self, mass_flow_rate: float, h1: float, h2: float) -> float:
-        """
-        計算冷凝器熱交換率 (Qe)。
-        公式: Qcond = ṁ * (h1 - h2)
-        :param mass_flow_rate: 質量流率 (單位: kg/s)
-        :param h1: 冷氣器器入口焓值 (單位: kJ/kg)
-        :param h2: 冷凝器出口焓值 (單位: kJ/kg)
-        :return: 冷凝器熱交換率 (單位: kW)
-        """
-        if mass_flow_rate < 0 or h1 < 0 or h2 < 0:
-            raise ValueError("質量流率和焓值必須為正數。")
-        elif h2 > h1:
-            raise ValueError("入口焓值必須大於出口焓值。")
-        heat_rate_kw = mass_flow_rate * ( h1 - h2)
-       
-        return heat_rate_kw
-    
-    def calculate_condenser_heat_rate(self, mass_flow_rate: float, h1: float, h2: float) -> float:
-        """
-        計算冷凝器熱交換率 (Qe)。
-        公式: Qcond = ṁ * (h1 - h2)
-        :param mass_flow_rate: 質量流率 (單位: kg/s)
-        :param h1: 冷氣器器入口焓值 (單位: kJ/kg)
-        :param h2: 冷凝器出口焓值 (單位: kJ/kg)
-        :return: 冷凝器熱交換率 (單位: kW)
-        """
-        if mass_flow_rate < 0 or h1 < 0 or h2 < 0:
-            raise ValueError("質量流率和焓值必須為正數。")
-        elif h2 > h1:
-            raise ValueError("入口焓值必須大於出口焓值。")
-        heat_rate_kw = mass_flow_rate * ( h1 - h2)
-       
-        return heat_rate_kw
-    
     def calculate_throttling_value(self, h1: float, h2: float) -> float:
         """
         計算節流過程後的焓值 (h2)。

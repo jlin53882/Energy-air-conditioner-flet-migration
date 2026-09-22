@@ -2,26 +2,17 @@
 # 職責：壓縮機相關計算
 
 import CoolProp.CoolProp as CP
+from domain.hvac.basic import (
+    calculate_compression_ratio_si,
+    calculate_compressor_work_si,
+)
 # 從兄弟模組導入依賴項
 from .exergy import calculate_specific_exerpy,calculate_change_specific_exerpy1_2
 
 #壓縮機相關計算方程式
-def calculate_compressor_work(mass_flow_rate,h1, h2):
-    """
-    計算壓縮機所作的功 (Win)。
-    公式: Win = ṁ * (h2 - h1)
-    :param mass_flow_rate: 質量流率 (單位: kg/s)
-    :param h1: 壓縮機入口焓值 (單位: kJ/kg)
-    :param h2: 壓縮機出口焓值 (單位: kJ/kg)
-    :return: 壓縮機功 (單位: kW)
-    """
-    # ṁ (kg/s) * (h2 (kJ/kg) - h1 (kJ/kg)) 的結果直接就是 kJ/s，即 kW
-    if mass_flow_rate < 0 or h1 < 0 or h2 < 0:
-        raise ValueError("質量流率和焓值必須為正數。")
-    
-    work_kw = mass_flow_rate * (h2 - h1)
-    return work_kw
-
+def calculate_compressor_work(mass_flow_rate, h1, h2):
+    """Return compressor work in kW for the legacy kJ/kg API."""
+    return calculate_compressor_work_si(mass_flow_rate, h1 * 1000.0, h2 * 1000.0) / 1000.0
 
 def calculate_compressor_work_heat_transfer( mass_flow_rate,h1, h2, Q_out):
     """
@@ -53,24 +44,9 @@ def calculate_compressor_reversible_work(mass_flow_rate , h1, h2, s1, s2,T0_dead
 
 
 
-def calculate_compression_ratio( p_suction_abs, p_discharge_abs):
-    """
-    計算壓縮比 (CR)。
-    公式: CR = P_discharge_abs / P_suction_abs
-    :param p_suction_abs: 壓縮機入口絕對壓力 (任何單位)
-    :param p_discharge_abs: 壓縮機出口絕對壓力 (相同單位)
-    :return: 壓縮比 (無單位)
-    """
-    if p_suction_abs <= 0 or p_discharge_abs <= 0:
-        raise ValueError("絕對壓力必須大於零。")
-    elif p_suction_abs > p_discharge_abs:
-        raise ValueError(f"入口壓力 ({p_suction_abs}) 不能大於出口壓力 ({p_discharge_abs})。")
-
-    # 只要單位一致，比值就成立
-    ratio = p_discharge_abs / p_suction_abs
-    return ratio
-
-
+def calculate_compression_ratio(p_suction_abs, p_discharge_abs):
+    """Return the compression ratio through the shared SI equation."""
+    return calculate_compression_ratio_si(p_suction_abs, p_discharge_abs)
 
 def calculate_compressor_exerpy_destruction(mass_flow_rate, h1,h2, s1, s2 ,T0_dead,ho_dead, s0_dead):
     """
