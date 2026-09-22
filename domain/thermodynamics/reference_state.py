@@ -1,8 +1,9 @@
-"""Process-wide reference-state synchronization for CoolProp."""
+"""Process-wide reference-state synchronization and request policy."""
 
 from __future__ import annotations
 
 from contextlib import contextmanager
+from enum import Enum
 from threading import RLock
 from typing import Iterator
 
@@ -10,50 +11,57 @@ import CoolProp.CoolProp as CP
 
 
 _PROCESS_COOLPROP_LOCK = RLock()
+_PROCESS_REFERENCE_STATES: dict[str, str] = {}
+
+
+class ReferenceStatePolicy(str, Enum):
+    """Explicit policies for a reference-state-sensitive request."""
+
+    DEFAULT = "DEF"
+    ASHRAE = "ASHRAE"
+    IAPWS = "IAPWS"
+    IIR = "IIR"
+    NBP = "NBP"
+    CURRENT = "CURRENT"
 
 
 class ReferenceStateService:
-    """Serialize CoolProp mutation and dependent query transactions.
-
-    CoolProp stores reference state globally in the process. Every service
-    instance therefore uses the same module-level lock; callers can use
-    :meth:`calculation_scope` to keep a requested mutation and all dependent
-    queries atomic.
-    """
+    """Serialize CoolProp transactions and record process-global state policy."""
 
     VALID_CODES = frozenset({"DEF", "ASHRAE", "IAPWS", "IIR", "NBP"})
-
-    def __init__(self) -> None:
-        """Initialize the per-fluid observed state registry."""
-        self._current_by_fluid: dict[str, str] = {}
 
     @property
     def lock(self) -> RLock:
         """Expose the process-wide lock for identity/regression checks."""
         return _PROCESS_COOLPROP_LOCK
 
-    def _normalize(self, ref_state: str) -> str:
-        """Normalize and validate a public reference-state code."""
-        normalized = ref_state.upper()
+    @staticmethod
+    def _normalize_policy(policy: ReferenceStatePolicy | str) -> str:
+        """Normalize a request policy without conflating CURRENT and DEFAULT."""
+        normalized = policy.value if isinstance(policy, ReferenceStatePolicy) else policy.upper()
         if normalized == "DEFAULT":
-            normalized = "DEF"
-        if normalized not in self.VALID_CODES:
-            raise ValueError(f"Unsupported reference state '{ref_state}'")
+            normalized = ReferenceStatePolicy.DEFAULT.value
+        if normalized == ReferenceStatePolicy.CURRENT.value:
+            return normalized
+        if normalized not in ReferenceStateService.VALID_CODES:
+            raise ValueError(f"Unsupported reference state policy '{policy}'")
         return normalized
 
-    def _set_unlocked(self, fluid_name: str, ref_state: str) -> None:
-        """Apply a reference-state mutation while the shared lock is held."""
-        normalized = self._normalize(ref_state)
+    def _set_unlocked(self, fluid_name: str, ref_state: ReferenceStatePolicy | str) -> None:
+        """Apply a concrete CoolProp mutation while the shared lock is held."""
+        normalized = self._normalize_policy(ref_state)
+        if normalized == ReferenceStatePolicy.CURRENT.value:
+            raise ValueError("CURRENT is not valid for set(); choose a concrete policy")
         try:
             CP.set_reference_state(fluid_name, normalized)
         except (KeyError, ValueError) as exc:
             raise ValueError(
                 f"Unable to set reference state '{normalized}' for '{fluid_name}'"
             ) from exc
-        self._current_by_fluid[fluid_name] = normalized
+        _PROCESS_REFERENCE_STATES[fluid_name] = normalized
 
-    def set(self, fluid_name: str, ref_state: str) -> None:
-        """Set a validated CoolProp reference state atomically."""
+    def set(self, fluid_name: str, ref_state: ReferenceStatePolicy | str) -> None:
+        """Set a concrete reference state and update the shared process registry."""
         with _PROCESS_COOLPROP_LOCK:
             self._set_unlocked(fluid_name, ref_state)
 
@@ -61,24 +69,22 @@ class ReferenceStateService:
     def calculation_scope(
         self,
         fluid_name: str,
-        ref_state: str | None = None,
+        ref_state: ReferenceStatePolicy | str = ReferenceStatePolicy.CURRENT,
     ) -> Iterator[None]:
-        """Protect a complete mutation plus dependent CoolProp query sequence.
+        """Protect a complete request transaction under an explicit policy.
 
-        Args:
-            fluid_name: Fluid whose global CoolProp state is being queried.
-            ref_state: Optional state to apply before entering the query body.
-
-        Yields:
-            Nothing; the caller performs all dependent ``PropsSI``/``PhaseSI``
-            calls inside the context.
+        ``CURRENT`` deliberately preserves the current process state for an
+        internal operation such as a fluid-validity probe. Ordinary property
+        entrypoints must pass a concrete policy such as ``DEFAULT`` or
+        ``ASHRAE``; they must not rely on ambient state.
         """
+        normalized = self._normalize_policy(ref_state)
         with _PROCESS_COOLPROP_LOCK:
-            if ref_state is not None:
-                self._set_unlocked(fluid_name, ref_state)
+            if normalized != ReferenceStatePolicy.CURRENT.value:
+                self._set_unlocked(fluid_name, normalized)
             yield
 
     def current(self, fluid_name: str) -> str | None:
-        """Return the last reference state set through this service."""
+        """Return the process-global observed reference state for a fluid."""
         with _PROCESS_COOLPROP_LOCK:
-            return self._current_by_fluid.get(fluid_name)
+            return _PROCESS_REFERENCE_STATES.get(fluid_name)

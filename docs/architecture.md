@@ -11,7 +11,10 @@
 
 - CoolProp reference state is process-global. `ReferenceStateService` exposes one
   process-wide `RLock`; mutation plus dependent `PropsSI`/`PhaseSI` queries must
-  run inside its `calculation_scope`.
+  run inside its `calculation_scope`. This synchronization mechanism is separate
+  from request policy: ordinary property entrypoints pass an explicit `DEF`,
+  `ASHRAE`, `IIR`, `NBP`, or `IAPWS` policy; only internal probes may use the
+  explicitly named `CURRENT` policy. The observed state registry is shared too.
 - The excluded legacy psychrometric model is imported only by
   `infrastructure.psychrometrics.LegacyPsychrometricModelAdapter`. Domain code
   consumes its neutral protocol and does not import Flet or Telegram modules.

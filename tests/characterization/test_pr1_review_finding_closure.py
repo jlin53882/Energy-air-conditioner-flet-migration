@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 import threading
 from pathlib import Path
 
@@ -12,6 +13,8 @@ import pytest
 from domain.thermodynamics.reference_state import ReferenceStateService
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units.converter import CanonicalUnitConverter
+from application.models import PropertyQueryRequest
+from Flet_ui.ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
 from Flet_ui.ui_components.unit.UnitConverter import UnitConverter
 from Telegram_bot.thermo_calculator import ThermoCalculator
 
@@ -21,6 +24,88 @@ ROOT = Path(__file__).parents[2]
 def test_reference_state_services_share_process_lock() -> None:
     """Every service instance must serialize the same CoolProp process state."""
     assert ReferenceStateService().lock is ReferenceStateService().lock
+
+
+def test_reference_state_registry_is_process_global() -> None:
+    """A registry read from another service sees the process-global state."""
+    first = ReferenceStateService()
+    second = ReferenceStateService()
+    try:
+        first.set("R134a", "IIR")
+        assert second.current("R134a") == "IIR"
+    finally:
+        first.set("R134a", "DEF")
+
+
+def test_calculation_default_policy_does_not_inherit_ambient_state() -> None:
+    """An omitted request policy resolves to the explicit channel default."""
+    service = ThermodynamicStateService(CanonicalUnitConverter())
+    known_props = (("P", 101.325, "kPa"), ("T", 25.0, "°C"))
+    try:
+        service.calculate_properties("R134a", known_props, reference_state="ASHRAE")
+        service.calculate_properties("R134a", known_props, reference_state="IIR")
+        default_expected = service.calculate_properties(
+            "R134a", known_props, reference_state="DEF"
+        )
+        service.calculate_properties("R134a", known_props, reference_state="IIR")
+        channel_default = service.calculate_properties("R134a", known_props)
+    finally:
+        service.set_reference_state("R134a", "DEF")
+
+    assert channel_default["H"] == pytest.approx(default_expected["H"])
+    assert channel_default["S"] == pytest.approx(default_expected["S"])
+
+
+def test_telegram_uses_explicit_default_after_flet_changes_state() -> None:
+    """Telegram's default policy is independent from a preceding Flet request."""
+    known_props = [("P", 101.325, "kPa"), ("T", 25.0, "°C")]
+    flet = ThermoStateCalculator(UnitConverter())
+    telegram = ThermoCalculator()
+    expected = ThermodynamicStateService(CanonicalUnitConverter()).calculate_properties(
+        "R134a", known_props, reference_state="DEF"
+    )
+    try:
+        flet.set_coolprop_ref_state("R134a", "IIR")
+        actual = telegram.calculate_properties("R134a", known_props)
+    finally:
+        flet.set_coolprop_ref_state("R134a", "DEF")
+
+    assert actual["H"] == pytest.approx(expected["H"])
+    assert actual["S"] == pytest.approx(expected["S"])
+
+
+def test_telegram_legacy_v_path_accepts_explicit_policy() -> None:
+    """The deferred Telegram V semantics still use explicit state ownership."""
+    telegram = ThermoCalculator()
+    flet = ThermoStateCalculator(UnitConverter())
+    known_props = [("T", 25.0, "°C"), ("V", 0.2, "m³/kg")]
+    try:
+        flet.set_coolprop_ref_state("R134a", "IIR")
+        actual = telegram.calculate_properties("R134a", known_props)
+        expected = telegram.calculate_properties(
+            "R134a", known_props, reference_state="DEF"
+        )
+    finally:
+        flet.set_coolprop_ref_state("R134a", "DEF")
+
+    assert actual["H"] == pytest.approx(expected["H"])
+    assert actual["S"] == pytest.approx(expected["S"])
+
+
+def test_thermodynamic_entrypoints_have_non_ambient_defaults() -> None:
+    """Production entrypoints expose a concrete reference-state policy."""
+    assert inspect.signature(ThermodynamicStateService.calculate_properties).parameters[
+        "reference_state"
+    ].default is not None
+    assert inspect.signature(ThermoCalculator.calculate_properties).parameters[
+        "reference_state"
+    ].default is not None
+    assert inspect.signature(ThermoCalculator._calculate_legacy_properties).parameters[
+        "reference_state"
+    ].default is not None
+    assert PropertyQueryRequest(
+        "R134a", (("P", 1.0, "bar"), ("T", 25.0, "°C"))
+    ).reference_state is not None
 
 
 def test_reference_state_and_query_are_one_transaction(monkeypatch: pytest.MonkeyPatch) -> None:

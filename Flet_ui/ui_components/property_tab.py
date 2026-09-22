@@ -537,7 +537,11 @@ class PropertyTab(ft.Column):
                     fluid,
                     tuple(known_props[:2]),
                     is_ideal,
-                    self.ref_state_dd.value.split(" ")[0],
+                    (
+                        "CURRENT"
+                        if fluid == "Water"
+                        else self.ref_state_dd.value.split(" ")[0]
+                    ),
                 )
             )
             

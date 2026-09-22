@@ -23,9 +23,13 @@ Flet / Telegram adapters -> application -> domain
 - `chart/` contains headless chart state parsing; existing rendering and
   sampling behavior remains unchanged in this migration.
 
-CoolProp reference-state mutation is process-global. All mutation and
-reference-state-dependent `PropsSI`/`PhaseSI` transactions use the shared
-synchronization boundary in `domain/thermodynamics/reference_state.py`.
+CoolProp reference state is process-global. Mutation and every dependent
+`PropsSI`/`PhaseSI` transaction use the shared synchronization boundary in
+`domain/thermodynamics/reference_state.py`. Synchronization is separate from
+request policy: ordinary property entrypoints explicitly use a concrete policy
+(`DEF`, `ASHRAE`, `IIR`, `NBP`, or `IAPWS`), while only internal probes may use
+the explicitly named `CURRENT` policy. No ordinary request inherits the state
+left by a previous request, and the observed state registry is process-global.
 
 ## Run tests
 

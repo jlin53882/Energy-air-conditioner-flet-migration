@@ -11,14 +11,16 @@ import CoolProp.CoolProp as CP
 import numpy as np
 from functools import lru_cache
 
-from domain.thermodynamics.reference_state import ReferenceStateService
+from domain.thermodynamics.reference_state import ReferenceStatePolicy, ReferenceStateService
 
 _REFERENCE_STATE = ReferenceStateService()
 
-def _effective_reference_state(fluid: str, ref_state: str) -> str | None:
+def _effective_reference_state(
+    fluid: str, ref_state: str
+) -> ReferenceStatePolicy | str:
     """Resolve chart UI reference-state semantics to a shared policy code."""
     if ref_state == "Auto":
-        return None if fluid == "Water" else "ASHRAE"
+        return ReferenceStatePolicy.CURRENT if fluid == "Water" else ReferenceStatePolicy.ASHRAE
     return ref_state if ref_state in {"ASHRAE", "IAPWS", "NBP", "IIR", "DEF"} else None
 
 

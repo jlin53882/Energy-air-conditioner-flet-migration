@@ -27,6 +27,7 @@
 
 """
 
+from domain.thermodynamics.reference_state import ReferenceStatePolicy
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from .UnitConverter import UnitConverter # <-- 關鍵：導入我們的新類別
 
@@ -64,6 +65,14 @@ class ThermoStateCalculator:
         self._service.set_reference_state(fluid_name, ref_state)
         self.current_ref_code = ref_state
         
-    def calculate_properties(self, fluid, known_props, is_ideal_gas=False):
-        """Calculate properties through the shared headless service."""
-        return self._service.calculate_properties(fluid, known_props, is_ideal_gas)
+    def calculate_properties(
+        self,
+        fluid,
+        known_props,
+        is_ideal_gas=False,
+        reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
+    ):
+        """Calculate properties under an explicit Flet reference-state policy."""
+        return self._service.calculate_properties(
+            fluid, known_props, is_ideal_gas, reference_state
+        )

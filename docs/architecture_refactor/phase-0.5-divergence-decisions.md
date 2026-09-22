@@ -73,8 +73,8 @@
 - **Evidence:** `test_reference_state_sequence_returns_to_original_values` and direct sequence probe.
 - **Observed result:** changing `R134a` from `ASHRAE` to `IIR` changes enthalpy/entropy; explicitly setting `ASHRAE` again restores the original values for the tested sequence.
 - **Classification:** Shared process-global mechanism with policy risk; not yet a formula divergence.
-- **Decision:** All mutation must be routed through one `ReferenceStateService`; application policy, serialization/concurrency behavior and cache-key rules remain required Phase 2 design decisions. Do not assume that restoration in a sequential test proves safety under concurrent or interleaved requests.
-- **Status:** `policy-pending; consolidation-blocked-until-phase-2`
+- **Decision:** All mutation and dependent `PropsSI`／`PhaseSI` queries run through one process-wide `ReferenceStateService` synchronization primitive. Synchronization is separate from request policy: every reference-state-sensitive production entrypoint supplies an explicit policy (`DEF`, `ASHRAE`, `IIR`, `NBP`, `IAPWS`, or the explicitly named internal `CURRENT` operation). Ordinary property calculations default to their channel policy and never use `None` to inherit ambient process state. The observed reference-state registry is process-global and protected by the same lock.
+- **Status:** `decided-for-reference-state-closure`
 
 ### D007 — Formatting and error presentation
 

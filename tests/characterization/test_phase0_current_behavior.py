@@ -162,13 +162,19 @@ def test_reference_state_sequence_returns_to_original_values(
     known_props = [("P", 101.325, "kPa"), ("T", 25.0, "°C")]
     try:
         flet_thermo.set_coolprop_ref_state("R134a", "ASHRAE")
-        ashrae_before = flet_thermo.calculate_properties("R134a", known_props)
+        ashrae_before = flet_thermo.calculate_properties(
+            "R134a", known_props, reference_state="ASHRAE"
+        )
 
         flet_thermo.set_coolprop_ref_state("R134a", "IIR")
-        iir_result = flet_thermo.calculate_properties("R134a", known_props)
+        iir_result = flet_thermo.calculate_properties(
+            "R134a", known_props, reference_state="IIR"
+        )
 
         flet_thermo.set_coolprop_ref_state("R134a", "ASHRAE")
-        ashrae_after = flet_thermo.calculate_properties("R134a", known_props)
+        ashrae_after = flet_thermo.calculate_properties(
+            "R134a", known_props, reference_state="ASHRAE"
+        )
     finally:
         flet_thermo.set_coolprop_ref_state("R134a", "DEF")
 

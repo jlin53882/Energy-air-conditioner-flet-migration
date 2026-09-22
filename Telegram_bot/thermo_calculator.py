@@ -4,6 +4,7 @@
 import CoolProp.CoolProp as CP
 import math
 import numpy as np
+from domain.thermodynamics.reference_state import ReferenceStatePolicy
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.psychrometrics.service import PsychrometricService
 from infrastructure.psychrometrics import LegacyPsychrometricModelAdapter
@@ -292,13 +293,29 @@ class ThermoCalculator:
         return []
         
 
-    def calculate_properties(self, fluid, known_props, is_ideal_gas=False):
-        """Calculate through the shared service, preserving legacy V behavior."""
+    def calculate_properties(
+        self,
+        fluid,
+        known_props,
+        is_ideal_gas=False,
+        reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
+    ):
+        """Calculate under Telegram's explicit default reference-state policy."""
         if any(prop == "V" for prop, _, _ in known_props):
-            return self._calculate_legacy_properties(fluid, known_props, is_ideal_gas)
-        return self._shared_state_service.calculate_properties(fluid, known_props, is_ideal_gas)
+            return self._calculate_legacy_properties(
+                fluid, known_props, is_ideal_gas, reference_state
+            )
+        return self._shared_state_service.calculate_properties(
+            fluid, known_props, is_ideal_gas, reference_state
+        )
 
-    def _calculate_legacy_properties(self, fluid, known_props, is_ideal_gas=False):
+    def _calculate_legacy_properties(
+        self,
+        fluid,
+        known_props,
+        is_ideal_gas=False,
+        reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
+    ):
         """
         主計算函式，返回原始 SI 結果字典。
         負責輸入驗證、單位標準化、V/D 轉換，並分派給 CoolProp 或理想氣體計算。
@@ -336,7 +353,7 @@ class ThermoCalculator:
                 results_si = self._calculate_ideal_gas(fluid, dict(known_props_si))
             else:
                 # 實際流體：使用 CoolProp 狀態方程
-                results_si = self._calculate_coolprop(fluid, known_props_si)
+                results_si = self._calculate_coolprop(fluid, known_props_si, reference_state)
             
             return results_si
 
@@ -344,9 +361,14 @@ class ThermoCalculator:
             # 捕獲所有熱力學計算錯誤，並拋出帶有流體名稱的 RuntimeError
             raise RuntimeError(f"在計算 '{fluid}' 的性質時發生錯誤: {e}") from e
 
-    def _calculate_coolprop(self, fluid, known_props_si):
-        """Query the legacy Telegram path under the shared CoolProp lock."""
-        with _REFERENCE_STATE.calculation_scope(fluid):
+    def _calculate_coolprop(
+        self,
+        fluid,
+        known_props_si,
+        reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
+    ):
+        """Query the legacy Telegram path under an explicit policy."""
+        with _REFERENCE_STATE.calculation_scope(fluid, reference_state):
             return self._calculate_coolprop_unlocked(fluid, known_props_si)
 
     def _calculate_coolprop_unlocked(self, fluid, known_props_si):

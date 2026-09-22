@@ -7,7 +7,7 @@ from typing import Iterable
 import CoolProp.CoolProp as CP
 
 from domain.units.converter import CanonicalUnitConverter
-from .reference_state import ReferenceStateService
+from .reference_state import ReferenceStatePolicy, ReferenceStateService
 
 
 KnownProperty = tuple[str, float, str]
@@ -49,7 +49,7 @@ class ThermodynamicStateService:
         fluid: str,
         known_props: Iterable[KnownProperty],
         is_ideal_gas: bool = False,
-        reference_state: str | None = None,
+        reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
     ) -> dict[str, float | str]:
         """Calculate a state from at least two known properties.
 
@@ -95,7 +95,7 @@ class ThermodynamicStateService:
         self,
         fluid: str,
         known_props_si: list[tuple[str, float]],
-        reference_state: str | None = None,
+        reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
     ) -> dict[str, float | str]:
         """Calculate all configured properties in one synchronized transaction."""
         with self.reference_state.calculation_scope(fluid, reference_state):
