@@ -14,3 +14,11 @@ class PropertyQueryRequest:
     fluid: str
     known_properties: tuple[KnownProperty, ...]
     is_ideal_gas: bool = False
+
+
+@dataclass(frozen=True)
+class CompressionRatioRequest:
+    """Describe a compression-ratio calculation in canonical pascals."""
+
+    suction_pressure_pa: float
+    discharge_pressure_pa: float

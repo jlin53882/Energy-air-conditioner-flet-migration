@@ -13,6 +13,8 @@ from ..unit.HVACAnalyzer import HVACAnalyzer
 from ..unit.UnitConverter import UnitConverter
 # 導入熱力學狀態計算器，用於計算冷媒的熱力學屬性
 from ..unit.ThermoStateCalculator import ThermoStateCalculator
+from application.analysis_services import CompressionRatioService
+from application.models import CompressionRatioRequest
 
 # CompressorModule 繼承自 BaseAnalysisModule，專門處理壓縮機相關的 UI 與邏輯
 class CompressorModule(BaseAnalysisModule):
@@ -22,7 +24,8 @@ class CompressorModule(BaseAnalysisModule):
                  unit_converter: UnitConverter,      # 接收單位轉換服務
                  page: ft.Page,                      # 接收 Flet 頁面物件
                  analyzer: HVACAnalyzer,             # 接收 HVAC 分析器服務
-                 state_calculator: ThermoStateCalculator): # 接收熱力學狀態計算服務
+                 state_calculator: ThermoStateCalculator,
+                 compression_ratio_service: CompressionRatioService | None = None): # 接收熱力學狀態計算服務
         
         # 呼叫基類的構造函數，將所有服務傳入，通常會將它們儲存在 self.services 字典中
         super().__init__(unit_converter, page, analyzer=analyzer,state_calculator=state_calculator) 
@@ -34,6 +37,7 @@ class CompressorModule(BaseAnalysisModule):
         # 從服務容器中取出並儲存熱力學狀態計算器 (state_calculator)
         # 這樣就能在類別的其他方法中，方便地調用其熱力學計算功能
         self.state_calculator: ThermoStateCalculator = self.services.get("state_calculator")
+        self.compression_ratio_service = compression_ratio_service or CompressionRatioService()
         
         # --- 建立此模組所需的所有 UI 元件 (每個方法負責一個計算區塊) ---
         # 透過多個私有方法建立 UI，確保程式碼的模組化與可維護性
@@ -156,7 +160,9 @@ class CompressorModule(BaseAnalysisModule):
         pe_abs_pa = pe_pa + atm_p_si
         pc_abs_pa = pc_pa + atm_p_si
         
-        cr = self.analyzer.calculate_compression_ratio(pe_abs_pa, pc_abs_pa)
+        cr = self.compression_ratio_service.calculate(
+            CompressionRatioRequest(pe_abs_pa, pc_abs_pa)
+        )
         return f"壓縮比 (CR): {cr:.4f} (無單位)"
     
     def on_pressure_type_change(self, e):
