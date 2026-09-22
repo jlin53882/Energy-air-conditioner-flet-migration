@@ -3,6 +3,9 @@
 from .exergy import calculate_specific_exerpy,calculate_change_specific_exerpy1_2_simple
 from domain.hvac.basic import calculate_condenser_heat_rate_si
 import CoolProp.CoolProp as CP
+from domain.thermodynamics.reference_state import ReferenceStateService
+
+_REFERENCE_STATE = ReferenceStateService()
 
 def calculate_condenser_heat_rate(mass_flow_rate, h1, h2):
     """Return condenser heat rate in kW for the legacy kJ/kg API."""
@@ -210,15 +213,20 @@ def exergy_efficiency_condenser(m_dot_R, h1, h2, s1, s2, T0_dead, Q_dot_H=None, 
         raise ValueError("必須提供 (Q_dot_H 和 T) 或 Ex_dot_dest 才能計算㶲效率。")
     
 def calculate_condenser_example_air(m_dot_R, P1, P2, T1, T2,P0_dead, T0_dead,substance: str,ref_state_code: str):
+    """Calculate the legacy condenser example under shared state synchronization."""
+    with _REFERENCE_STATE.calculation_scope(substance, ref_state_code):
+        return _calculate_condenser_example_air_unlocked(
+            m_dot_R, P1, P2, T1, T2, P0_dead, T0_dead, substance, ref_state_code
+        )
+
+def _calculate_condenser_example_air_unlocked(m_dot_R, P1, P2, T1, T2,P0_dead, T0_dead,substance: str,ref_state_code: str):
     """
     計算空冷 冷凝器 傳熱
     Exergy loss
     Exergy efficiency
     """
-    CP.set_reference_state(substance, ref_state_code)
     #state 1 (冷凝器入口狀態的熱力學性質計算)
     # H: 比焓 (Specific Enthalpy)
-    CP.set_reference_state(substance, ref_state_code)
     h1_j_kg=CP.PropsSI('H', 'P', P1, 'T', T1, substance)
     # S: 比熵 (Specific Entropy)
     s1_j_kgk=CP.PropsSI('S', 'P', P1, 'T', T1, substance)

@@ -11,6 +11,16 @@ import CoolProp.CoolProp as CP
 import numpy as np
 from functools import lru_cache
 
+from domain.thermodynamics.reference_state import ReferenceStateService
+
+_REFERENCE_STATE = ReferenceStateService()
+
+def _effective_reference_state(fluid: str, ref_state: str) -> str | None:
+    """Resolve chart UI reference-state semantics to a shared policy code."""
+    if ref_state == "Auto":
+        return None if fluid == "Water" else "ASHRAE"
+    return ref_state if ref_state in {"ASHRAE", "IAPWS", "NBP", "IIR", "DEF"} else None
+
 
 # ======================================================
 # 中文字型設定（避免方框警告）
@@ -39,7 +49,8 @@ def check_coolprop_fluid(fluid_name):
         return False, "名稱不可為空"
     try:
         # 嘗試獲取一個基本屬性。
-        CP.PropsSI('Tcrit', fluid_name)
+        with _REFERENCE_STATE.calculation_scope(fluid_name):
+            CP.PropsSI('Tcrit', fluid_name)
         return True, "驗證成功"
     except ValueError as e:
         # CoolProp 通常會引發 ValueError (例如 "Unable to load fluid [...]")
@@ -53,26 +64,16 @@ def check_coolprop_fluid(fluid_name):
 # ======================================================
 @lru_cache(maxsize=10000)
 def safe_props(output, in1, in1_val, in2, in2_val, fluid, ref_state="Auto"):
-    """
-    安全的 CoolProp 屬性查詢 (帶快取)
-    ref_state: "Auto", "ASHRAE", "IAPWS", "NBP", "IIR"
-    """
+    """Query CoolProp under the process-wide reference-state transaction."""
     try:
-        if ref_state == "Auto":
-            if fluid == "Water":
-                pass 
-            else:
-                CP.set_reference_state(fluid, "ASHRAE") 
-        elif ref_state in ["ASHRAE", "IAPWS", "NBP", "IIR"]:
-            CP.set_reference_state(fluid, ref_state)
-        
-        # (修改) 處理 P-v 輸入時，v=0 的情況
-        if (in1 == "V" and in1_val == 0) or (in2 == "V" and in2_val == 0):
-            return np.nan # 密度無限大，返回 NaN
-        if (in1 == "D" and in1_val == 0) or (in2 == "D" and in2_val == 0):
-             return np.nan
-             
-        return CP.PropsSI(output, in1, in1_val, in2, in2_val, fluid)
+        with _REFERENCE_STATE.calculation_scope(
+            fluid, _effective_reference_state(fluid, ref_state)
+        ):
+            if (in1 == "V" and in1_val == 0) or (in2 == "V" and in2_val == 0):
+                return np.nan
+            if (in1 == "D" and in1_val == 0) or (in2 == "D" and in2_val == 0):
+                return np.nan
+            return CP.PropsSI(output, in1, in1_val, in2, in2_val, fluid)
     except Exception:
         return np.nan
 
@@ -80,18 +81,17 @@ def safe_props(output, in1, in1_val, in2, in2_val, fluid, ref_state="Auto"):
 # 通用飽和線生成函式 (接受 ref_state)
 # ======================================================
 def get_saturation_curve(fluid, ref_state, mode="T", num_points=400):
+    """Generate a saturation curve under the shared CoolProp lock."""
+    with _REFERENCE_STATE.calculation_scope(
+        fluid, _effective_reference_state(fluid, ref_state)
+    ):
+        return _get_saturation_curve_unlocked(fluid, ref_state, mode, num_points)
+
+def _get_saturation_curve_unlocked(fluid, ref_state, mode="T", num_points=400):
     """
     生成指定流體的飽和線（液線與氣線）。
     """
     try:
-        if ref_state == "Auto":
-            if fluid == "Water":
-                pass
-            else:
-                CP.set_reference_state(fluid, "ASHRAE")
-        elif ref_state in ["ASHRAE", "IAPWS", "NBP", "IIR"]:
-            CP.set_reference_state(fluid, ref_state)
-            
         T_crit = CP.PropsSI("Tcrit", fluid)
         T_trip = CP.PropsSI("Ttriple", fluid)
         P_crit = CP.PropsSI("pcrit", fluid)
@@ -147,24 +147,30 @@ def get_saturation_curve(fluid, ref_state, mode="T", num_points=400):
 # ======================================================
 # 主繪圖函式：供 ThermoDiagramModule 調用 (修改：接受 target_P_unit)
 # ======================================================
-def generate_thermo_diagram(fluid, diagram, state_points_si, unit_converter, 
-                          connect_points=False, input_mode=None, ref_state="Auto", 
+def generate_thermo_diagram(fluid, diagram, state_points_si, unit_converter,
+                          connect_points=False, input_mode=None, ref_state="Auto",
                           target_P_unit="MPa", # 接受Y軸壓力單位
                           result_text=None):
+    """Build a diagram while holding the shared CoolProp transaction lock."""
+    with _REFERENCE_STATE.calculation_scope(
+        fluid, _effective_reference_state(fluid, ref_state)
+    ):
+        return _generate_thermo_diagram_unlocked(
+            fluid, diagram, state_points_si, unit_converter, connect_points,
+            input_mode, ref_state, target_P_unit, result_text
+        )
+
+def _generate_thermo_diagram_unlocked(fluid, diagram, state_points_si, unit_converter,
+                          connect_points=False, input_mode=None, ref_state="Auto",
+                          target_P_unit="MPa", result_text=None):
     """
     建立熱力圖（P-h、T-s、P-v、T-v）
     """
     plt.close('all')
 
-    # 初始化冷媒
+    # CoolProp reference-state setup is owned by the public wrapper.
     try:
-        if ref_state == "Auto":
-            if fluid == "Water":
-                pass
-            else:
-                CP.set_reference_state(fluid, "ASHRAE")
-        elif ref_state in ["ASHRAE", "IAPWS", "NBP", "IIR"]:
-            CP.set_reference_state(fluid, ref_state)
+        CP.PropsSI("Tcrit", fluid)
     except Exception:
         fig, ax = plt.subplots(figsize=(8, 6))
         # (修改) 更新錯誤訊息

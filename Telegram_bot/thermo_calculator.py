@@ -6,6 +6,8 @@ import math
 import numpy as np
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.psychrometrics.service import PsychrometricService
+from infrastructure.psychrometrics import LegacyPsychrometricModelAdapter
+from domain.thermodynamics.reference_state import ReferenceStateService
 from domain.hvac.basic import (
     calculate_compression_ratio_si,
     calculate_compressor_work_si,
@@ -14,6 +16,9 @@ from domain.hvac.basic import (
 )
 from domain.units.converter import CanonicalUnitConverter
 
+_REFERENCE_STATE = ReferenceStateService()
+
+
 class ThermoCalculator:
     def __init__(self):
         """
@@ -21,7 +26,7 @@ class ThermoCalculator:
         """
         self._canonical_converter = CanonicalUnitConverter()
         self._shared_state_service = ThermodynamicStateService(self._canonical_converter)
-        self._psychrometric_service = PsychrometricService()
+        self._psychrometric_service = PsychrometricService(LegacyPsychrometricModelAdapter())
         # --- 屬性與單位定義 ---
         self.properties = ["P", "T", "H", "S", "D", "Q", "V", "U"]
         self.prop_names = {
@@ -200,10 +205,7 @@ class ThermoCalculator:
         :return: 轉換為 SI 單位後的值 (CoolProp 標準)
         """
         if prop_code in self._canonical_converter.CORE_PROPERTIES - {"V"}:
-            try:
-                return self._canonical_converter.convert_to_si(prop_code, value, unit_code)
-            except ValueError:
-                pass
+            return self._canonical_converter.convert_to_si(prop_code, value, unit_code)
 
         if prop_code == 'V': # 特殊處理比容 (Specific Volume) V
             # 註解：在 calculate_properties 函數中，V 會被轉換為密度 D，
@@ -243,10 +245,7 @@ class ThermoCalculator:
         """
         # 尋找並執行定義在 self.conversion_map 字典中的轉換函數
         if prop_code in self._canonical_converter.CORE_PROPERTIES - {"V"}:
-            try:
-                return self._canonical_converter.convert_from_si(prop_code, value_si, unit_code)
-            except ValueError:
-                pass
+            return self._canonical_converter.convert_from_si(prop_code, value_si, unit_code)
 
         if prop_code in self.conversion_map and unit_code in self.conversion_map[prop_code]["from_si"]:
             return self.conversion_map[prop_code]["from_si"][unit_code](value_si)
@@ -346,6 +345,11 @@ class ThermoCalculator:
             raise RuntimeError(f"在計算 '{fluid}' 的性質時發生錯誤: {e}") from e
 
     def _calculate_coolprop(self, fluid, known_props_si):
+        """Query the legacy Telegram path under the shared CoolProp lock."""
+        with _REFERENCE_STATE.calculation_scope(fluid):
+            return self._calculate_coolprop_unlocked(fluid, known_props_si)
+
+    def _calculate_coolprop_unlocked(self, fluid, known_props_si):
         # 提取 CoolProp 所需的前兩個 SI 輸入性質
         prop1, val1 = known_props_si[0]
         prop2, val2 = known_props_si[1]

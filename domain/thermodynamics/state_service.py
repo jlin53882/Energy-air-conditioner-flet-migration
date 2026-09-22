@@ -34,7 +34,8 @@ class ThermodynamicStateService:
     def is_fluid_valid(self, fluid_name: str) -> bool:
         """Return whether CoolProp recognizes a fluid identifier."""
         try:
-            CP.PropsSI("Tcrit", fluid_name)
+            with self.reference_state.calculation_scope(fluid_name):
+                CP.PropsSI("Tcrit", fluid_name)
         except ValueError:
             return False
         return True
@@ -48,6 +49,7 @@ class ThermodynamicStateService:
         fluid: str,
         known_props: Iterable[KnownProperty],
         is_ideal_gas: bool = False,
+        reference_state: str | None = None,
     ) -> dict[str, float | str]:
         """Calculate a state from at least two known properties.
 
@@ -85,7 +87,7 @@ class ThermodynamicStateService:
         try:
             if is_ideal_gas:
                 return self._calculate_ideal_gas(fluid, dict(known_si))
-            return self._calculate_coolprop(fluid, known_si)
+            return self._calculate_coolprop(fluid, known_si, reference_state)
         except Exception as exc:
             raise RuntimeError(f"在計算 '{fluid}' 的性質時發生錯誤: {exc}") from exc
 
@@ -93,21 +95,23 @@ class ThermodynamicStateService:
         self,
         fluid: str,
         known_props_si: list[tuple[str, float]],
+        reference_state: str | None = None,
     ) -> dict[str, float | str]:
-        """Calculate all configured properties through CoolProp."""
-        prop1, value1 = known_props_si[0]
-        prop2, value2 = known_props_si[1]
-        result: dict[str, float | str] = {}
-        for property_code in self.PROPERTIES:
-            if property_code == "V":
-                density = CP.PropsSI("D", prop1, value1, prop2, value2, fluid)
-                result[property_code] = 1.0 / density if density else float("inf")
-            else:
-                result[property_code] = CP.PropsSI(
-                    property_code, prop1, value1, prop2, value2, fluid
-                )
-        result["phase"] = CP.PhaseSI(prop1, value1, prop2, value2, fluid)
-        return result
+        """Calculate all configured properties in one synchronized transaction."""
+        with self.reference_state.calculation_scope(fluid, reference_state):
+            prop1, value1 = known_props_si[0]
+            prop2, value2 = known_props_si[1]
+            result: dict[str, float | str] = {}
+            for property_code in self.PROPERTIES:
+                if property_code == "V":
+                    density = CP.PropsSI("D", prop1, value1, prop2, value2, fluid)
+                    result[property_code] = 1.0 / density if density else float("inf")
+                else:
+                    result[property_code] = CP.PropsSI(
+                        property_code, prop1, value1, prop2, value2, fluid
+                    )
+            result["phase"] = CP.PhaseSI(prop1, value1, prop2, value2, fluid)
+            return result
 
     def _calculate_ideal_gas(
         self,

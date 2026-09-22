@@ -2,6 +2,9 @@
 # 職責：壓縮機相關計算
 
 import CoolProp.CoolProp as CP
+from domain.thermodynamics.reference_state import ReferenceStateService
+
+_REFERENCE_STATE = ReferenceStateService()
 from domain.hvac.basic import (
     calculate_compression_ratio_si,
     calculate_compressor_work_si,
@@ -207,6 +210,13 @@ def calculate_refrigeration_capacity(Vdot_displacement_rate, eta_vol_efficiency,
 
 
 def calculate_compressor_example(R,P1,T1,P2,T2,P0_dead,T0_dead,V1_dot,substance: str,ref_state_code: str):
+    """Calculate the legacy compressor example under shared state synchronization."""
+    with _REFERENCE_STATE.calculation_scope(substance, ref_state_code):
+        return _calculate_compressor_example_unlocked(
+            R, P1, T1, P2, T2, P0_dead, T0_dead, V1_dot, substance, ref_state_code
+        )
+
+def _calculate_compressor_example_unlocked(R,P1,T1,P2,T2,P0_dead,T0_dead,V1_dot,substance: str,ref_state_code: str):
     """
     計算壓縮機 例題內容
 
@@ -234,7 +244,6 @@ def calculate_compressor_example(R,P1,T1,P2,T2,P0_dead,T0_dead,V1_dot,substance:
 
     #state 1 (壓縮機入口狀態的熱力學性質計算)
     # H: 比焓 (Specific Enthalpy)
-    CP.set_reference_state(substance, ref_state_code)
     h1_j_kg=CP.PropsSI('H', 'P', P1, 'T', T1, substance)
     # S: 比熵 (Specific Entropy)
     s1_j_kgk=CP.PropsSI('S', 'P', P1, 'T', T1, substance)
