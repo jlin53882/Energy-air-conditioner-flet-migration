@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import flet_charts as fch
 from .base_analysis_module import BaseAnalysisModule
 from ..unit.thermo_draw.coolprop_utils import generate_thermo_diagram, safe_props, check_coolprop_fluid 
+from chart.state_point_parser import StatePointParser
 import traceback # 用於印出詳細錯誤
 
 class ThermoDiagramModule(BaseAnalysisModule):
@@ -12,6 +13,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
 
     def __init__(self, unit_converter, page, analyzer, state_calculator):
         super().__init__(unit_converter, page, analyzer=analyzer, state_calculator=state_calculator)
+        self.state_point_parser = StatePointParser()
         self._build_thermo_diagram_ui()
         self._setup_unit_sync() # (修改) 現在會呼叫我們覆寫的 _setup_unit_sync
 
@@ -283,18 +285,20 @@ class ThermoDiagramModule(BaseAnalysisModule):
                 P_val_str = self.all_entries["td_P"]["val"].value
                 T_unit = self.all_entries["td_T"]["unit"].value
                 P_unit = self.all_entries["td_P"]["unit"].value
-                T_vals_str_list = [v.strip() for v in T_val_str.split(',') if v.strip()]
-                P_vals_str_list = [v.strip() for v in P_val_str.split(',') if v.strip()]
-                if len(T_vals_str_list) != 2 or len(P_vals_str_list) != 2:
+                points = self.state_point_parser.parse(
+                    pressures=P_val_str,
+                    temperatures=T_val_str,
+                    pressure_unit=P_unit,
+                    temperature_unit=T_unit,
+                )
+                if len(points) != 2:
                     raise ValueError("壓縮機分析模式需要 T1, T2 (共 2 筆溫度) 和 P1, P2 (共 2 筆壓力)。")
-                T1_K = self.unit_converter.convert_to_si("T", float(T_vals_str_list[0]), T_unit)
-                T2_K = self.unit_converter.convert_to_si("T", float(T_vals_str_list[1]), T_unit)
-                P1_Pa = self.unit_converter.convert_to_si("P", float(P_vals_str_list[0]), P_unit)
-                P2_Pa = self.unit_converter.convert_to_si("P", float(P_vals_str_list[1]), P_unit)
+                T1_K, T2_K = points[0].temperature_k, points[1].temperature_k
+                P1_Pa, P2_Pa = points[0].pressure_pa, points[1].pressure_pa
 
                 s1_J_kgK = safe_props("S", "T", T1_K, "P", P1_Pa, fluid, ref_state)
                 if s1_J_kgK is None or s1_J_kgK != s1_J_kgK:
-                    raise ValueError(f"無法計算 s1 (T1={T_vals_str_list[0]}, P1={P_vals_str_list[0]})")
+                    raise ValueError(f"無法計算 s1 (T1={T_val_str}, P1={P_val_str})")
                 
                 state_points_si.append({
                     "input_type": "T-P", "T_K": T1_K, "P_Pa": P1_Pa,
