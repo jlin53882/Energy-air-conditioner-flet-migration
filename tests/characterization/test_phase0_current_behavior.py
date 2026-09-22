@@ -153,3 +153,25 @@ def test_characterization_results_are_finite_for_representative_inputs(
         [("P", 101.325, "kPa"), ("T", 25.0, "°C")],
     )
     assert all(math.isfinite(value) for key, value in result.items() if key != "phase")
+
+
+def test_reference_state_sequence_returns_to_original_values(
+    flet_thermo: ThermoStateCalculator,
+) -> None:
+    """Characterize CoolProp state mutation across sequential reference states."""
+    known_props = [("P", 101.325, "kPa"), ("T", 25.0, "°C")]
+    try:
+        flet_thermo.set_coolprop_ref_state("R134a", "ASHRAE")
+        ashrae_before = flet_thermo.calculate_properties("R134a", known_props)
+
+        flet_thermo.set_coolprop_ref_state("R134a", "IIR")
+        iir_result = flet_thermo.calculate_properties("R134a", known_props)
+
+        flet_thermo.set_coolprop_ref_state("R134a", "ASHRAE")
+        ashrae_after = flet_thermo.calculate_properties("R134a", known_props)
+    finally:
+        flet_thermo.set_coolprop_ref_state("R134a", "DEF")
+
+    assert iir_result["H"] != pytest.approx(ashrae_before["H"])
+    assert ashrae_after["H"] == pytest.approx(ashrae_before["H"])
+    assert ashrae_after["S"] == pytest.approx(ashrae_before["S"])
