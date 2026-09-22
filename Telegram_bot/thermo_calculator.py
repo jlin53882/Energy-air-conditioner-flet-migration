@@ -5,6 +5,7 @@ import CoolProp.CoolProp as CP
 from Flet_ui.PsychrometricChart import PsychrometricChart_01_ASHF_model as psy
 import math
 import numpy as np
+from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units.converter import CanonicalUnitConverter
 
 class ThermoCalculator:
@@ -13,6 +14,7 @@ class ThermoCalculator:
         初始化熱力學計算器，包含所有需要的常數、單位定義和轉換邏輯。
         """
         self._canonical_converter = CanonicalUnitConverter()
+        self._shared_state_service = ThermodynamicStateService(self._canonical_converter)
         # --- 屬性與單位定義 ---
         self.properties = ["P", "T", "H", "S", "D", "Q", "V", "U"]
         self.prop_names = {
@@ -177,21 +179,9 @@ class ThermoCalculator:
         }
 
     def is_fluid_valid(self, fluid_name: str) -> bool:
-        """
-        檢查給定的流體名稱在 CoolProp 資料庫中是否有效。
-        :param fluid_name: 要檢查的流體名稱，例如 "R32" 或 "Water"。
-        :return: 如果有效則回傳 True，否則回傳 False。
-        """
-        try:
-            # 我們嘗試獲取一個簡單的、絕對存在的屬性，例如臨界溫度 (Tcrit)。
-            # 如果 fluid_name 無效，CoolProp 會在這裡拋出一個 ValueError。
-            CP.PropsSI('Tcrit', fluid_name)
-            return True
-        except ValueError:
-            # 捕獲到錯誤，表示 CoolProp 不認識這個流體名稱。
-            return False
+        """Return whether the shared thermodynamic service recognizes a fluid."""
+        return self._shared_state_service.is_fluid_valid(fluid_name)
         
-    
     def _convert_to_si(self, prop_code, value, unit_code): 
         """
         將給定性質的值從指定單位轉換為 SI 單位。
@@ -297,6 +287,12 @@ class ThermoCalculator:
         
 
     def calculate_properties(self, fluid, known_props, is_ideal_gas=False):
+        """Calculate through the shared service, preserving legacy V behavior."""
+        if any(prop == "V" for prop, _, _ in known_props):
+            return self._calculate_legacy_properties(fluid, known_props, is_ideal_gas)
+        return self._shared_state_service.calculate_properties(fluid, known_props, is_ideal_gas)
+
+    def _calculate_legacy_properties(self, fluid, known_props, is_ideal_gas=False):
         """
         主計算函式，返回原始 SI 結果字典。
         負責輸入驗證、單位標準化、V/D 轉換，並分派給 CoolProp 或理想氣體計算。
