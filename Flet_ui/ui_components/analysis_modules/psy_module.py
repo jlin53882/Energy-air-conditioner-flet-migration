@@ -35,11 +35,13 @@ class PsyModule(BaseAnalysisModule):
         return {
             "濕空氣性質 (已知乾濕球)": {
                 "ui": self.ui_container,
-                "calc_func": self.calculate_psy
+                "calc_func": self.calculate_psy,
+                "calculation_mode": "psychrometric"
             },
             "濕空氣性質 (已知乾球與相對濕度)": {
                 "ui": self.ui_container,
-                "calc_func": self.calculate_psy
+                "calc_func": self.calculate_psy,
+                "calculation_mode": "psychrometric"
             }
         }
         

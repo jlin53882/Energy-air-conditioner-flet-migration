@@ -47,10 +47,13 @@ class AnalysisTab(ft.Column):
         
         for module in self.modules_to_load:
             definitions = module.get_analysis_definitions()
-            for name, definition in definitions.items():
-                # 儲存 UI 和計算函式
+            for index, (name, raw_definition) in enumerate(definitions.items()):
+                # Keep the display label for the existing dropdown contract, but
+                # attach stable metadata for control flow and future ID migration.
+                definition = dict(raw_definition)
+                definition.setdefault("calculation_mode", "standard")
+                definition["analysis_id"] = f"{module.__class__.__name__}.{index}"
                 self.analysis_map[name] = definition
-                # 收集所有 UI 控制項
                 all_ui_controls.append(definition["ui"])
         
         # --- 4. 動態建立下拉選單 ---
@@ -163,13 +166,13 @@ class AnalysisTab(ft.Column):
 
             # --- END NEW LOGIC ---
 
-            # --- 特定模組的特殊處理 (例如 PsyModule) ---
-            if selected_name.startswith("濕空氣性質"):
-                # 找到 PsyModule 實例並呼叫它的配置方法
+            # --- Module-specific capability is explicit metadata, not a label prefix. ---
+            selected_definition = self.analysis_map[selected_name]
+            if selected_definition["calculation_mode"] == "psychrometric":
                 for module in self.modules_to_load:
                     if isinstance(module, PsyModule):
                         module.configure_ui_for_mode(selected_name)
-                        break # 找到就停止
+                        break
                     
             # --- 重置結果區域 ---
             self.result_text.value = "請選擇分析項目並點擊執行..."
@@ -196,9 +199,8 @@ class AnalysisTab(ft.Column):
             # 3. 獲取輸出單位
             use_imperial = ("Imperial" in self.output_unit_toggle.selected)
             
-            # 4. 呼叫 *該功能* 自己的 calculate() 方法
-            # (我們需要處理 PsyModule 的特殊情況)
-            if selected_name.startswith("濕空氣性質"):
+            # 4. Invoke the declared calculation mode; labels never control dispatch.
+            if current_definition["calculation_mode"] == "psychrometric":
                 result_string = calc_func(use_imperial, mode_name=selected_name)
             else:
                 result_string = calc_func(use_imperial)
