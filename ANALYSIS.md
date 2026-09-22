@@ -251,14 +251,14 @@ workspace 備份目錄：`C:\Users\admin\workspace\Energy_air-conditioner_flet-m
 ### 驗證結果
 
 - `uv lock --check`: 通過
-- `uv run pytest -q`: `3 passed`
-- `uv run pytest --collect-only -q`: `3 tests collected`
+- `uv run pytest -q`: 初期基線 `3 passed`（歷史快照；收尾後已補測試，見第 14 節）
+- `uv run pytest --collect-only -q`: 初期基線 `3 tests collected`（歷史快照）
 - `uv run python -m compileall -q Flet_ui Telegram_bot run.py telegeram_chatid.py`: 通過
 - Flet 1.0 控件 smoke test：`PropertyTab` 與 `AnalysisTab` 成功建立，控制項數量分別為 11、7
 - `uv run` environment import：`flet 1.0.0`、`flet-charts 1.0.0`、`CoolProp 8.0.0` 成功
 - 舊 API 靜態掃描：`ft.ElevatedButton`、`ft.border.all`、`ft.border_radius.all`、`ft.padding.all/only`、`ft.alignment.*`、`flet.matplotlib_chart` 均為 0
 
-尚未進行真人桌面視窗操作驗收；目前完成的是 compile、import、控制項建構與測試層驗證。
+（本段為遷移中期歷史快照；真人 UI 驗收結果見第 13 節。）
 
 ## 13. Flet 1.0 大面積灰色區塊修復（2026-09-22）
 
@@ -299,4 +299,52 @@ uv run flet run --web --port 8550 run.py
 - 新增 TabBarView layout boundary assertion。
 - 新增 Flet 1.0 `theme_style` 參數 assertion。
 - 原始 bug 測試先得到 RED；修正後得到 GREEN。
-- 最終 `uv run pytest -q`: `5 passed`。
+- 中期修復後曾達到 `5 passed`；收尾補測試後最終結果見第 14 節。
+
+## 14. 收尾驗證、問題教訓與可重複規則（2026-09-22）
+
+### 14.1 本輪真正驗證的範圍
+
+- Flet UI 兩個正式頁面均以乾淨 Web runtime 實際啟動並截圖交叉比對原始 Flet 0.28.3 畫面。
+- `AnalysisTab` 的 16 個分析選項逐一切換並執行預設計算路徑；最終 `16/16` 完成，沒有未捕捉例外。
+- 熱力學性質頁的控制項建構、單位／狀態計算、CoolProp 流體驗證與結果容器均有測試。
+- 冷凍空調分析頁的 HVAC 基礎方程式、濕空氣兩條計算路徑、圖表計算路徑均有測試或 smoke coverage。
+- Telegram Bot 僅保留架構與 import／compile 驗證；需要真實 Telegram token 的外部連線未在本機執行，不能宣稱已完成真人 Bot 整合測試。
+
+### 14.2 維護者指出的問題與本次回應
+
+1. 「大面積灰色圖塊不一定是正常 placeholder」：建立原始／新版 screenshot baseline，確認是內容消失的 UI regression，不能只看 control tree。
+2. 「要自己測試 UI」：實際啟動 Flet Web、切換兩頁、檢查表單／分析結果區與 server HTTP 200；compile/import 不再作為 UI 完成的唯一證據。
+3. 「只保留 Flet，但不要誤刪 Bot」：移除 Tkinter UI 與 launcher 分支，Telegram Bot package 保留。
+4. 「Flet 升級前要看 Obsidian 文件」：本次先讀既有 Flet migration／API 對照文件，再進行 API 變更。
+5. 「所有頁面與功能要測試後才補測試」：先做兩頁 runtime 驗證與 16 選項 smoke，再補計算與頁面回歸測試。
+
+### 14.3 做得不好的地方（禁止重犯）
+
+- 早期只驗證 control 建構、pytest 與 compile，沒有立即做原始／新版畫面差異，因此錯誤 layout 一度被誤判為可接受灰色區域。
+- Flet 1.0 的 `Text` 參數只做了名稱替換，沒有逐一核對 enum 型別語意；`style` 與 `theme_style` 的差異直接造成畫面內容消失。
+- headless 測試物件沒有模擬 Flet control 的 page attachment 行為，先後暴露 `self.parent`、`control.page`、`chart.update()` 的 runtime 假設。
+- 初期測試數量過少，沒有涵蓋所有分析選項、CoolProp 查詢、Psychrometric 路徑與圖表計算。
+- 中期 `ANALYSIS.md` 曾保留「尚未真人驗收」及 `5 passed` 的舊結論；收尾已改成歷史快照並補上最終數字，避免報告自相矛盾。
+
+### 14.4 下次可直接重複使用的規則
+
+1. Major UI framework upgrade 前，先讀 migration 文件，再建立 baseline screenshot。
+2. UI 驗證必須三層並行：source/API、control tree、實際 runtime screenshot；三者不能互相取代。
+3. 看到大片均勻灰色區塊時，先和原始畫面比對；原始有內容而新版沒有，就列為 regression。
+4. Flet control 的 `.page` 在未掛載時可能拋 `RuntimeError`；初始化與 headless 測試路徑必須安全檢查 attachment。
+5. 分析 registry 新增或遷移後，逐一列舉所有選項，測試切換、可見性與預設計算，不只測第一個選項。
+6. 行為修復先做 bug-RED，再做修復-GREEN；測試應固定真正的 API 契約，而不是把錯誤畫面固定成基準。
+7. UI、計算核心、外部 Bot 分開驗證；沒有 token／外部服務時，明確標示未做 integration test，不夸大完成度。
+8. 收尾報告中的中期數字要標為歷史快照，最終測試數字只從最後一次工具輸出填入。
+
+### 14.5 最終工具證據
+
+- `uv lock --check`: 通過。
+- `uv run pytest -q`: `12 passed in 1.57s`.
+- 新增 coverage 測試檔：`tests/test_calculation_and_analysis_coverage.py`，7 tests；原有 Flet compatibility tests 5 tests。
+- `uv run python -m compileall -q Flet_ui Telegram_bot run.py telegeram_chatid.py`: 通過。
+- `uv pip check`: `All installed packages are compatible`。
+- `git diff --check`: 通過。
+- Flet runtime：HTTP 200；兩個頁面 screenshot 均顯示完整內容，無大面積灰色遮蔽。
+- 暫時診斷檔 `ui_probe_temp.py` 已刪除，沒有納入正式專案。

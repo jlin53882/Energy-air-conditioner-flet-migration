@@ -359,7 +359,14 @@ class ThermoDiagramModule(BaseAnalysisModule):
             )
 
             self.chart.figure = fig
-            self.chart.update()
+            # A headless calculation can produce a figure before the chart is
+            # attached to a page; only push a UI update when attachment exists.
+            try:
+                chart_page = self.chart.page
+            except RuntimeError:
+                chart_page = None
+            if chart_page:
+                self.chart.update()
 
             point_count = len(state_points_si)
             if point_count == 0:

@@ -17,6 +17,10 @@ class BaseAnalysisModule:
         :param kwargs: 其他服務, 例如 'analyzer' 或 'psy_calculator'
         """
         self.unit_converter = unit_converter
+        self.page = page
+        # Legacy handlers use ``parent`` as an attachment marker; keep it
+        # explicit because this service object is not itself an Flet Control.
+        self.parent = page
         
         # 儲存傳入的其他服務 (例如 self.analyzer)
         self.services = kwargs

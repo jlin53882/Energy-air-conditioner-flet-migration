@@ -69,7 +69,13 @@ class PsyModule(BaseAnalysisModule):
             self.all_entries["psy_twb"]["ui_row"].visible = False
             self.all_entries["psy_rh"]["ui_row"].visible = True
         
-        if self.ui_container.page:
+        # Flet raises RuntimeError when ``page`` is read before attachment;
+        # construction-time tests and headless callers legitimately hit that path.
+        try:
+            attached_page = self.ui_container.page
+        except RuntimeError:
+            attached_page = None
+        if attached_page:
             self.ui_container.update()
 
     def calculate_psy(self, use_imperial: bool, mode_name: str) -> str:
