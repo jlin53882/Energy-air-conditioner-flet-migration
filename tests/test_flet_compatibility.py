@@ -87,6 +87,27 @@ def test_flet_matplotlib_backend_survives_chart_helper_import() -> None:
     assert "module://flet_charts.matplotlib_backends.backend_flet_agg" in result.stdout
 
 
+def test_thermo_diagram_external_label_tracks_unit_selection() -> None:
+    """熱力圖輸入單位切換時，框外欄位標籤必須同步更新。
+
+回傳：
+    無。
+"""
+    module = ThermoDiagramModule(UnitConverter(), None, None, None)
+    entry = module.all_entries["td_P"]
+    entry["val"].value = "0.16"
+    entry["unit"].value = "kPa"
+    entry["unit"].on_select(SimpleNamespace(control=entry["unit"]))
+
+    assert entry["val"].value == "160"
+    assert entry["label_control"].value == "壓力 P (kPa)"
+
+    entry["unit"].value = "MPa"
+    entry["unit"].on_select(SimpleNamespace(control=entry["unit"]))
+    assert float(entry["val"].value) == pytest.approx(0.16)
+    assert entry["label_control"].value == "壓力 P (MPa)"
+
+
 def test_thermo_diagram_uses_consistent_pressure_units_and_refreshes_existing_chart(monkeypatch) -> None:
     """熱力圖輸入單位與座標設定一致，繪圖後刷新既有 chart control。
 
@@ -140,6 +161,55 @@ def test_flet_tabs_and_analysis_controls_construct() -> None:
     assert property_tab.scroll is None
     assert property_tab.controls[-1] is property_tab.action_bar
     assert property_tab.controls[0].scroll == ft.ScrollMode.AUTO
+
+
+def test_shared_analysis_input_labels_are_outside_field_borders() -> None:
+    """三個分析頁的欄位標籤獨立於輸入框，單位切換不改動欄位名稱。
+
+回傳：
+    無。
+"""
+    converter = UnitConverter()
+    analysis_tab = AnalysisTab(
+        unit_converter=converter,
+        page=DummyPage(),
+        analyzer=HVACAnalyzer(),
+        psy_calculator=PsychrometricCalculator(),
+        state_calculator=ThermoStateCalculator(converter),
+    )
+    modules = {type(module).__name__: module for module in analysis_tab.modules_to_load}
+    cases = {
+        "CompressorModule": ("cr_pe", "cr_pc"),
+        "EvaporatorModule": ("qe_h1", "qe_h2", "qe_m_dot"),
+        "CondenserModule": ("qc_h1", "qc_h2", "qc_m_dot"),
+    }
+
+    for module_name, entry_keys in cases.items():
+        for key in entry_keys:
+            entry = modules[module_name].all_entries[key]
+            input_row = entry["ui_row"]
+            assert entry["label_control"] in input_row.controls[0].controls
+            assert entry["val"] in input_row.controls[0].controls
+            assert entry["val"].label is None
+            assert entry["unit_label_control"] in input_row.controls[1].controls
+            assert entry["unit"] in input_row.controls[1].controls
+            assert entry["unit"].label is None
+
+    for module_name, key in (
+        ("CompressorModule", "cr_pe"),
+        ("EvaporatorModule", "qe_h1"),
+        ("CondenserModule", "qc_h1"),
+    ):
+        entry = modules[module_name].all_entries[key]
+        original_label = entry["label_control"].value
+        current_unit = entry["unit"].value
+        new_unit = next(
+            option.key for option in entry["unit"].options if option.key != current_unit
+        )
+        entry["unit"].value = new_unit
+        entry["unit"].on_select(SimpleNamespace(control=entry["unit"]))
+        assert entry["unit"].value == new_unit
+        assert entry["label_control"].value == original_label
 
 
 def test_property_dropdown_selection_refreshes_units_through_flet_event() -> None:

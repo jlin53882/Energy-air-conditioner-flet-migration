@@ -53,18 +53,26 @@ class BaseAnalysisModule:
 
     # --- 輔助函式：從舊 analysis_tab 搬移過來 ---
     
-    def create_input_row(self, key, label, default_val, prop_code, default_unit=None):
-        """建立一個帶單位的輸入行
+    def create_input_row(
+        self,
+        key: str,
+        label: str,
+        default_val: str | int | float,
+        prop_code: str,
+        default_unit: str | None = None,
+    ) -> dict[str, object]:
+        """建立單位輸入列，讓標籤與欄位外框分開呈現。
 
-參數：
-    key (未指定型別): 函數輸入值。
-    label (未指定型別): 函數輸入值。
-    default_val (未指定型別): 函數輸入值。
-    prop_code (未指定型別): 函數輸入值。
-    default_unit (未指定型別): 函數輸入值。
+        參數：
+            key: 此輸入值在模組中的識別鍵。
+            label: 數值欄位的說明文字。
+            default_val: 欄位初始值。
+            prop_code: 單位轉換器使用的性質代碼。
+            default_unit: 選用的初始單位；未提供時採用預設單位。
 
-回傳：
-    未指定型別：函數計算或處理後的結果。"""
+        回傳：
+            包含輸入欄位、單位選單、標籤與列控制項的字典。
+        """
         units = self.unit_converter.get_available_units(prop_code)
         
         if default_unit and default_unit in units:
@@ -76,29 +84,43 @@ class BaseAnalysisModule:
 
         self._last_units[key] = final_default_unit
 
+        label_control = ft.Text(label, size=14)
         val_tf = ft.TextField(
-            label=label, 
             value=str(default_val),
             keyboard_type=ft.KeyboardType.NUMBER,
             expand=True
         )
-        
+
+        unit_label_control = ft.Text("單位", size=12, color=ft.Colors.BLUE_GREY_600)
         unit_dd = ft.Dropdown(
-            label="單位", 
             value=final_default_unit,
             options=[ft.dropdown.Option(u) for u in units],
             width=120,
             disabled=(prop_code == "RH" or prop_code == "Q")
         )
-        
+
+        value_column = ft.Column(
+            controls=[label_control, val_tf],
+            spacing=4,
+            expand=True
+        )
+        unit_column = ft.Column(
+            controls=[unit_label_control, unit_dd],
+            spacing=4,
+            width=120
+        )
         input_row = ft.Row(
-            controls=[val_tf, unit_dd],
+            controls=[value_column, unit_column],
             alignment=ft.MainAxisAlignment.START
         )
-        
-        # 儲存到 *全域* 字典中
+
         self.all_entries[key] = {
-            "val": val_tf, "unit": unit_dd, "ui_row": input_row, "prop_code": prop_code
+            "val": val_tf,
+            "unit": unit_dd,
+            "ui_row": input_row,
+            "prop_code": prop_code,
+            "label_control": label_control,
+            "unit_label_control": unit_label_control,
         }
         return self.all_entries[key] # 返回字典
 

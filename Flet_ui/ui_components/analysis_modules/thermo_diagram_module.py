@@ -1,3 +1,4 @@
+from collections.abc import Callable
 import flet as ft
 import flet_charts as fch
 import matplotlib.pyplot as plt
@@ -496,13 +497,27 @@ class ThermoDiagramModule(BaseAnalysisModule):
     # ======================================================
     # (修正) 12a. 多數值單位同步處理器
     # ======================================================
-    def _create_multi_value_unit_sync_handler(self, unit_type, sync_group):
+    def _create_multi_value_unit_sync_handler(
+        self, unit_type: str, sync_group: list[str]
+    ) -> Callable[[ft.ControlEvent], None]:
+        """建立可轉換多筆輸入並同步更新框外單位標籤的事件處理器。
+
+        參數：
+            unit_type: 單位轉換器使用的性質代碼。
+            sync_group: 需要共用所選單位及更新標籤的輸入鍵。
+
+        回傳：
+            接收 Flet 控制項事件並更新輸入值、單位與標籤的回呼函式。
         """
-        (覆寫)
-        建立 on_change handler 的 factory function，支援
-        comma-separated values (例如 "-10, 50") 進行單位轉換。
-        """
-        def on_change_handler(e):
+        def on_change_handler(e: ft.ControlEvent) -> None:
+            """換算所選欄位的數值，並同步群組單位與框外標籤。
+
+            參數：
+                e: 含有觸發單位選單之控制項的 Flet 事件。
+
+            回傳：
+                無。
+            """
             # 1. 找到是哪個輸入框觸發了事件
             trigger_key = None
             for key, entry in self.all_entries.items():
@@ -562,7 +577,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
                 if key in self.all_entries:
                     # 更新標籤 (例如 "壓力 P (MPa)" -> "壓力 P (kPa)")
                     try:
-                        current_label = self.all_entries[key]["val"].label
+                        current_label = self.all_entries[key]["label_control"].value
                         
                         # 找到最後一個 '(', (例如 "壓力 P (MPa)")
                         base_label = current_label
@@ -571,7 +586,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
                             base_label = current_label[:paren_index].strip() # 得到 "壓力 P"
                             
                         # 重組標籤
-                        self.all_entries[key]["val"].label = f"{base_label} ({new_unit})"
+                        self.all_entries[key]["label_control"].value = f"{base_label} ({new_unit})"
                     except Exception as ex:
                         print(f"Failed to update label for {key}: {ex}")
                     

@@ -38,6 +38,8 @@ Route identity is data (`route.key`), independent of presentation text. Navigati
 
 A control wrapper owns presentation and field-local validation. Conversion remains the responsibility of the existing `UnitConverter` or a domain/application adapter, not a duplicated per-view formula.
 
+The shared analysis input-row builder renders the value label and unit label as separate text controls above their respective `TextField` and `Dropdown`. Do not put these labels inside the outlined controls: keeping labels outside the border prevents text and outline collisions across compressor, evaporator, condenser, and other analysis forms. Generic analysis labels describe the quantity and stay unchanged when units change; thermo-diagram labels intentionally include the unit and update with it. In all cases, the dropdown's selected value is the source of truth for the unit.
+
 ## View responsibilities and migration boundaries
 
 - The property workspace composes existing mode, fluid, reference-state, and property controls into configuration, known-condition, optional extensive-property, result, and action regions.
