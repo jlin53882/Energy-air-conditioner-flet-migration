@@ -29,7 +29,7 @@ class PropertyTab(ft.Column):
                  page: ft.Page,
                  query_service: PropertyQueryService,
                  workspace_state: WorkspaceState | None = None):
-        """建立熱力性質查詢介面，並連結單位轉換、結果格式化與查詢服務。
+        """建立查詢介面，並以外置欄名與預設隱藏的第三列維持欄位契約。
 
 參數：
     unit_converter: 負責輸入與輸出單位轉換的服務。
@@ -105,15 +105,21 @@ class PropertyTab(ft.Column):
         for i in range(3):
             # 性質名稱下拉選單
             prop_dd = ft.Dropdown(
-                label=f"性質 {i+1}",
+                label=None,
+                height=TOKENS.input_height,
                 value=self.prop_names_map[self.formatter.properties[i]], # 預設值, # 預設值
                 options=[ft.dropdown.Option(name) for name in self.prop_names_map.values()],
                 width=250, # 調整後的較寬度，確保顯示完整的性質名稱和代碼
             )
             # 數值輸入框，限制鍵盤輸入類型為數字
-            val_tf = ft.TextField(label="數值", expand=True, keyboard_type=ft.KeyboardType.NUMBER) 
+            val_tf = ft.TextField(
+                label=None,
+                expand=True,
+                height=TOKENS.input_height,
+                keyboard_type=ft.KeyboardType.NUMBER,
+            )
             # 單位下拉選單
-            unit_dd = ft.Dropdown(label="單位", width=120) 
+            unit_dd = ft.Dropdown(label=None, width=120, height=TOKENS.input_height)
             
             # 設置事件處理器 (使用閉包確保傳遞正確的索引 i)
             prop_dd.on_select = self.create_prop_change_handler(i)
@@ -166,7 +172,7 @@ class PropertyTab(ft.Column):
 
 
     def _build_workspace_controls(self) -> list[ft.Control]:
-        """將既有熱力性質查詢控制項排列為共用工程卡片。
+        """以響應式欄位排列已知性質，並隱藏尚未支援的第三條件入口。
 
 回傳：
     無。"""
@@ -183,13 +189,33 @@ class PropertyTab(ft.Column):
             )
             self.quantity_inputs.append(quantity)
             row["prop"].width = 190
-            condition_rows.append(ft.Row([row["prop"], quantity.control], spacing=TOKENS.spacing_md))
+            row["prop"].height = TOKENS.input_height
+            row["val"].height = TOKENS.input_height
+            row["unit"].height = TOKENS.input_height
+            property_column = ft.Column(
+                [
+                    ft.Text("性質", size=TOKENS.body, weight=ft.FontWeight.W_500),
+                    row["prop"],
+                ],
+                spacing=TOKENS.spacing_xs,
+                tight=True,
+            )
+            condition_rows.append(
+                ft.ResponsiveRow(
+                    [
+                        ft.Container(content=property_column, col={"xs": 12, "md": 4}),
+                        ft.Container(content=quantity.control, col={"xs": 12, "md": 8}),
+                    ],
+                    spacing=TOKENS.spacing_md,
+                    run_spacing=TOKENS.spacing_sm,
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                )
+            )
         self.input_rows[2]["prop"].visible = False
         self.input_rows[2]["val"].visible = False
         self.input_rows[2]["unit"].visible = False
-        self.add_condition_button = ft.TextButton(
-            "+ 新增條件", icon=ft.Icons.ADD, on_click=self._show_additional_condition
-        )
+        condition_rows[2].visible = False
+        self.condition_rows = condition_rows
         self.preset_buttons = ft.Row(
             [
                 ft.OutlinedButton(label, on_click=lambda _event, pair=pair: self._apply_property_preset(pair))
@@ -229,10 +255,13 @@ class PropertyTab(ft.Column):
             "已知條件（至少兩個）",
             ft.Column([
                 self.preset_buttons,
-                ft.Column(condition_rows, spacing=TOKENS.spacing_md),
-                self.add_condition_button,
-                ft.Text("目前求解只接受兩個獨立性質；第三列限制條件尚未支援，輸入後會明確拒絕。",
-                        size=TOKENS.caption, color=ft.Colors.BLUE_GREY_600),
+                ft.Column(self.condition_rows, spacing=TOKENS.spacing_md),
+                ft.Text(
+                    "目前狀態查詢只接受兩個獨立性質；混合物組成、流速或高程等第三條件尚未支援，"
+                    "因此暫不提供新增入口。",
+                    size=TOKENS.caption,
+                    color=ft.Colors.BLUE_GREY_600,
+                ),
             ], spacing=TOKENS.spacing_md),
         )
         extensive = EngineeringCard(
@@ -267,23 +296,6 @@ class PropertyTab(ft.Column):
             border=ft.Border.only(top=ft.BorderSide(1, TOKENS.border)),
         )
         return [scroll_area, self.action_bar]
-
-    def _show_additional_condition(self, _event: ft.ControlEvent | None) -> None:
-        """顯示額外條件列，避免使用者輸入後條件被靜默忽略。
-
-參數：
-    _event: Flet 點擊事件；此處不需讀取事件內容。
-
-回傳：
-    無。"""
-        row = self.input_rows[2]
-        for control in row.values():
-            control.visible = True
-        self.add_condition_button.visible = False
-        try:
-            self.update()
-        except RuntimeError:
-            pass
 
     def _apply_property_preset(self, property_codes: tuple[str, str]) -> None:
         """套用已知性質組合，並立即更新各列可用的單位選項。

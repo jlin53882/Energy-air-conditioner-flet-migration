@@ -43,7 +43,8 @@ The shared analysis input-row builder renders the value label and unit label as 
 ## View responsibilities and migration boundaries
 
 - The property workspace composes existing mode, fluid, reference-state, and property controls into configuration, known-condition, optional extensive-property, result, and action regions.
-- HVAC analysis calculations remain registered in the existing `analysis_modules` and are dispatched by `AnalysisTab`; the shell selects a route category and exposes only that category's real registered operations.
+- The generic state-query solver accepts two independent properties. Until third-condition constraints are implemented by the solver, hide the third input row and its add action; render each supported property selector and value/unit control on aligned responsive columns.
+- HVAC analysis calculations remain registered in the existing `analysis_modules` and are dispatched by `AnalysisTab`; the shell selects a route category and exposes only that category's real registered operations. The selected mode must be visually distinct, and psychrometric mode must also be stated in text.
 - Psychrometric calculation and chart generation stay in their existing adapters/modules.
 - Future `ThermoPropertiesView`, compressor/evaporator/condenser views, chart adapters, and state-point adapters may be extracted from legacy containers incrementally. Do not duplicate calculation behavior while doing so.
 

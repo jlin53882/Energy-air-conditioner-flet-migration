@@ -27,7 +27,7 @@ class AnalysisTab(ft.Column):
                  state_calculator: ThermoStateCalculator,
                  property_query_service: PropertyQueryService | None = None):
         
-        """建立既有分析模組，並組成分析分類與結果控制項。
+        """建立分析模組與分類控制項，並避免共用容器重複繪製。
 
 參數：
     unit_converter: 分析模組共用的單位轉換器。
@@ -64,6 +64,7 @@ class AnalysisTab(ft.Column):
         # --- 3. 建立 "名稱" -> "功能" 的全域映射 ---
         self.analysis_map = {}
         all_ui_controls = []
+        seen_ui_control_ids = set()
         
         for module in self.modules_to_load:
             definitions = module.get_analysis_definitions()
@@ -79,7 +80,10 @@ class AnalysisTab(ft.Column):
                 ):
                     raise ValueError(f"Duplicate analysis_id: {analysis_id}")
                 self.analysis_map[name] = definition
-                all_ui_controls.append(definition["ui"])
+                ui_control = definition["ui"]
+                if id(ui_control) not in seen_ui_control_ids:
+                    all_ui_controls.append(ui_control)
+                    seen_ui_control_ids.add(id(ui_control))
 
         # --- 4. 動態建立下拉選單 ---
         self.analysis_dd = ft.Dropdown(
@@ -112,6 +116,9 @@ class AnalysisTab(ft.Column):
             on_change=self.on_output_unit_change,
         )
 
+        self.analysis_mode_status = ft.Text(
+            "", color=ft.Colors.BLUE_700, visible=False, weight=ft.FontWeight.W_600
+        )
         self.result_text = ft.Text("請選擇分析項目並點擊執行...", font_family="Courier New", selectable=True, color=ft.Colors.GREY_600)
         self._has_calculated_result = False
         self.result_container = ft.Container(
@@ -157,10 +164,9 @@ class AnalysisTab(ft.Column):
         self.on_output_unit_change(None)
         self._configure_workspace_layout()
         self.set_category("compressor")
-        self.set_category("compressor")
 
     def set_category(self, category: str) -> None:
-        """切換至指定工程分類，並顯示該分類現有的分析選項。
+        """切換工程分類，並同步更新可用分析選項與選取狀態。
 
 參數：
     category: 既有分析模組使用的分類代碼。
@@ -199,7 +205,7 @@ class AnalysisTab(ft.Column):
         self.on_analysis_change(None)
 
     def _configure_workspace_layout(self) -> None:
-        """將既有分析控制項整理為分類選擇、共用操作與結果面板。
+        """排列分析模式、目前模式提示、輸入區與共用結果控制項。
 
 回傳：
     無。"""
@@ -213,6 +219,7 @@ class AnalysisTab(ft.Column):
             ft.Text("分析模式", theme_style=ft.TextThemeStyle.TITLE_MEDIUM,
                     weight=ft.FontWeight.W_600),
             self.module_nav,
+            self.analysis_mode_status,
             self.controls_stack,
             self.calc_button_container,
             self.result_header_row,
@@ -246,7 +253,7 @@ class AnalysisTab(ft.Column):
                 self.update()
 
     def on_analysis_change(self, e):
-            """依分析模組能力更新輸入區、共用操作按鈕與結果面板。
+            """切換唯一可見分析面板，並更新濕空氣模式的選取提示。
 
 參數：
     e: Flet 控制項變更事件；程式直接切換時可為 None。
@@ -272,6 +279,22 @@ class AnalysisTab(ft.Column):
 
             # 4. ...並 *只顯示* 它
             selected_ui.visible = True
+            is_psychrometric = selected_definition["calculation_mode"] == "psychrometric"
+            self.analysis_mode_status.visible = is_psychrometric
+            self.analysis_mode_status.value = (
+                f"目前模式：{selected_name}" if is_psychrometric else ""
+            )
+            if hasattr(self, "module_nav"):
+                for button, name in zip(self.module_nav.controls, self._active_analysis_names):
+                    is_selected = name == selected_name
+                    button.style = ft.ButtonStyle(
+                        color=ft.Colors.WHITE if is_selected else ft.Colors.BLUE_GREY_800,
+                        bgcolor=ft.Colors.BLUE_700 if is_selected else ft.Colors.WHITE,
+                        side=ft.BorderSide(
+                        1,
+                        ft.Colors.BLUE_700 if is_selected else ft.Colors.BLUE_GREY_300,
+                    ),
+                    )
 
             # --- 新邏輯結束 ---
 

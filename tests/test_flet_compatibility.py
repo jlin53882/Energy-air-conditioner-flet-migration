@@ -555,6 +555,60 @@ def test_navigation_routes_update_analysis_category_and_chart_choice() -> None:
     assert chart_module.diagram_dd.value == "T-s"
 
 
+def test_analysis_navigation_deduplicates_panels_and_identifies_selected_mode() -> None:
+    """確認跨頁後分析容器不重複，並清楚顯示濕空氣模式選取狀態。
+
+    回傳：
+        無。
+    """
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+    tab = shell.views["psychrometrics"]
+
+    for route in ("compressor", "psychrometrics", "evaporator", "condenser", "psychrometrics"):
+        shell.navigate(route)
+        controls = tab.controls_stack.controls
+        assert len(controls) == len({id(control) for control in controls})
+        assert sum(bool(control.visible) for control in controls) == 1
+
+    first_mode = tab._active_analysis_names[0]
+    second_mode = tab._active_analysis_names[1]
+    assert tab.analysis_mode_status.visible is True
+    assert first_mode in tab.analysis_mode_status.value
+    buttons = tab.module_nav.controls
+    assert buttons[0].style.bgcolor != buttons[1].style.bgcolor
+
+    tab.module_nav.controls[1].on_click(SimpleNamespace())
+    assert second_mode in tab.analysis_mode_status.value
+    assert tab.module_nav.controls[0].style.bgcolor != tab.module_nav.controls[1].style.bgcolor
+
+    shell.navigate("compressor")
+    assert tab.analysis_mode_status.visible is False
+
+
+def test_property_query_hides_unsupported_third_condition_and_aligns_controls() -> None:
+    """確認未支援的第三條件入口隱藏，且性質與數值欄控制項等高對齊。
+
+    回傳：
+        無。
+    """
+    converter = UnitConverter()
+    property_tab = PropertyTab(
+        unit_converter=converter,
+        formatter=PropertyFormatter(converter),
+        page=DummyPage(),
+        query_service=PropertyQueryService(ThermoStateCalculator(converter).state_service),
+    )
+
+    assert not hasattr(property_tab, "add_condition_button")
+    assert all(not control.visible for control in property_tab.input_rows[2].values())
+    assert property_tab.condition_rows[2].visible is False
+    for row in property_tab.input_rows:
+        assert row["prop"].label is None
+        assert row["prop"].height == row["val"].height == row["unit"].height
+
+
 def test_responsive_shell_collapses_sidebar_and_context_panel() -> None:
     """確認窄視窗會收合側邊導覽並隱藏選用情境面板。
 
