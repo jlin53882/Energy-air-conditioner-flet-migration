@@ -273,19 +273,20 @@ def test_property_dropdown_transitions_keep_default_units() -> None:
     assert property_tab._last_prop_units[1] == "m³/kg"
 
 
-def test_property_unit_dropdown_selection_converts_and_syncs_values() -> None:
-    """Property unit Dropdown 的 production selection event 必須換算並同步同 property rows。
+def test_property_unit_change_only_converts_selected_row() -> None:
+    """單位變更只換算被選取的列，其他同性質列保持原值與單位。
 
-回傳：
-    無。"""
-    page = DummyPage()
+    回傳：
+        無。
+    """
     converter = UnitConverter()
-    state_calculator = ThermoStateCalculator(converter)
+    state = WorkspaceState()
     property_tab = PropertyTab(
         unit_converter=converter,
         formatter=PropertyFormatter(converter),
-        page=page,
-        query_service=PropertyQueryService(state_calculator.state_service),
+        page=DummyPage(),
+        query_service=PropertyQueryService(ThermoStateCalculator(converter).state_service),
+        workspace_state=state,
     )
     first, second = property_tab.input_rows[:2]
     for row, value in ((first, "25"), (second, "20")):
@@ -293,15 +294,17 @@ def test_property_unit_dropdown_selection_converts_and_syncs_values() -> None:
         row["prop"].on_select(None)
         row["val"].value = value
         assert row["unit"].value == "°C"
-        assert row["unit"].on_select is not None
 
     first["unit"].value = "°F"
     first["unit"].on_select(None)
 
     assert float(first["val"].value) == pytest.approx(77.0)
-    assert float(second["val"].value) == pytest.approx(68.0)
-    assert first["unit"].value == second["unit"].value == "°F"
-    assert property_tab._last_prop_units[:2] == ["°F", "°F"]
+    assert first["unit"].value == "°F"
+    assert second["val"].value == "20"
+    assert second["unit"].value == "°C"
+    assert property_tab._last_prop_units[:2] == ["°F", "°C"]
+    assert state.input_units["condition_0_T"] == "°F"
+    assert state.input_units["condition_1_T"] == "°C"
 
 
 def test_property_pressure_unit_dropdown_converts_kpa_to_bar() -> None:
@@ -693,10 +696,12 @@ def test_global_output_unit_switch_renders_new_metrics_without_mutating_inputs(m
     assert property_tab.raw_output.value
 
     property_tab.input_rows[0]["val"].value = "-1"
+    property_tab.input_rows[0]["val"].on_change(SimpleNamespace(control=property_tab.input_rows[0]["val"]))
     property_tab.set_output_unit_system("SI")
     assert len(query_calls) == 1
-    assert property_tab.result_panel.status == "success"
-    assert property_tab.result_panel.metrics["Pressure"].endswith("kPa")
+    assert property_tab.result_panel.status == "warning"
+    assert property_tab.result_panel.metrics == {}
+    assert property_tab._last_si_results is None
     assert property_tab.input_rows[0]["val"].value == "-1"
 
     property_tab.input_rows[0]["val"].value = "1000"
@@ -848,3 +853,433 @@ def test_launcher_uses_flet_only_entrypoint() -> None:
     assert "start_tkinter_gui" not in source
     assert "Tkinter" not in source
     assert not (launcher.parent / "Tkinter GUI").exists()
+
+
+def _build_property_tab_with_fake_query(monkeypatch: pytest.MonkeyPatch) -> tuple[PropertyTab, list[object]]:
+    """建立隔離查詢服務的 PropertyTab，並回傳呼叫紀錄。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        PropertyTab 與查詢請求紀錄。
+    """
+    converter = UnitConverter()
+    service = PropertyQueryService(ThermoStateCalculator(converter).state_service)
+    monkeypatch.setattr(service, "is_fluid_valid", lambda _fluid: True)
+    monkeypatch.setattr(service, "set_reference_state", lambda *_args: None)
+    calls: list[object] = []
+
+    def query(request: object) -> dict[str, object]:
+        """回傳固定 SI 性質，供 UI 結果狀態測試使用。
+
+        參數：
+            request: PropertyQueryService 收到的計算請求。
+
+        回傳：
+            完整的假設 SI 性質結果。
+        """
+        calls.append(request)
+        return {
+            "P": 1_000_000.0, "T": 298.15, "H": 300_000.0,
+            "S": 1_000.0, "D": 10.0, "V": 0.1, "U": 250_000.0,
+            "Q": 0.88, "phase": "gas",
+        }
+
+    monkeypatch.setattr(service, "query", query)
+    tab = PropertyTab(
+        unit_converter=converter,
+        formatter=PropertyFormatter(converter),
+        page=DummyPage(),
+        query_service=service,
+    )
+    tab.update = lambda: None
+    tab.show_error = lambda _message: None
+    tab.input_rows[0]["val"].value = "1000"
+    tab.input_rows[1]["val"].value = "25"
+    return tab, calls
+
+
+def _calculate_property_tab(tab: PropertyTab) -> None:
+    """執行一次測試用狀態查詢。
+
+    參數：
+        tab: 已設定兩個有效性質輸入的 PropertyTab。
+
+    回傳：
+        無。
+    """
+    tab.perform_calculation(None)
+    assert tab.result_panel.status == "success"
+
+
+def test_property_result_becomes_stale_after_numeric_input_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    """數值輸入改變後清除舊結果，切換輸出單位也不會恢復舊成功狀態。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, calls = _build_property_tab_with_fake_query(monkeypatch)
+    _calculate_property_tab(tab)
+
+    tab.input_rows[0]["val"].value = "2000"
+    tab.input_rows[0]["val"].on_change(SimpleNamespace(control=tab.input_rows[0]["val"]))
+    assert tab.result_panel.status != "success"
+    assert tab._has_calculated_result is False
+    assert tab._last_si_results is None
+    assert tab._last_result_metadata == {}
+    assert tab.result_panel.metrics == {}
+    assert tab.result_panel.metadata == {}
+    assert tab.result_panel.raw_output == ""
+
+    tab.set_output_unit_system("Imperial")
+    assert tab.result_panel.status != "success"
+    assert len(calls) == 1
+
+
+def test_property_result_becomes_stale_after_fluid_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    """流體改變後不得保留前一流體計算成功的結果。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, _calls = _build_property_tab_with_fake_query(monkeypatch)
+    _calculate_property_tab(tab)
+    tab.fluid_tf.value = "R410A"
+    tab.fluid_tf.on_change(SimpleNamespace(control=tab.fluid_tf))
+    assert tab.result_panel.status != "success"
+    assert tab._last_si_results is None
+
+
+def test_property_result_becomes_stale_after_reference_state_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    """參考狀態改變後使舊結果失效，避免誤認為新政策的計算結果。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, _calls = _build_property_tab_with_fake_query(monkeypatch)
+    _calculate_property_tab(tab)
+    tab.ref_state_dd.value = "NBP"
+    tab.ref_state_dd.on_select(SimpleNamespace(control=tab.ref_state_dd))
+    assert tab.result_panel.status != "success"
+    assert tab._last_si_results is None
+
+
+def test_output_unit_change_reformats_unchanged_cached_result_without_requery(monkeypatch: pytest.MonkeyPatch) -> None:
+    """未改輸入時切換輸出系統重繪快取結果，不再次呼叫查詢服務。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, calls = _build_property_tab_with_fake_query(monkeypatch)
+    _calculate_property_tab(tab)
+    tab.set_output_unit_system("Imperial")
+    assert tab.result_panel.status == "success"
+    assert tab.result_panel.metrics["Pressure"].endswith("psia")
+    assert "Btu/lbm" in tab.raw_output.value
+    assert len(calls) == 1
+
+
+def test_extensive_toggle_off_does_not_use_hidden_mass(monkeypatch: pytest.MonkeyPatch) -> None:
+    """廣延性質選項關閉後，即使隱藏質量欄仍有值也不再計算廣延量。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, calls = _build_property_tab_with_fake_query(monkeypatch)
+    tab.extensive_toggle.value = True
+    tab.extensive_toggle.on_change(SimpleNamespace(control=tab.extensive_toggle))
+    tab.mass_tf.value = "10"
+    _calculate_property_tab(tab)
+    assert "總焓 (Total Enthalpy)" in tab.raw_output.value
+
+    tab.extensive_toggle.value = False
+    tab.extensive_toggle.on_change(SimpleNamespace(control=tab.extensive_toggle))
+    tab.perform_calculation(None)
+
+    assert tab.result_panel.status == "success"
+    assert "廣延性質 (Extensive Properties)" not in tab.raw_output.value
+    assert len(calls) == 2
+
+
+def test_extensive_result_survives_output_unit_rerender(monkeypatch: pytest.MonkeyPatch) -> None:
+    """輸出單位切換保留上次成功快照中的廣延性質並換成英制單位。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, calls = _build_property_tab_with_fake_query(monkeypatch)
+    tab.extensive_toggle.value = True
+    tab.extensive_toggle.on_change(SimpleNamespace(control=tab.extensive_toggle))
+    tab.mass_tf.value = "10"
+    _calculate_property_tab(tab)
+    tab.set_output_unit_system("Imperial")
+
+    assert "廣延性質 (Extensive Properties)" in tab.raw_output.value
+    assert "lbm" in tab.raw_output.value
+    assert "Btu" in tab.raw_output.value
+    assert len(calls) == 1
+
+
+def test_workspace_state_remembers_unit_per_row() -> None:
+    """相同性質在不同條件列可保存不同的獨立輸入單位。
+
+    回傳：
+        無。
+    """
+    state = WorkspaceState()
+    state.set_input_unit("condition_0_T", "°F")
+    state.set_input_unit("condition_1_T", "°C")
+    assert state.input_units == {"condition_0_T": "°F", "condition_1_T": "°C"}
+
+
+def test_property_unit_lock_is_released_after_conversion_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """轉換器拋出例外後釋放單位更新鎖，後續單位事件仍可執行。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    converter = UnitConverter()
+    tab = PropertyTab(
+        unit_converter=converter,
+        formatter=PropertyFormatter(converter),
+        page=DummyPage(),
+        query_service=PropertyQueryService(ThermoStateCalculator(converter).state_service),
+    )
+    row = tab.input_rows[0]
+    row["prop"].value = tab.prop_names_map["T"]
+    row["prop"].on_select(None)
+    row["val"].value = "25"
+    original_convert = converter.convert_to_si
+    attempts: list[tuple[object, ...]] = []
+
+    def fail_once(*args: object) -> float:
+        """第一次呼叫時注入轉換錯誤，之後委派原轉換器。
+
+        參數：
+            args: 原始轉換器收到的位置參數。
+
+        回傳：
+            原始轉換器的標準 SI 值。
+        """
+        attempts.append(args)
+        if len(attempts) == 1:
+            raise RuntimeError("injected conversion failure")
+        return original_convert(*args)
+
+    monkeypatch.setattr(converter, "convert_to_si", fail_once)
+    row["unit"].value = "°F"
+    with pytest.raises(RuntimeError, match="injected conversion failure"):
+        row["unit"].on_select(SimpleNamespace(control=row["unit"]))
+    assert tab._is_updating_units is False
+
+    row["unit"].value = "°F"
+    row["unit"].on_select(SimpleNamespace(control=row["unit"]))
+    assert tab._is_updating_units is False
+    assert float(row["val"].value) == pytest.approx(77.0)
+
+
+def test_property_reset_restores_optional_ui_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """重設清除結果與錯誤，並將可選區塊還原為一致的初始狀態。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, _calls = _build_property_tab_with_fake_query(monkeypatch)
+    tab.input_rows[2]["prop"].visible = True
+    tab.input_rows[2]["val"].visible = True
+    tab.input_rows[2]["unit"].visible = True
+    tab.condition_rows[2].visible = True
+    tab.extensive_toggle.value = True
+    tab._toggle_extensive(SimpleNamespace(control=tab.extensive_toggle))
+    tab.mass_tf.value = "10"
+    _calculate_property_tab(tab)
+    tab._toggle_raw_output(None)
+    tab.quantity_inputs[0].set_error("欄位錯誤")
+    tab.set_output_unit_system("Imperial")
+    tab.result_panel.set_error("測試錯誤")
+    tab.fluid_tf.value = "R410A"
+    tab.ref_state_dd.value = "NBP"
+
+    tab._reset_inputs(None)
+
+    assert all(row["val"].value == "" for row in tab.input_rows)
+    assert all(not control.visible for control in tab.input_rows[2].values())
+    assert tab.condition_rows[2].visible is False
+    assert tab.extensive_toggle.value is False
+    assert tab.extensive_section.visible is False
+    assert tab.raw_output.visible is False
+    assert tab.details_button.text == "查看詳細結果"
+    assert tab.result_panel.status == "empty"
+    assert tab.result_panel.metrics == {}
+    assert tab.result_panel.metadata == {}
+    assert tab.result_panel.raw_output == ""
+    assert tab.raw_output.value == "點擊 '執行計算' 查看結果..."
+    assert tab.mass_tf.value == ""
+    assert tab.mass_tf.error_text is None
+    assert tab._has_calculated_result is False
+    assert tab._last_si_results is None
+    assert tab._last_total_mass_kg is None
+    assert tab._last_result_metadata == {}
+    assert tab.fluid_tf.value == "R410A"
+    assert tab.ref_state_dd.value == "NBP"
+    assert tab.output_unit_system == "Imperial"
+    assert tab.input_rows[0]["val"].error_text is None
+    assert tab.quantity_inputs[0].error_control.visible is False
+
+
+def test_failed_recalculation_clears_previous_result_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """重新計算失敗時清除前一次成功結果的所有面板快照。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, _calls = _build_property_tab_with_fake_query(monkeypatch)
+    _calculate_property_tab(tab)
+    assert tab.result_panel.raw_output
+
+    def fail_query(_request: object) -> dict[str, object]:
+        """模擬查詢服務在重新計算時失敗。
+
+        參數：
+            _request: 查詢服務收到的計算請求。
+
+        回傳：
+            不會回傳；此函式會模擬領域查詢錯誤。
+        """
+        raise RuntimeError("injected query failure")
+
+    monkeypatch.setattr(tab.query_service, "query", fail_query)
+    tab.perform_calculation(None)
+
+    assert tab.result_panel.status == "error"
+    assert tab.result_panel.metrics == {}
+    assert tab.result_panel.metadata == {}
+    assert tab.result_panel.raw_output == ""
+    assert tab._has_calculated_result is False
+    assert tab._last_si_results is None
+    assert tab._last_total_mass_kg is None
+    assert tab._last_result_metadata == {}
+
+
+@pytest.mark.parametrize(
+    "semantic_change",
+    ("property", "mode", "ideal_gas", "third_condition", "mass", "extensive"),
+)
+
+def test_all_semantic_controls_invalidate_cached_property_result(
+    monkeypatch: pytest.MonkeyPatch, semantic_change: str
+) -> None:
+    """各計算語意控制改變後，舊結果均不得保留為目前輸入的成功結果。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+        semantic_change: 要模擬的語意輸入控制類型。
+
+    回傳：
+        無。
+    """
+    tab, _calls = _build_property_tab_with_fake_query(monkeypatch)
+    _calculate_property_tab(tab)
+
+    if semantic_change == "property":
+        row = tab.input_rows[0]
+        row["prop"].value = tab.prop_names_map["H"]
+        row["prop"].on_select(SimpleNamespace(control=row["prop"]))
+    elif semantic_change == "mode":
+        tab.mode_dd.value = "Water (水/水蒸氣)"
+        tab.mode_dd.on_select(SimpleNamespace(control=tab.mode_dd))
+    elif semantic_change == "ideal_gas":
+        tab.ideal_gas_cb.value = True
+        tab.ideal_gas_cb.on_change(SimpleNamespace(control=tab.ideal_gas_cb))
+    elif semantic_change == "third_condition":
+        tab.input_rows[2]["val"].value = "1"
+        tab.input_rows[2]["val"].on_change(
+            SimpleNamespace(control=tab.input_rows[2]["val"])
+        )
+    elif semantic_change == "mass":
+        tab.mass_tf.value = "10"
+        tab.mass_tf.on_change(SimpleNamespace(control=tab.mass_tf))
+    elif semantic_change == "extensive":
+        tab.extensive_toggle.value = True
+        tab.extensive_toggle.on_change(SimpleNamespace(control=tab.extensive_toggle))
+
+    assert tab.result_panel.status == "warning"
+    assert tab._last_si_results is None
+
+
+def test_property_unit_representation_change_preserves_calculated_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    """輸入單位切換後保持物理量不變，不清除結果或重複查詢。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, calls = _build_property_tab_with_fake_query(monkeypatch)
+    _calculate_property_tab(tab)
+    row = tab.input_rows[0]
+    assert row["unit"].value == "kPa"
+
+    row["unit"].value = "MPa"
+    row["unit"].on_select(SimpleNamespace(control=row["unit"]))
+
+    assert float(row["val"].value) == pytest.approx(1.0)
+    assert row["unit"].value == "MPa"
+    assert tab.result_panel.status == "success"
+    assert len(calls) == 1
+
+
+def test_mass_unit_representation_change_preserves_extensive_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """質量顯示單位換算保留標準質量快照，並可隨輸出系統重新格式化。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, calls = _build_property_tab_with_fake_query(monkeypatch)
+    tab.extensive_toggle.value = True
+    tab.extensive_toggle.on_change(SimpleNamespace(control=tab.extensive_toggle))
+    tab.mass_tf.value = "10"
+    _calculate_property_tab(tab)
+
+    tab.mass_unit_dd.value = "lbm"
+    tab.mass_unit_dd.on_select(SimpleNamespace(control=tab.mass_unit_dd))
+    assert float(tab.mass_tf.value) == pytest.approx(22.0462, rel=1e-5)
+    assert tab.result_panel.status == "success"
+    assert tab._last_total_mass_kg == pytest.approx(10.0)
+
+    tab.set_output_unit_system("Imperial")
+    assert "總質量 (Mass): 22.0462 lbm" in tab.raw_output.value
+    assert "Btu" in tab.raw_output.value
+    assert len(calls) == 1

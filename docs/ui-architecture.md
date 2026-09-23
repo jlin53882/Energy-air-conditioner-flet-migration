@@ -1,89 +1,95 @@
-# HVAC workspace UI architecture
+# HVAC 工作區 UI 架構
 
-## Purpose and truth boundary
+## 用途與事實界線
 
-This document is the intended UI architecture contract for the Flet engineering workspace. Executable code is the implementation truth; this document is the intended contract. Any difference between the two is architecture drift that should be identified and corrected, not resolved by silently treating either one as authoritative.
+本文記錄 Flet 工程工作區預期遵守的 UI 架構契約。可執行程式碼代表目前實際行為；本文記錄預期契約。兩者若不一致，即屬架構偏移，必須調查並修正，不可默默選擇其中一方當作正確答案。
 
-The current migration keeps thermodynamic and HVAC calculation services in their existing application/domain boundaries. A view may collect and validate presentation input, call an existing service through its adapter, and render the returned values. It must not implement thermodynamic equations.
+目前遷移保留既有熱力學與 HVAC 計算服務及其應用程式／領域邊界。畫面可以收集、驗證輸入，透過轉接器呼叫既有服務並呈現其回傳值，但不得在畫面層重寫熱力方程式。
 
-## Application shell
+## 應用程式外殼
 
-`Flet_ui/flet_app.py` is the composition root. It constructs existing services once and mounts `Flet_ui/ui/app_shell.py`.
+`Flet_ui/flet_app.py` 是組合根，負責建立既有服務，並掛載 `Flet_ui/ui/app_shell.py`。
 
-`AppShell` owns four regions:
+`AppShell` 負責四個區域：
 
-- **Top bar** — application identity and global output unit preference.
-- **Sidebar** — grouped route links addressed by stable route keys, never by translated labels.
-- **Workspace** — the selected view and its route heading.
-- **Context panel** — optional desktop context region. It must not invent calculation history; until a history repository is connected, it displays an explicit empty state and refrigerant shortcuts only.
+- **頂端列**：應用程式識別資訊與全域結果輸出單位偏好。
+- **側邊欄**：以穩定路由鍵值識別的分組導覽，不以翻譯後的顯示文字作為路由識別。
+- **工作區**：目前選取的畫面及其路由標題。
+- **情境面板**：桌面版選用區域。不得自行假造計算歷史；在歷史資料儲存介面尚未接通前，只能呈現明確的空狀態及冷媒捷徑。
 
-The shell keeps each unique view mounted in one stable `Stack` and changes visibility when routes change. This prevents expensive child controls (especially chart adapters) from being destroyed/recreated during navigation and avoids control lifecycle churn in Flet. Multiple route keys may deliberately map to the same legacy analysis adapter; the adapter changes its selected category without being reparented.
+外殼會將每個唯一畫面固定掛載於同一個 `Stack`，切換路由時只改變可見狀態。這可避免圖表等昂貴子控制項在導覽時被銷毀重建，並減少 Flet 控制項生命週期變動。多個路由鍵值可以刻意共用同一個舊分析轉接器；此時由轉接器切換分類，不得重複掛載或重新設定父容器。
 
-## Navigation contract
+## 導覽契約
 
-`Flet_ui/ui/navigation.py` defines semantic route identifiers and their display labels. Currently registered routes are home, thermodynamic state query, compressor, evaporator, condenser, psychrometrics, P-h chart, and T-s chart. Each analysis route maps to the existing analysis registry category. New routes must represent an implemented tool or be visibly marked unavailable; roadmap entries must not look executable.
+`Flet_ui/ui/navigation.py` 定義語意路由識別碼與顯示文字。目前註冊的路由包括首頁、熱力狀態查詢、壓縮機、蒸發器、冷凝器、濕空氣性質、P-h 圖及 T-s 圖。每個分析路由都對應既有分析註冊表中的分類。新增路由必須代表已實作工具，或明確標示為不可使用；規劃中的項目不得呈現得像可執行功能。
 
-Route identity is data (`route.key`), independent of presentation text. Navigation state belongs to `WorkspaceState`, not to labels or Flet selection indices.
+路由身分是資料（`route.key`），與顯示文字彼此獨立。導覽狀態由 `WorkspaceState` 保存，不得依賴標籤文字或 Flet 選取索引。
 
-## Design tokens and shared components
+## 設計權杖與共用元件
 
-`Flet_ui/ui/theme.py` centralizes spacing, radii, control sizes, width guidance, colors, and typography. New workspace views should use these tokens rather than defining local palettes and spacing values.
+`Flet_ui/ui/theme.py` 集中管理間距、圓角、控制項尺寸、寬度建議、顏色及字體。新增工作區畫面應重用這些設計權杖，不應在各畫面另行建立局部色盤或間距常數。
 
-`Flet_ui/ui/components/` currently provides:
+`Flet_ui/ui/components/` 目前提供：
 
-- `EngineeringCard` — shared surface and titled grouping.
-- `QuantityInput` — semantic value/unit grouping that can adopt existing controls while migrating a legacy form.
-- `ResultPanel` — explicit empty, loading, success, warning, and error states; metric cards only render values actually supplied by a calculator adapter.
-- `Sidebar` — sectioned, tooltip-bearing route controls.
+- `EngineeringCard`：共用的卡片底面與標題分組。
+- `QuantityInput`：語意上合併數值與單位的輸入元件，可在逐步遷移舊表單時沿用既有控制項。
+- `ResultPanel`：明確呈現空白、載入中、成功、警告與錯誤狀態；指標卡只呈現計算轉接器實際提供的數值。
+- `Sidebar`：帶有分組及工具提示的路由控制項。
 
-A control wrapper owns presentation and field-local validation. Conversion remains the responsibility of the existing `UnitConverter` or a domain/application adapter, not a duplicated per-view formula.
+輸入控制項包裝器負責畫面呈現及欄位層級驗證。單位換算由既有 `UnitConverter` 或領域／應用程式轉接器負責；畫面不得複製一套換算公式。
 
-The shared analysis input-row builder renders the value label and unit label as separate text controls above their respective `TextField` and `Dropdown`. Do not put these labels inside the outlined controls: keeping labels outside the border prevents text and outline collisions across compressor, evaporator, condenser, and other analysis forms. Generic analysis labels describe the quantity and stay unchanged when units change; thermo-diagram labels intentionally include the unit and update with it. In all cases, the dropdown's selected value is the source of truth for the unit.
+共用分析輸入列會將數值欄名及單位欄名分別顯示在 `TextField` 與 `Dropdown` 上方。不得把欄名塞進外框控制項，避免壓縮機、蒸發器、冷凝器及其他分析表單發生文字與外框碰撞。一般分析欄名描述量的意義，切換單位時保持不變；熱力圖欄名則刻意包含單位並隨單位更新。所有情況下，單位下拉選單的目前選取值才是該控制項單位的唯一來源。
 
-## View responsibilities and migration boundaries
+## 畫面職責與遷移界線
 
-- The property workspace composes existing mode, fluid, reference-state, and property controls into configuration, known-condition, optional extensive-property, result, and action regions.
-- The generic state-query solver accepts two independent properties. Until third-condition constraints are implemented by the solver, hide the third input row and its add action; render each supported property selector and value/unit control on aligned responsive columns.
-- HVAC analysis calculations remain registered in the existing `analysis_modules` and are dispatched by `AnalysisTab`; the shell selects a route category and exposes only that category's real registered operations. The selected mode must be visually distinct, and psychrometric mode must also be stated in text.
-- Psychrometric calculation and chart generation stay in their existing adapters/modules.
-- Future `ThermoPropertiesView`, compressor/evaporator/condenser views, chart adapters, and state-point adapters may be extracted from legacy containers incrementally. Do not duplicate calculation behavior while doing so.
+- 性質查詢工作區將既有的模式、流體、參考狀態及性質控制項組合成計算設定、已知條件、選用廣延性質、結果與操作區域。
+- 通用狀態查詢求解器接受兩個獨立性質。在求解器支援第三條件限制前，必須隱藏第三列輸入及新增入口；支援的性質選單和值／單位控制項應排列於對齊的響應式欄位。
+- HVAC 分析計算仍由既有 `analysis_modules` 註冊，並由 `AnalysisTab` 派送。外殼選擇路由分類，且只呈現該分類實際註冊的操作。已選取的模式必須有明顯的視覺狀態；濕空氣模式亦須以文字標明目前模式。
+- 濕空氣計算與圖表產生仍留在既有轉接器／模組。
+- 未來可逐步將 `ThermoPropertiesView`、壓縮機／蒸發器／冷凝器畫面、圖表轉接器及狀態點轉接器從舊容器中抽離。遷移期間不得複製既有計算行為。
 
-The active code still uses legacy `PropertyTab` and a shared `AnalysisTab` adapter for several routes. That is a migration boundary, not a target for putting new domain calculations into the views.
+目前程式仍使用舊版 `PropertyTab`，並由共用 `AnalysisTab` 轉接多個路由。這是遷移界線，不代表可以把新的領域計算加入畫面控制項。
 
-## State ownership
+## 狀態歸屬
 
-`WorkspaceState` holds the active semantic route, global output-unit preference, and a lightweight per-input-unit map. It must never serialize Flet controls.
+`WorkspaceState` 保存目前語意路由、全域結果輸出單位偏好，以及每個輸入欄位各自的單位對應表；不得序列化或保存 Flet 控制項。
 
-The current legacy property and analysis adapters still read/write some state through Flet controls. During further migration, move durable query inputs and result metadata into typed application state models, then bind controls to that state. Keep these concerns separate:
+舊版性質與分析轉接器目前仍會直接讀寫部分 Flet 控制項狀態。後續遷移應逐步將可持續保存的查詢輸入及結果中繼資料移至具型別的應用程式狀態模型，再由控制項繫結該狀態。以下責任必須分開：
 
-- presentation state: selected/visible controls and local validation;
-- navigation state: stable route key;
-- unit state: each input's selected unit and the global output preference;
-- thermodynamic state: canonical calculator result;
-- analysis state: inputs/results owned by an individual analysis.
+- **呈現狀態**：控制項的選取／可見狀態及欄位驗證。
+- **導覽狀態**：穩定的路由鍵值。
+- **單位狀態**：每個輸入列各自選取的單位，以及獨立的全域輸出偏好。
+- **熱力狀態**：以標準單位保存的計算結果。
+- **分析狀態**：由個別分析模組持有的輸入及結果。
 
-Changing the global output preference re-renders result values but does not overwrite each input's chosen unit.
+每一筆性質輸入單位都由其輸入列獨立擁有，`WorkspaceState.input_units` 使用 `condition_{row}_{property}` 鍵值（例如 `condition_0_T`）。改變一列的單位不得修改其他輸入列，即使兩列使用相同性質亦同。全域輸出偏好只影響結果呈現，不得覆寫輸入欄位選取的單位。
 
-## Responsive behavior
+## 響應式行為
 
-The shell has three width modes:
+工作區外殼具有三種寬度模式：
 
-- wide (about 1200 px and above): full sidebar, workspace, context panel;
-- medium (about 800–1200 px): compact icon rail and hidden context panel;
-- narrow (below about 800 px): full-width workspace with a toggleable overlay navigation drawer and no context panel.
+- **寬版**（約 1200 px 以上）：完整側邊欄、工作區與情境面板。
+- **中版**（約 800–1200 px）：精簡圖示導覽列並隱藏情境面板。
+- **窄版**（低於約 800 px）：工作區使用全寬、側邊導覽改為可切換的覆蓋式抽屜，且不顯示情境面板。
 
-Scroll ownership should be clear: the workspace does not scroll the whole shell; each calculation view owns its scrolling region. The property query keeps its bottom action bar outside its scrollable inputs/results so Reset/Calculate remain available while scrolling.
+捲動責任必須明確：工作區不得帶動整個外殼捲動；各計算畫面負責自己的捲動區域。性質查詢的底部操作列必須置於可捲動輸入／結果區域之外，讓使用者捲動時仍能操作「重設」及「執行計算」。
 
-## Validation and result contracts
+## 驗證與計算結果契約
 
-Validation belongs beside its field where possible; a global snackbar is supplementary, not the only signal. Calculation state uses explicit empty/loading/success/warning/error labels, icons, and text—not color alone. Developer exception details stay out of user-facing result text; domain validation errors may be shown when they are safe and actionable.
+驗證訊息應盡可能顯示在對應欄位旁；全域 Snackbar 只能作為輔助，不能是唯一錯誤訊號。計算狀態必須使用明確的空白、載入中、成功、警告或錯誤標示、圖示及文字，不得只依賴顏色。例外詳細資料不得直接顯示給使用者；領域驗證訊息則可在安全且可採取行動時呈現。
 
-Results are structured metrics plus metadata (fluid, engine, reference convention, input units, output system). Raw text is a secondary, opt-in detail view. Never synthesize values that the calculation did not return.
+結果由結構化指標及中繼資料組成，包括流體、引擎、參考慣例、輸入單位及輸出系統。原始文字只作為次要且由使用者選擇展開的詳細資料。不得合成計算器未回傳的數值。
 
-## Testing and maintenance
+計算結果只對應產生它的語意輸入快照。語意輸入包括流體、計算模式、性質種類、數值、參考狀態、理想氣體選項、廣延性質啟用狀態、質量及質量單位所代表的物理量。任何此類輸入改變後，必須使舊結果失效或明確標示為過期；目前畫面不得繼續宣稱舊結果代表目前輸入。現行實作採清除舊快取並顯示「輸入已變更」警告，要求使用者重新計算。
 
-Use behavioral tests for unit refresh, value reset/conversion, presets, route selection, result states, and unit-system rendering. Structural tests may verify the shell and reusable control contracts but do not replace runtime/interaction checks. New or changed functions need PEP 257 docstrings; changes to this contract or cross-file behavior update this document in the same change.
+表示方式改變不等於計算語意改變。全域輸出單位切換時，使用已保存的標準 SI 結果快照重新格式化；輸入值改用物理量相同的單位時，先將目前顯示值換算回標準 SI，再轉成新顯示單位。兩者都不得重跑查詢，也不得改寫其他輸入列的單位。結果快照必須同時保存廣延性質所需的標準質量；重新格式化時，須保留該次計算的所有結果類別，包括廣延性質。
 
-## Current extension points and roadmap
+廣延性質只在使用者明確啟用相應選項且提供有效質量後計算。隱藏欄位或舊質量值不得自行啟用廣延性質計算。重設會清除查詢數值、欄位錯誤、計算結果快照及可選區塊的呈現狀態，並恢復第三條件列隱藏、廣延性質關閉、原始結果隱藏及詳細結果按鈕的初始文字；流體、計算模式、參考狀態與全域輸出單位偏好則予以保留。
 
-The route registry supports additional thermodynamic, refrigeration, air-treatment, charts, tools, data, and settings sections. A future history implementation should depend on a `HistoryRepository` interface and store application data, not controls; persistent JSON/SQLite decisions are deferred. State-point/cycle workspace and superheat/subcooling/saturation tools are separate feature work unless the existing domain service already implements them.
+## 測試與維護
+
+應以行為測試驗證單位更新、輸入值重設／換算、預設組合、路由選取、結果狀態及單位系統呈現。結構測試可以檢查外殼與共用控制項契約，但不能取代實際互動或執行階段檢查。新增或修改的函式必須撰寫 PEP 257 docstring；若修改本契約或跨檔行為，須在同一變更中同步更新本文。
+
+## 目前擴充點與路線圖
+
+路由註冊表支援後續新增熱力學、冷凍空調、空氣處理、圖表、工具、資料及設定區域。未來歷史紀錄應依賴 `HistoryRepository` 介面並保存應用程式資料，而不是控制項；JSON／SQLite 持久化方式尚未決定。狀態點／循環工作區及過熱度／過冷度／飽和工具，除非既有領域服務已支援，否則都屬於獨立功能工作。

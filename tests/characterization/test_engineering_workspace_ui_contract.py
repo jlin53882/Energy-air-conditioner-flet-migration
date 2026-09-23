@@ -91,11 +91,12 @@ def test_global_unit_preference_is_separate_from_input_units() -> None:
     無。"""
     module = _module("Flet_ui.ui.state")
     state = module.WorkspaceState(output_unit_system="SI")
-    state.set_input_unit("suction_pressure", "psi")
+    state.set_input_unit("condition_0_P", "psia")
+    state.set_input_unit("condition_1_P", "kPa")
     state.set_output_unit_system("Imperial")
 
     assert state.output_unit_system == "Imperial"
-    assert state.input_units["suction_pressure"] == "psi"
+    assert state.input_units == {"condition_0_P": "psia", "condition_1_P": "kPa"}
 
 
 def test_relative_humidity_and_quality_keep_distinct_display_contracts() -> None:
