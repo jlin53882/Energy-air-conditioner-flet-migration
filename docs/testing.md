@@ -79,10 +79,10 @@ git diff --check
 Required verification 包含：
 
 - `uv lock --check` 與 `uv sync --locked`；
-- Ruff lint（目前維護的 `application`、`chart`、`infrastructure` 與 `run.py` 範圍）；
+- Ruff lint（目前維護的 `application`、`chart`、`infrastructure` 與 `run.py` 範圍）；此 coverage scope 應隨 legacy findings 清理逐步擴大，不得為讓 CI 通過而無說明地縮小既有 scope；
 - production source `compileall`；
 - `uv pip check`；
-- 針對觸發 revision 的 `git diff --check`；
+- revision whitespace：PR 檢查 `base...head` 的完整變更；push 檢查 `before..current`，新 ref 的 zero-SHA before 則逐一檢查其 commits（含 root commit）；手動執行檢查 `current^1..current`，root commit 則檢查 root tree；
 - 完整測試套件 `uv run pytest -q`。
 
 Workflow 是 executable verification truth；本文是 intended testing contract。兩者不一致視為 verification drift，應判斷並修正 workflow 或文件，不得讓差異靜默存在。

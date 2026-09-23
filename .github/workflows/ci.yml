@@ -54,7 +54,59 @@ jobs:
         run: uv pip check
 
       - name: Check revision whitespace
-        run: git diff --check HEAD^1 HEAD
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before || '' }}
+          CURRENT_SHA: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+        run: |
+          set -euo pipefail
+
+          case "$EVENT_NAME" in
+            pull_request)
+              if [[ -z "$PR_BASE_SHA" || -z "$PR_HEAD_SHA" ]]; then
+                printf 'PR base/head SHA is required\n' >&2
+                exit 2
+              fi
+              git cat-file -e "${PR_BASE_SHA}^{commit}"
+              git cat-file -e "${PR_HEAD_SHA}^{commit}"
+              git diff --check "${PR_BASE_SHA}...${PR_HEAD_SHA}"
+              ;;
+            push)
+              if [[ -z "$PUSH_BEFORE" ]]; then
+                printf 'Push before SHA is required\n' >&2
+                exit 2
+              fi
+              if [[ "$PUSH_BEFORE" =~ ^0+$ ]]; then
+                while IFS= read -r revision; do
+                  if git rev-parse --verify "${revision}^1" >/dev/null 2>&1; then
+                    git diff --check "${revision}^1" "$revision"
+                  else
+                    git diff-tree --check --root -r "$revision"
+                  fi
+                done < <(git rev-list --reverse "$CURRENT_SHA")
+              else
+                if ! git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null; then
+                  git fetch --no-tags origin "$PUSH_BEFORE"
+                fi
+                git cat-file -e "${PUSH_BEFORE}^{commit}"
+                git diff --check "${PUSH_BEFORE}..${CURRENT_SHA}"
+              fi
+              ;;
+            workflow_dispatch)
+              if git rev-parse --verify "${CURRENT_SHA}^1" >/dev/null 2>&1; then
+                git diff --check "${CURRENT_SHA}^1" "$CURRENT_SHA"
+              else
+                git diff-tree --check --root -r "$CURRENT_SHA"
+              fi
+              ;;
+            *)
+              printf 'Unsupported GitHub event: %s\n' "$EVENT_NAME" >&2
+              exit 2
+              ;;
+          esac
 
   tests:
     name: Tests
