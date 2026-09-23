@@ -22,12 +22,23 @@ from .analysis_modules.thermo_diagram_module import ThermoDiagramModule
 # from .analysis_modules.hvac_expansion_valve_module import ExpansionValveModule
 
 class AnalysisTab(ft.Column):
-     #新增state_calculator: ThermoStateCalculator  獲取 熱力學查表標準
     def __init__(self, unit_converter: UnitConverter, page: ft.Page, 
                  analyzer: HVACAnalyzer, psy_calculator: PsychrometricCalculator,
                  state_calculator: ThermoStateCalculator,
                  property_query_service: PropertyQueryService | None = None):
         
+        """建立分析模組與分類控制項，並避免共用容器重複繪製。
+
+參數：
+    unit_converter: 分析模組共用的單位轉換器。
+    page: Flet 應用程式頁面。
+    analyzer: HVAC 分析服務。
+    psy_calculator: 濕空氣計算服務。
+    state_calculator: 熱力狀態計算服務。
+    property_query_service: 選用的熱力性質查詢服務。
+
+回傳：
+    無。"""
         super().__init__(scroll=ft.ScrollMode.AUTO, expand=True)
         
         # --- 2. 實例化所有 "功能群組" 模組 ---
@@ -53,6 +64,7 @@ class AnalysisTab(ft.Column):
         # --- 3. 建立 "名稱" -> "功能" 的全域映射 ---
         self.analysis_map = {}
         all_ui_controls = []
+        seen_ui_control_ids = set()
         
         for module in self.modules_to_load:
             definitions = module.get_analysis_definitions()
@@ -68,7 +80,10 @@ class AnalysisTab(ft.Column):
                 ):
                     raise ValueError(f"Duplicate analysis_id: {analysis_id}")
                 self.analysis_map[name] = definition
-                all_ui_controls.append(definition["ui"])
+                ui_control = definition["ui"]
+                if id(ui_control) not in seen_ui_control_ids:
+                    all_ui_controls.append(ui_control)
+                    seen_ui_control_ids.add(id(ui_control))
 
         # --- 4. 動態建立下拉選單 ---
         self.analysis_dd = ft.Dropdown(
@@ -101,6 +116,9 @@ class AnalysisTab(ft.Column):
             on_change=self.on_output_unit_change,
         )
 
+        self.analysis_mode_status = ft.Text(
+            "", color=ft.Colors.BLUE_700, visible=False, weight=ft.FontWeight.W_600
+        )
         self.result_text = ft.Text("請選擇分析項目並點擊執行...", font_family="Courier New", selectable=True, color=ft.Colors.GREY_600)
         self._has_calculated_result = False
         self.result_container = ft.Container(
@@ -143,7 +161,70 @@ class AnalysisTab(ft.Column):
 
         # --- 8. 初始化第一個模組的 UI ---
         self.on_analysis_change(None) 
-        self.on_output_unit_change(None) # 初始化大氣壓力預設值
+        self.on_output_unit_change(None)
+        self._configure_workspace_layout()
+        self.set_category("compressor")
+
+    def set_category(self, category: str) -> None:
+        """切換工程分類，並同步更新可用分析選項與選取狀態。
+
+參數：
+    category: 既有分析模組使用的分類代碼。
+
+回傳：
+    無。"""
+        self.active_category = category
+        prefix = "thermodynamics" if category == "charts" else category
+        self._active_analysis_names = [
+            name for name, definition in self.analysis_map.items()
+            if definition["analysis_id"].startswith(prefix + ".")
+        ]
+        if not self._active_analysis_names:
+            raise KeyError(f"No registered analysis route: {category}")
+        self.analysis_dd.value = self._active_analysis_names[0]
+        self.module_nav.controls = [
+            ft.OutlinedButton(
+                name,
+                on_click=lambda _event, selected=name: self.select_analysis(selected),
+            )
+            for name in self._active_analysis_names
+        ]
+        self.on_analysis_change(None)
+
+    def select_analysis(self, name: str) -> None:
+        """在目前分析分類中選取一項已實作的計算。
+
+參數：
+    name: 既有分析註冊表中的計算名稱。
+
+回傳：
+    無。"""
+        if name not in self._active_analysis_names:
+            raise KeyError(f"Analysis is not part of {self.active_category}: {name}")
+        self.analysis_dd.value = name
+        self.on_analysis_change(None)
+
+    def _configure_workspace_layout(self) -> None:
+        """排列分析模式、目前模式提示、輸入區與共用結果控制項。
+
+回傳：
+    無。"""
+        self.module_nav = ft.Row(controls=[], spacing=8, wrap=True)
+        self.result_header_row = ft.Row([
+            ft.Text("分析結果", theme_style=ft.TextThemeStyle.TITLE_MEDIUM,
+                    weight=ft.FontWeight.W_600, expand=True),
+            self.output_unit_toggle,
+        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+        self.controls = [
+            ft.Text("分析模式", theme_style=ft.TextThemeStyle.TITLE_MEDIUM,
+                    weight=ft.FontWeight.W_600),
+            self.module_nav,
+            self.analysis_mode_status,
+            self.controls_stack,
+            self.calc_button_container,
+            self.result_header_row,
+            self.result_container,
+        ]
 
     def on_output_unit_change(self, e):
         """切換輸出單位時，通知 *所有* 模組更新大氣壓力預設值
@@ -172,10 +253,10 @@ class AnalysisTab(ft.Column):
                 self.update()
 
     def on_analysis_change(self, e):
-            """切換分析模組，並依功能能力顯示對應的共用操作按鈕。
+            """切換唯一可見分析面板，並更新濕空氣模式的選取提示。
 
 參數：
-    e (未指定型別): 函數輸入值。
+    e: Flet 控制項變更事件；程式直接切換時可為 None。
 
 回傳：
     無。"""
@@ -193,17 +274,37 @@ class AnalysisTab(ft.Column):
                 ui.visible = False
 
             # 3. 取得 *選中* 的 UI 容器...
-            selected_ui = self.analysis_map[selected_name]["ui"]
+            selected_definition = self.analysis_map[selected_name]
+            selected_ui = selected_definition["ui"]
 
             # 4. ...並 *只顯示* 它
             selected_ui.visible = True
+            is_psychrometric = selected_definition["calculation_mode"] == "psychrometric"
+            self.analysis_mode_status.visible = is_psychrometric
+            self.analysis_mode_status.value = (
+                f"目前模式：{selected_name}" if is_psychrometric else ""
+            )
+            if hasattr(self, "module_nav"):
+                for button, name in zip(self.module_nav.controls, self._active_analysis_names):
+                    is_selected = name == selected_name
+                    button.style = ft.ButtonStyle(
+                        color=ft.Colors.WHITE if is_selected else ft.Colors.BLUE_GREY_800,
+                        bgcolor=ft.Colors.BLUE_700 if is_selected else ft.Colors.WHITE,
+                        side=ft.BorderSide(
+                        1,
+                        ft.Colors.BLUE_700 if is_selected else ft.Colors.BLUE_GREY_300,
+                    ),
+                    )
 
             # --- 新邏輯結束 ---
 
             # --- 模組專屬能力由明確 metadata 表示，而不是由標籤前綴表示。 ---
-            selected_definition = self.analysis_map[selected_name]
             # 熱力圖有專屬繪圖操作，因此不顯示重複的共用執行按鈕。
             self.calc_button_container.visible = selected_definition.get("show_execute_button", True)
+            if hasattr(self, "result_header_row"):
+                show_result_panel = selected_definition.get("show_result_panel", True)
+                self.result_header_row.visible = show_result_panel
+                self.result_container.visible = show_result_panel
             if selected_definition["calculation_mode"] == "psychrometric":
                 for module in self.modules_to_load:
                     if isinstance(module, PsyModule):
@@ -267,6 +368,13 @@ class AnalysisTab(ft.Column):
             self.update()
 
     def show_error(self, message):
+        """在已掛載的 Flet 頁面中顯示全域 SnackBar 錯誤提示。
+
+參數：
+    message: 要向使用者顯示的錯誤摘要。
+
+回傳：
+    無。"""
         snack = ft.SnackBar(ft.Text(message), bgcolor=ft.Colors.ERROR)
         self.page.overlay.append(snack)
         snack.open = True

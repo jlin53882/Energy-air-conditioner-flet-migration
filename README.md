@@ -38,6 +38,10 @@ uv run python run.py
 
 Telegram bot 有自己的進入點與設定需求。不要讓 Flet 啟動器為了記錄或啟動而依賴 Telegram 設定。
 
+## 設計草稿隔離
+
+`sketches/` 僅供本機保存未正式採用的 UI 原型、比較圖與設計草稿，不屬於正式程式碼或文件。請勿將此資料夾加入 Git、commit、push 或上傳至 PR／其他遠端；需要參考時，請在本機工作區使用。正式 UI 行為以程式碼及 [`docs/ui-architecture.md`](docs/ui-architecture.md) 為準。
+
 ## 測試
 
 使用以下命令執行完整測試套件：
@@ -55,6 +59,7 @@ uv run pytest -q
 - [相容性邊界](docs/compatibility-boundaries.md)
 - [測試策略](docs/testing.md)
 - [維護指南](docs/maintenance.md)
+- [UI 架構與呈現契約](docs/ui-architecture.md)
 
 ## 已知的相容性邊界
 

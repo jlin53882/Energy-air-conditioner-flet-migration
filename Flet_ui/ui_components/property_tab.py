@@ -4,6 +4,10 @@
 
 """
 
+import logging
+from collections.abc import Callable
+from math import isfinite
+
 import flet as ft
 # PropertyTab 繼承自 ft.Column，使其可以直接作為 Flet UI 中的一個垂直佈局容器。
 # 導入新類別的 "合約" (interfaces)
@@ -12,26 +16,38 @@ from ..ui_components.unit.PropertyFormatter import PropertyFormatter
 from application.models import PropertyQueryRequest
 from application.property_queries import PropertyQueryService
 from domain.thermodynamics.fluid_policy import resolve_reference_state_policy
+from ..ui.components.engineering_card import EngineeringCard
+from ..ui.components.quantity_input import QuantityInput
+from ..ui.components.result_panel import ResultPanel
+from ..ui.theme import TOKENS
+from ..ui.state import WorkspaceState
 
 # PropertyTab 繼承自 ft.Column，使其可以直接作為 Flet UI 中的一個垂直佈局容器。
 class PropertyTab(ft.Column):
     def __init__(self, unit_converter: UnitConverter, 
                  formatter: PropertyFormatter, 
                  page: ft.Page,
-                 query_service: PropertyQueryService):
-        """
-        初始化 PropertyTab，設定 UI 組件和數據綁定。
+                 query_service: PropertyQueryService,
+                 workspace_state: WorkspaceState | None = None):
+        """建立查詢介面，並以外置欄名與預設隱藏的第三列維持欄位契約。
 
-        :param calculator: 核心計算邏輯實例 (ThermoCalculator)
-        :param page: Flet 頁面實例
-        """
+參數：
+    unit_converter: 負責輸入與輸出單位轉換的服務。
+    formatter: 將計算結果整理為使用者可讀內容的格式器。
+    page: Flet 應用程式頁面。
+    query_service: 執行熱力性質查詢並管理參考狀態的服務。
+    workspace_state: 選用的工作區狀態；未提供時建立預設狀態。
+
+回傳：
+    無。"""
         # 初始化 ft.Column 的屬性：啟用垂直滾動，並展開佔滿可用空間
-        super().__init__(scroll=ft.ScrollMode.AUTO, expand=True) 
-        
+        super().__init__(expand=True, spacing=0)
+
         # 分別儲存所需的服務
         self.unit_converter = unit_converter 
         self.formatter = formatter
         self.query_service = query_service
+        self.workspace_state = workspace_state or WorkspaceState()
         
         # 性質代碼到名稱的映射 (用於下拉選單顯示)
         # 格式為: {代碼: "名稱 (中文), 代碼"} (例如: 'P' -> 'Pressure (壓力), P')
@@ -42,6 +58,7 @@ class PropertyTab(ft.Column):
         }
         # 追蹤上次的單位，用於單位轉換時的比對和換算 (每行一個)
         self._last_prop_units = ["", "", ""] 
+        self._last_prop_codes = []
         # 防止單位同步換算時觸發無限循環的鎖定標記
         self._is_updating_units = False 
 
@@ -56,21 +73,34 @@ class PropertyTab(ft.Column):
         )
         self.fluid_tf = ft.TextField(label="物質名稱", value="R32", expand=True, on_change=self.on_fluid_change)
         # 理想氣體核取方塊 (僅在 Water 模式下可見)
-        self.ideal_gas_cb = ft.Checkbox(label="理想氣體計算", value=False, visible=False)
+        self.ideal_gas_cb = ft.Checkbox(
+            label="理想氣體計算", value=False, visible=False,
+            on_change=self._on_semantic_input_change,
+        )
 
         # --- 新增 1: 參考點區塊 (Reference State Block) ---
+        self.ref_state_descriptions = {
+            "ASHRAE": "常見 HVAC reference convention。",
+            "IIR": "International Institute of Refrigeration convention。",
+            "NBP": "Normal boiling point reference。",
+            "Default": "CoolProp default reference state。",
+        }
         self.ref_state_dd = ft.Dropdown(
-            label="參考點標準", 
-            value="ASHRAE (美國暖通空調學會標準)", 
+            label="Reference State",
+            value="ASHRAE",
             options=[
-                ft.dropdown.Option("Default (內建預設值)"),
-                ft.dropdown.Option("IIR (國際冷藏協會)"),
-                ft.dropdown.Option("ASHRAE (美國暖通空調學會標準)"), # 預設值
-                ft.dropdown.Option("NBP (正常沸點)"),
+                ft.dropdown.Option("Default", "Default"),
+                ft.dropdown.Option("IIR", "IIR"),
+                ft.dropdown.Option("ASHRAE", "ASHRAE"),
+                ft.dropdown.Option("NBP", "NBP"),
             ],
             on_select=self.on_ref_state_change,
-            expand=True, # 佔滿同行剩餘空間
-            width=250, # 調整寬度以容納長名稱
+            expand=True,
+        )
+        self.reference_state_helper = ft.Text(
+            self.ref_state_descriptions["ASHRAE"],
+            size=TOKENS.caption,
+            color=ft.Colors.BLUE_GREY_600,
         )
         
         # 2. 性質輸入區塊 (Property Input Block)
@@ -78,127 +108,64 @@ class PropertyTab(ft.Column):
         for i in range(3):
             # 性質名稱下拉選單
             prop_dd = ft.Dropdown(
-                label=f"性質 {i+1}",
+                label=None,
+                height=TOKENS.input_height,
                 value=self.prop_names_map[self.formatter.properties[i]], # 預設值, # 預設值
                 options=[ft.dropdown.Option(name) for name in self.prop_names_map.values()],
                 width=250, # 調整後的較寬度，確保顯示完整的性質名稱和代碼
             )
             # 數值輸入框，限制鍵盤輸入類型為數字
-            val_tf = ft.TextField(label="數值", expand=True, keyboard_type=ft.KeyboardType.NUMBER) 
+            val_tf = ft.TextField(
+                label=None,
+                expand=True,
+                height=TOKENS.input_height,
+                keyboard_type=ft.KeyboardType.NUMBER,
+                on_change=self._on_semantic_input_change,
+            )
             # 單位下拉選單
-            unit_dd = ft.Dropdown(label="單位", width=120) 
+            unit_dd = ft.Dropdown(label=None, width=120, height=TOKENS.input_height)
             
             # 設置事件處理器 (使用閉包確保傳遞正確的索引 i)
             prop_dd.on_select = self.create_prop_change_handler(i)
             unit_dd.on_select = self.create_unit_change_handler(i)
 
             self.input_rows.append({"prop": prop_dd, "val": val_tf, "unit": unit_dd})
+            self._last_prop_codes.append(self.get_prop_code(prop_dd.value))
             # 初始化時為單位選單載入選項和預設值
             self.update_units_menu(i, update_view=False)
             
         # 3. 廣延性質區塊 (Extensive Property Block)
         # 總質量輸入框
-        self.mass_tf = ft.TextField(label="總質量", expand=True, keyboard_type=ft.KeyboardType.NUMBER)
-        # 總質量單位下拉選單
-        self.mass_unit_dd = ft.Dropdown(label="單位", value="kg", options=[ft.dropdown.Option("kg"), ft.dropdown.Option("lbm")], width=100)
-
-        # 4. 計算按鈕 (Calculation Button)
-        self.calc_button = ft.Button(
-            content="執行計算",
-            on_click=self.perform_calculation, 
-            icon=ft.Icons.CALCULATE_OUTLINED, # 使用計算圖標
-            height=40,
-        ) 
-        
-        # 5. 結果顯示區 (Result Display Block)
-        # --- 新增 ---
-        # 5a. 輸出單位切換 (Output Unit Toggle)
-        self.output_unit_toggle = ft.SegmentedButton(
-            allow_empty_selection=False, # 不允許空選
-            segments=[
-                ft.Segment(value="SI", label=ft.Text("SI (公制)")),
-                ft.Segment(value="Imperial", label=ft.Text("Imperial (英制)")),
-            ],
-            selected=["SI"], # 預設選中 SI
-            on_change=self.on_output_unit_change,
+        self.mass_tf = ft.TextField(
+            label="總質量", expand=True, keyboard_type=ft.KeyboardType.NUMBER,
+            on_change=self._on_mass_input_change,
         )
-        # --- 新增結束 ---
+        # 總質量單位下拉選單
+        self.mass_unit_dd = ft.Dropdown(
+            label="單位", value="kg", options=[ft.dropdown.Option("kg"), ft.dropdown.Option("lbm")],
+            width=100, on_select=self._on_mass_unit_change,
+        )
+        self._last_mass_unit = self.mass_unit_dd.value
 
+        # 5. 結果顯示區 (Result Display Block)
+        self.output_unit_system = self.workspace_state.output_unit_system
 
         self.result_text = ft.Text(
-            "點擊 '執行計算' 查看結果...", 
-            font_family="Courier New", # 為了結果對齊，使用等寬字體
-            selectable=True, 
-            color=ft.Colors.GREY_600 # 初始提示文字使用灰色
+            "", selectable=True, visible=False, color=ft.Colors.GREY_600
         )
         self._has_calculated_result = False
-        self.result_container = ft.Container(
-            content=self.result_text,
-            # 結果區視覺優化：增加邊框和圓角
-            border=ft.Border.all(1, ft.Colors.BLUE_GREY_200),
-            border_radius=ft.BorderRadius.all(8),
-            padding=ft.Padding.all(15), # 內邊距
-            alignment=ft.Alignment.TOP_LEFT # 文字靠左上對齊
-        )
+        self._last_si_results: dict[str, object] | None = None
+        self._last_total_mass_kg: float | None = None
+        self._last_result_metadata: dict[str, str] = {}
+        self._last_input_summary = ""
+        self._last_formatted_output = ""
 
         # 初始化模式設定 (設定 fluid_tf 和 ideal_gas_cb 的初始狀態)
         self.on_mode_change_internal()
 
-        # 6. 結構化 UI 佈局 (將所有控制項組織到 ft.Column 中)
-        self.controls = [
-            # 模式和物質輸入 (並排佈局)
-            ft.Container(
-                content=ft.Row(controls=[self.mode_dd, self.fluid_tf, self.ideal_gas_cb], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                padding=ft.Padding.only(top=10, bottom=5)
-            ),
-            # --- 新增 3: 參考點下拉選單佈局 ---            
-            ft.Row(controls=[self.ref_state_dd], alignment=ft.MainAxisAlignment.START),
-            ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
-            
-            # 性質輸入區塊標題
-            ft.Text("熱力學性質輸入 (至少兩組)", theme_style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_600),
-            
-            # 性質輸入行 (垂直堆疊三行輸入 Row)
-            ft.Column(controls=[
-                ft.Row(controls=[row["prop"], row["val"], row["unit"]]) 
-                for row in self.input_rows
-            ], spacing=10), 
-
-            ft.Divider(height=1, color=ft.Colors.BLUE_GREY_100),
-            
-            # 廣延性質區塊標題
-            ft.Text("廣延性質 (可選)", theme_style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_600),
-            ft.Row(controls=[self.mass_tf, self.mass_unit_dd]),
-            
-            # 計算按鈕容器 (居中顯示按鈕)
-            ft.Container(
-                content=self.calc_button,
-                padding=ft.Padding.only(top=15, bottom=15),
-                alignment=ft.Alignment.CENTER
-            ),
-
-            
-            
-            # --- 修改 ---
-            # 結果區塊標題 和 單位切換
-            ft.Row(
-                controls=[
-                    ft.Text(
-                        "計算結果", 
-                        theme_style=ft.TextThemeStyle.TITLE_LARGE,
-                        weight=ft.FontWeight.W_900,     
-                        color=ft.Colors.BLUE_GREY_900,
-                        expand=True, # 讓標題佔用多餘空間
-                    ),
-                    self.output_unit_toggle, # 將切換按鈕放在標題旁邊
-                ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN, # 讓標題和按鈕左右對齊
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
-            # --- 修改結束 --
-            # 結果顯示容器
-            self.result_container
-        ]
+        self.controls = self._build_workspace_controls()
+        self.scroll = None
+        self.expand = True
         # --- 新增步驟：設定初始預設參考點 ---
         # 目的：確保程式啟動時，即使使用者沒有點擊下拉選單，參考點也已經是 ASHRAE。
         try:
@@ -215,9 +182,454 @@ class PropertyTab(ft.Column):
             # 這裡使用 print 或 logging，因為此時 UI 可能還未完全載入
             print(f"警告：初始化 CoolProp 參考點失敗 ({default_fluid} to {default_ref_state}): {e}")
 
-    # --- 邏輯方法維持不變，僅為保持完整性 ---
 
-    def get_prop_code(self, formatted_name):
+    def _build_workspace_controls(self) -> list[ft.Control]:
+        """以響應式欄位排列已知性質，並隱藏尚未支援的第三條件入口。
+
+回傳：
+    無。"""
+        self.quantity_inputs = []
+        condition_rows = []
+        for index, row in enumerate(self.input_rows):
+            prop_code = self.get_prop_code(row["prop"].value) or "P"
+            row_label = self.prop_names_map[prop_code].split(",", 1)[0]
+            quantity = QuantityInput(
+                row_label,
+                prop_code,
+                value_control=row["val"],
+                unit_control=row["unit"],
+            )
+            self.quantity_inputs.append(quantity)
+            row["prop"].width = 190
+            row["prop"].height = TOKENS.input_height
+            row["val"].height = TOKENS.input_height
+            row["unit"].height = TOKENS.input_height
+            property_column = ft.Column(
+                [
+                    ft.Text("性質", size=TOKENS.body, weight=ft.FontWeight.W_500),
+                    row["prop"],
+                ],
+                spacing=TOKENS.spacing_xs,
+                tight=True,
+            )
+            condition_rows.append(
+                ft.ResponsiveRow(
+                    [
+                        ft.Container(content=property_column, col={"xs": 12, "md": 4}),
+                        ft.Container(content=quantity.control, col={"xs": 12, "md": 8}),
+                    ],
+                    spacing=TOKENS.spacing_md,
+                    run_spacing=TOKENS.spacing_sm,
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                )
+            )
+        self.input_rows[2]["prop"].visible = False
+        self.input_rows[2]["val"].visible = False
+        self.input_rows[2]["unit"].visible = False
+        condition_rows[2].visible = False
+        self.condition_rows = condition_rows
+        self.preset_buttons = ft.Row(
+            [
+                ft.OutlinedButton(label, on_click=lambda _event, pair=pair: self._apply_property_preset(pair))
+                for label, pair in (("P + T", ("P", "T")), ("P + H", ("P", "H")),
+                                    ("P + S", ("P", "S")), ("P + Q", ("P", "Q")),
+                                    ("T + Q", ("T", "Q")))
+            ], spacing=TOKENS.spacing_sm, wrap=True
+        )
+        self.extensive_toggle = ft.Checkbox(
+            label="計算廣延性質", value=False, on_change=self._toggle_extensive
+        )
+        self.extensive_section = ft.Container(
+            content=ft.Row([self.mass_tf, self.mass_unit_dd], spacing=TOKENS.spacing_sm),
+            visible=False,
+        )
+        self.result_panel = ResultPanel()
+        self.raw_output = ft.Text("", selectable=True, visible=False)
+        self.details_button = ft.TextButton(
+            "查看詳細結果", on_click=self._toggle_raw_output, disabled=True
+        )
+        self.copy_result_button = ft.OutlinedButton(
+            "複製結果", icon=ft.Icons.CONTENT_COPY, on_click=self._copy_result, disabled=True
+        )
+        configuration = EngineeringCard(
+            "計算設定",
+            ft.ResponsiveRow([
+                ft.Container(content=self.mode_dd, col={"xs": 12, "md": 4}),
+                ft.Container(content=self.fluid_tf, col={"xs": 12, "md": 4}),
+                ft.Container(
+                    content=ft.Column([self.ref_state_dd, self.reference_state_helper],
+                                      spacing=TOKENS.spacing_xs),
+                    col={"xs": 12, "md": 4},
+                ),
+            ], spacing=TOKENS.spacing_md, run_spacing=TOKENS.spacing_md),
+            "選擇計算引擎、物質與 reference state。",
+        )
+        conditions = EngineeringCard(
+            "已知條件（至少兩個）",
+            ft.Column([
+                self.preset_buttons,
+                ft.Column(self.condition_rows, spacing=TOKENS.spacing_md),
+                ft.Text(
+                    "目前狀態查詢只接受兩個獨立性質；混合物組成、流速或高程等第三條件尚未支援，"
+                    "因此暫不提供新增入口。",
+                    size=TOKENS.caption,
+                    color=ft.Colors.BLUE_GREY_600,
+                ),
+            ], spacing=TOKENS.spacing_md),
+        )
+        extensive = EngineeringCard(
+            "廣延性質",
+            ft.Column([self.extensive_toggle, self.extensive_section], spacing=TOKENS.spacing_sm),
+            "需要總質量時才輸入。",
+        )
+        results = EngineeringCard(
+            "計算結果",
+            ft.Column([
+                self.result_panel,
+                self.result_text,
+                ft.Row([self.details_button, self.copy_result_button]),
+                self.raw_output,
+            ], spacing=TOKENS.spacing_sm),
+        )
+        scroll_area = ft.Column(
+            [configuration, conditions, extensive, results],
+            spacing=TOKENS.spacing_md,
+            expand=True,
+            scroll=ft.ScrollMode.AUTO,
+        )
+        self.action_bar = ft.Container(
+            content=ft.Row([
+                ft.TextButton("重設", icon=ft.Icons.RESTART_ALT, on_click=self._reset_inputs),
+                ft.Container(expand=True),
+                ft.Text("Ctrl + Enter 執行", size=TOKENS.caption, color=ft.Colors.BLUE_GREY_600),
+                ft.Button("執行計算", icon=ft.Icons.CALCULATE_OUTLINED,
+                          on_click=self.perform_calculation, height=TOKENS.button_height),
+            ], spacing=TOKENS.spacing_md),
+            padding=ft.Padding.symmetric(horizontal=TOKENS.spacing_lg, vertical=TOKENS.spacing_sm),
+            bgcolor=TOKENS.surface,
+            border=ft.Border.only(top=ft.BorderSide(1, TOKENS.border)),
+        )
+        return [scroll_area, self.action_bar]
+
+    def _apply_property_preset(self, property_codes: tuple[str, str]) -> None:
+        """套用性質組合、更新單位選項，並使舊計算結果失效。
+
+參數：
+    property_codes: 預設組合中的兩個性質代碼。
+
+回傳：
+    無。"""
+        self._mark_calculated_result_stale()
+        for index, code in enumerate(property_codes):
+            row = self.input_rows[index]
+            row["prop"].value = self.prop_names_map[code]
+            self.update_units_menu(index, update_view=False)
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
+    def _toggle_extensive(self, event: ft.ControlEvent) -> None:
+        """只在使用者要求計算廣延性質時顯示總質量輸入欄位。
+
+參數：
+    event: 包含切換後狀態的 Flet 控制事件。
+
+回傳：
+    無。"""
+        self._mark_calculated_result_stale()
+        self.extensive_section.visible = bool(event.control.value)
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
+    def _on_semantic_input_change(self, _event: ft.ControlEvent | None) -> None:
+        """使目前輸入不再對應上次成功計算的結果快照。
+
+        參數：
+            _event: Flet 控制項變更事件；不需讀取其內容。
+
+        回傳：
+            無。
+        """
+        self._mark_calculated_result_stale()
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
+    def _on_mass_input_change(self, event: ft.ControlEvent | None) -> None:
+        """質量數值改變時清除欄位錯誤並使舊結果失效。
+
+        參數：
+            event: Flet 控制項變更事件。
+
+        回傳：
+            無。
+        """
+        self.mass_tf.error_text = None
+        self._mark_calculated_result_stale()
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
+    def _restore_mass_unit_selection(self, old_unit: str, message: str) -> None:
+        """回復失敗換算的質量單位，保留尚未改寫的原始數值。
+
+        參數：
+            old_unit: 換算前有效的質量顯示單位。
+            message: 顯示於質量欄位旁的錯誤說明。
+
+        回傳：
+            無。
+        """
+        self.mass_unit_dd.value = old_unit
+        self._last_mass_unit = old_unit
+        self.mass_tf.error_text = message
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
+    def _on_mass_unit_change(self, _event: ft.ControlEvent | None) -> None:
+        """換算質量欄位的顯示單位，並對失敗換算回復完整欄位狀態。
+
+        參數：
+            _event: 質量單位選單的 Flet 變更事件。
+
+        回傳：
+            無。
+        """
+        new_unit = self.mass_unit_dd.value
+        old_unit = self._last_mass_unit
+        if not new_unit or new_unit == old_unit:
+            return
+        raw_value = (self.mass_tf.value or "").strip()
+        if raw_value:
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                self._mark_calculated_result_stale()
+            else:
+                try:
+                    mass_kg = self.unit_converter.convert_to_si("Mass", value, old_unit)
+                    converted = self.unit_converter.convert_from_si("Mass", mass_kg, new_unit)
+                except (TypeError, ValueError):
+                    self._restore_mass_unit_selection(
+                        old_unit, "質量單位換算失敗，已恢復原單位。"
+                    )
+                    return
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "Unexpected error while converting the extensive-property mass unit"
+                    )
+                    self._restore_mass_unit_selection(
+                        old_unit, "質量單位換算發生非預期錯誤，已恢復原單位。"
+                    )
+                    raise
+                self.mass_tf.value = f"{converted:.7g}"
+        self._last_mass_unit = new_unit
+        self.mass_tf.error_text = None
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
+    def _clear_result_presentation_snapshot(self) -> None:
+        """清除結果快照及其所有可複製、摘要與詳細資料投影。
+
+        回傳：
+            無。
+        """
+        self._has_calculated_result = False
+        self._last_si_results = None
+        self._last_total_mass_kg = None
+        self._last_result_metadata = {}
+        self._last_input_summary = ""
+        self._last_formatted_output = ""
+        self.result_text.value = ""
+        self.result_text.visible = False
+        self.result_text.color = ft.Colors.GREY_600
+        self.raw_output.value = ""
+        self.raw_output.visible = False
+        self.details_button.text = "查看詳細結果"
+        self.details_button.disabled = True
+        self.copy_result_button.disabled = True
+        self.result_panel.metrics = {}
+        self.result_panel.metadata = {}
+
+    def _mark_calculated_result_stale(self) -> None:
+        """清除不再對應目前語意輸入的結果與快取。
+
+        回傳：
+            無。
+        """
+        if not self._has_calculated_result:
+            return
+        self._clear_result_presentation_snapshot()
+        self.result_panel.set_status(
+            "warning", "輸入已變更", "舊結果已清除，請使用目前輸入重新執行計算。"
+        )
+
+    def _toggle_raw_output(self, _event: ft.ControlEvent | None) -> None:
+        """按需顯示只含格式化性質的詳細文字，不改變摘要或快照資料。
+
+參數：
+    _event: Flet 點擊事件；此處不需讀取事件內容。
+
+回傳：
+    無。"""
+        if not self._has_calculated_result:
+            return
+        self.raw_output.visible = not self.raw_output.visible
+        self.details_button.text = "隱藏詳細結果" if self.raw_output.visible else "查看詳細結果"
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
+    def _compose_result_summary(self) -> str:
+        """產生不重複格式化詳細結果的常駐摘要。
+
+        :return: 輸入摘要及目前輸出單位；尚無有效輸入快照時回傳空字串。
+        """
+        if not self._last_input_summary:
+            return ""
+        output_label = "Imperial" if self.output_unit_system == "Imperial" else "SI"
+        return f"{self._last_input_summary}\n輸出單位: {output_label}"
+
+    def _compose_result_text(self) -> str:
+        """組成供複製使用的輸入摘要與完整格式化結果。
+
+        :return: 目前快照的完整純文字表示；快照已清除時回傳空字串。
+        """
+        if not self._last_formatted_output:
+            return ""
+        if not self._last_input_summary:
+            return self._last_formatted_output
+        return f"{self._last_input_summary}\n\n{self._last_formatted_output}"
+
+    async def _copy_result(self, _event: ft.ControlEvent | None) -> None:
+        """透過 Flet 剪貼簿服務複製最近一次成功計算的結果。
+
+參數：
+    _event: Flet 點擊事件；此處不需讀取事件內容。
+
+回傳：
+    無。"""
+        if not self._has_calculated_result:
+            return
+        await ft.Clipboard().set(self._compose_result_text())
+
+    def _reset_inputs(self, _event: ft.ControlEvent | None) -> None:
+        """清除查詢值、錯誤、快取及選用區塊狀態，保留流體、模式、參考政策與輸出偏好。
+
+參數：
+    _event: Flet 點擊事件；此處不需讀取事件內容。
+
+回傳：
+    無。"""
+        for row in self.input_rows:
+            row["val"].value = ""
+            row["val"].error_text = None
+        for quantity_input in self.quantity_inputs:
+            quantity_input.set_error(None)
+        for control in self.input_rows[2].values():
+            control.visible = False
+        self.condition_rows[2].visible = False
+        self.extensive_toggle.value = False
+        self.extensive_section.visible = False
+        self.mass_tf.value = ""
+        self.mass_tf.error_text = None
+        self._clear_result_presentation_snapshot()
+        self.result_panel.set_status("empty", "尚未計算", "輸入至少兩個獨立性質後執行計算。")
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
+    def set_output_unit_system(self, unit_system: str) -> None:
+        """以快取的計算結果重新呈現所選單位，不重跑熱力性質查詢。
+
+參數：
+    unit_system: 要使用的全域輸出單位系統。
+
+回傳：
+    無。"""
+        self.workspace_state.set_output_unit_system(unit_system)
+        self.output_unit_system = unit_system
+        if self._has_calculated_result:
+            self._render_cached_result()
+            try:
+                self.update()
+            except RuntimeError:
+                pass
+
+    def _render_cached_result(self) -> None:
+        """重新格式化快取中的 SI 結果及廣延性質，不再呼叫領域計算服務。
+
+回傳：
+    無。"""
+        if self._last_si_results is None:
+            return
+        use_imperial = self.output_unit_system == "Imperial"
+        metadata = {
+            **self._last_result_metadata,
+            "Output": "Imperial" if use_imperial else "SI",
+        }
+        phase = self.formatter._get_phase_description(
+            self._last_si_results.get("phase", "unknown")
+        )
+        self.result_panel.set_metrics(
+            self._format_result_metrics(self._last_si_results, use_imperial),
+            metadata,
+            status_detail=phase,
+        )
+        output = self.formatter.format_specific_properties(self._last_si_results, use_imperial)
+        if self._last_total_mass_kg is not None:
+            output += self.formatter.format_extensive_properties(
+                self._last_si_results, self._last_total_mass_kg, use_imperial
+            )
+        self._last_formatted_output = output
+        self.raw_output.value = output
+        self.result_text.value = self._compose_result_summary()
+        self.result_text.visible = True
+        self.details_button.disabled = False
+        self.copy_result_button.disabled = False
+
+    def _format_result_metrics(self, si_results: dict[str, object], use_imperial: bool) -> dict[str, str]:
+        """將計算結果中可用的數值格式化為結果卡片指標。
+
+參數：
+    si_results: 以 SI 為基準的計算結果。
+    use_imperial: 是否將輸出格式化為英制。
+
+回傳：
+    指標名稱與顯示文字的對應字典。"""
+        unit_map = self.unit_converter.imperial_units if use_imperial else self.unit_converter.default_units
+        labels = {"T": "Temperature", "P": "Pressure", "H": "Enthalpy", "S": "Entropy",
+                  "D": "Density", "V": "Specific Volume", "Q": "Quality"}
+        metrics = {}
+        for code in ("T", "P", "H", "S", "D", "V", "Q"):
+            if code not in si_results:
+                continue
+            value = si_results[code]
+            if code == "Q":
+                if not 0 <= value <= 1:
+                    continue
+                display_value, unit = value, ""
+            else:
+                unit = unit_map.get(code)
+                if not unit:
+                    continue
+                display_value = self.unit_converter.convert_from_si(code, value, unit)
+            precision = 3 if code in {"T", "P", "D", "V"} else 4
+            metrics[labels[code]] = f"{display_value:.{precision}f}{f' {unit}' if unit else ''}"
+        return metrics
+
+    def get_prop_code(self, formatted_name: str) -> str | None:
         """
         根據下拉選單中格式化的性質名稱 (例如： 'Pressure (壓力), P')，
         逆向查找並返回其單一字母的代碼 (例如： 'P')。
@@ -232,49 +644,34 @@ class PropertyTab(ft.Column):
                 return code # 找到匹配項，返回性質代碼
         return None # 未找到匹配項
 
-    def on_fluid_change(self, e):
-            """
-            物質名稱輸入框改變事件處理器。
-            負責檢查物質名稱是否在 CoolProp 資料庫中有效，並提供視覺反饋。
-            
-            ✨ [修改]：同時為新物質套用當前選定的參考點。
-            
-            :param e: Flet 事件物件
-            """
-            fluid_name = self.fluid_tf.value.strip() # 取得並去除物質名稱的空白
-            is_valid = True # 用於追蹤物質是否有效
-    
-            # 僅在 CoolProp 模式下 (即非 Water 模式) 執行檢查
-            if self.mode_dd.value.startswith("CoolProp"):
-                if not self.query_service.is_fluid_valid(fluid_name):
-                    # 物質無效：顯示紅色錯誤提示
-                    self.fluid_tf.error_text = f"錯誤：CoolProp 資料庫中找不到物質 '{fluid_name}'"
-                    self.fluid_tf.border_color = ft.Colors.RED_700
-                    is_valid = False # 標記為無效
-                else:
-                    # 物質有效：清除錯誤提示，邊框恢復預設顏色
-                    self.fluid_tf.error_text = None
-                    self.fluid_tf.border_color = ft.Colors.OUTLINE
-                    is_valid = True # 標記為有效
-                
-                # --- ✨ 關鍵修復：在物質名稱改變且有效時，重新套用當前選定的參考點 ---
-                if is_valid:
-                    try:
-                        # 1. 獲取當前選定的參考點代碼
-                        selected_option = self.ref_state_dd.value
-                        ref_code = selected_option.split(' ')[0] # 例如： "ASHRAE"
-                        
-                        # 2. 為這個 *新的* 物質 (fluid_name) 套用參考點
-                        self.query_service.set_reference_state(fluid_name, ref_code)
-                    
-                    except Exception as err:
-                        # 即使設定參考點失敗 (例如某些流體不支援)，也應顯示錯誤
-                        # 但不要阻礙 validation 的 UI 更新
-                        self.show_error(f"為 {fluid_name} 設定參考點 {ref_code} 失敗: {err}")
-                # --- 修復結束 ---
-    
-            self.update() # 更新 UI，讓錯誤提示或邊框變化立即顯示
-    
+    def on_fluid_change(self, e: ft.ControlEvent) -> None:
+        """驗證流體名稱、套用參考狀態，並使先前計算結果失效。
+
+        參數：
+            e: 流體名稱欄位觸發的 Flet 控制事件。
+
+        回傳：
+            無。
+        """
+        self._mark_calculated_result_stale()
+        fluid_name = self.fluid_tf.value.strip()
+
+        if self.mode_dd.value.startswith("CoolProp"):
+            is_valid = self.query_service.is_fluid_valid(fluid_name)
+            if is_valid:
+                self.fluid_tf.error_text = None
+                self.fluid_tf.border_color = ft.Colors.OUTLINE
+                ref_code = self.ref_state_dd.value.split(" ", 1)[0]
+                try:
+                    self.query_service.set_reference_state(fluid_name, ref_code)
+                except Exception as err:
+                    self.show_error(f"為 {fluid_name} 設定參考點 {ref_code} 失敗: {err}")
+            else:
+                self.fluid_tf.error_text = f"錯誤：CoolProp 資料庫中找不到物質 '{fluid_name}'"
+                self.fluid_tf.border_color = ft.Colors.RED_700
+
+        self.update()
+
     def show_error(self, message):
         """
         在 Flet 頁面底部以 SnackBar 的形式顯示錯誤訊息。
@@ -304,205 +701,316 @@ class PropertyTab(ft.Column):
         self.ideal_gas_cb.visible = is_water
         self.ideal_gas_cb.value = False
     
-    def on_mode_change(self, e=None):
-        """
-        模式切換事件處理器 (例如：從 CoolProp 切換到 Water)。
-        首先執行內部邏輯更新，然後觸發 UI 更新。
-        """
-        self.on_mode_change_internal(e) # 執行模式切換的邏輯 (如改變物質名稱、理想氣體核取方塊可見性等)
-        if self.parent: self.update()      # 更新 UI，反映模式變更 (如物質名稱改變)
+    def on_mode_change(self, e: ft.ControlEvent | None = None) -> None:
+        """使先前結果失效，並更新計算模式衍生的控制項狀態。
 
-# --- 新增 2: 參考點變更事件處理器 ---
-    def on_ref_state_change(self, e):
+        參數：
+            e: 模式選單觸發的 Flet 控制事件；程式初始化時可省略。
+
+        回傳：
+            無。
         """
-        處理參考點下拉選單變更事件，並設定 CoolProp 的參考點。
-        這裡我們以 R134a 為範例物質來設定參考點。
-        
-        :param e: Flet 事件物件
-        """
-        # 提取選單值中的代碼部分，例如 'ASHRAE (美國...)' -> 'ASHRAE'
-        selected_option = self.ref_state_dd.value
-        # 使用正則表達式或簡單分割來獲取代碼
-        # 'ASHRAE (美國暖通空調學會標準)' -> 'ASHRAE'
-        ref_code = selected_option.split(' ')[0] 
-        
-        # 只有在 CoolProp 模式下才需要設定參考點
+        self._mark_calculated_result_stale()
+        self.on_mode_change_internal(e)
+        if self.parent:
+            self.update()
+
+    def on_ref_state_change(self, e: ft.ControlEvent) -> None:
+        """依目前流體套用所選的參考狀態政策。
+
+參數：
+    e: 參考狀態選單觸發的 Flet 控制事件。
+
+回傳：
+    無。"""
+        self._mark_calculated_result_stale()
+        ref_code = self.ref_state_dd.value
+        self.reference_state_helper.value = self.ref_state_descriptions[ref_code]
         if self.mode_dd.value.startswith("CoolProp"):
             try:
-                # Application service 擁有 process-global CoolProp 邊界。
-                
-                # 執行關鍵步驟：設置 R134a 的參考點
                 self.query_service.set_reference_state(self.fluid_tf.value, ref_code)
-                
-                # 可選：顯示成功的 SnackBar 提示
-                #self.page.snack_bar = ft.SnackBar(ft.Text(f"參考點已設定為: {ref_code} {self.fluid_tf.value}"))
-                #self.page.snack_bar.open = True
-                
-            except Exception as err:
-                self.show_error(f"設定參考點錯誤: {err}")
-                
-            finally:
-                if self.parent: self.update() # 更新 UI
-        
-    def update_units_menu(self, row_index, *, update_view=True):
-        """
-        根據輸入行目前的性質，更新單位選項、預設值與 tracking state。
-        初始化與性質變更事件都使用同一套單位解析邏輯；只有事件路徑會要求 UI refresh。
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Unable to update thermodynamic reference state",
+                    extra={"fluid": self.fluid_tf.value, "reference_state": ref_code},
+                )
+                self.show_error("無法套用此參考狀態，請確認物質與計算模式。")
+        if self.parent:
+            self.update()
 
-        :param row_index: 變動的輸入行索引 (0, 1, 2)
-        :param update_view: 是否在更新後刷新 Flet UI
-        """
+    def update_units_menu(self, row_index: int, *, update_view: bool = True) -> None:
+        """依輸入列的性質更新單位選項、預設值與追蹤狀態。
+
+參數：
+    row_index: 要更新的輸入列索引。
+    update_view: 是否在更新控制項後刷新已掛載的畫面。
+
+回傳：
+    無。"""
         row = self.input_rows[row_index]
         prop_code = self.get_prop_code(row["prop"].value)
+        previous_code = self._last_prop_codes[row_index]
+        if previous_code and previous_code != prop_code:
+            row["val"].value = ""
+            row["val"].error_text = None
+            if hasattr(self, "quantity_inputs"):
+                self.quantity_inputs[row_index].set_error(None)
+        self._last_prop_codes[row_index] = prop_code
+        if hasattr(self, "quantity_inputs") and prop_code:
+            row_label = self.prop_names_map[prop_code].split(",", 1)[0]
+            quantity = self.quantity_inputs[row_index]
+            quantity.property_code = prop_code
+            quantity.label = row_label
+            quantity.label_control.value = row_label
         units = self.unit_converter.get_available_units(prop_code)
         row["unit"].options = [ft.dropdown.Option(unit) for unit in units]
 
         default_unit = self.unit_converter.default_units.get(prop_code, "")
         new_unit = default_unit if default_unit in units else (units[0] if units else "")
+        input_key = f"condition_{row_index}_{prop_code}"
+        saved_unit = self.workspace_state.input_units.get(input_key)
+        if saved_unit in units:
+            new_unit = saved_unit
         row["unit"].value = new_unit
+        if prop_code:
+            self.workspace_state.set_input_unit(input_key, new_unit)
         self._last_prop_units[row_index] = new_unit
 
         if update_view and self.parent:
             self.update()
 
-    def create_prop_change_handler(self, index):
-        """
-        使用閉包為每個性質下拉選單創建 on_select 事件處理器。
-        
-        :param index: 輸入行索引
-        :return: 處理函數 (handler)
-        """
-        # 當性質改變時，呼叫 update_units_menu 來更新單位
-        def handler(e): self.update_units_menu(index) 
-        return handler
-
-    def create_unit_change_handler(self, index):
-        """
-        使用閉包為每個單位下拉選單創建 on_select 事件處理器。
-        
-        :param index: 輸入行索引
-        :return: 處理函數 (handler)
-        """
-        # 當單位改變時，呼叫 on_property_unit_change 來處理數值換算和單位同步
-        def handler(e): self.on_property_unit_change(index)
-        return handler
-
-    def on_property_unit_change(self, changed_row_index):
-        """
-        單位變更的核心處理邏輯：執行數值換算並同步相同性質的單位。
-        
-        :param changed_row_index: 觸發變更的輸入行索引
-        """
-        # 1. 避免遞迴調用：如果正在執行單位更新，則立即返回
-        if self._is_updating_units: return
-        self._is_updating_units = True # 設置鎖定標記
-        
-        changed_row = self.input_rows[changed_row_index]
-        prop_code_to_sync = self.get_prop_code(changed_row["prop"].value)
-        # 獲取新舊單位
-        new_unit, old_unit = changed_row["unit"].value, self._last_prop_units[changed_row_index]
-
-        # 2. 判斷是否需要換算和同步 (單位確實改變且舊單位有效)
-        if new_unit != old_unit and old_unit and prop_code_to_sync:
-            # 遍歷所有輸入行，同步相同性質的單位和換算數值
-            for i, row in enumerate(self.input_rows):
-                if self.get_prop_code(row["prop"].value) == prop_code_to_sync:
-                    row["unit"].value = new_unit # 同步單位下拉選單的值
-                    
-                    # 只有當輸入框有數值時才執行換算
-                    if row["val"].value:
-                        try:
-                            # 換算三步驟：舊單位 -> SI 單位 -> 新單位
-                            val_si = self.unit_converter.convert_to_si(prop_code_to_sync, float(row["val"].value), old_unit)
-                            new_val = self.unit_converter.convert_from_si(prop_code_to_sync, val_si, new_unit)
-                            
-                            # 更新數值，使用 .7g 格式保留足夠精度
-                            row["val"].value = f"{new_val:.7g}" 
-                        except ValueError: 
-                            # 忽略無效數值 (例如： 使用者輸入了非數字)
-                            pass
-                            
-                    self._last_prop_units[i] = new_unit # 更新該行上次單位記錄為新單位
-        
-        self._is_updating_units = False # 釋放鎖定
-        if self.parent: self.update() # 更新 UI
-
-    def on_output_unit_change(self, e):
-        """在已有成功結果上重新套用選定的輸出單位。
+    def create_prop_change_handler(self, index: int) -> Callable[[ft.ControlEvent], None]:
+        """建立閉包，讓各性質選單的事件能保留所屬輸入列索引。
 
 參數：
-    e (未指定型別): Flet selection event。
+    index: 此事件處理器所屬的輸入列索引。
+
+回傳：
+    接收 Flet 控制事件並更新對應單位選項的處理函式。"""
+        def handler(e: ft.ControlEvent) -> None:
+            """更新此輸入列的性質對應單位選項。
+
+            參數：
+                e: 性質選單觸發的 Flet 控制事件。
+
+            回傳：
+                無。
+            """
+            self._mark_calculated_result_stale()
+            self.update_units_menu(index)
+        return handler
+
+    def create_unit_change_handler(self, index: int) -> Callable[[ft.ControlEvent], None]:
+        """建立閉包，讓各單位選單的事件能保留所屬輸入列索引。
+
+參數：
+    index: 此事件處理器所屬的輸入列索引。
+
+回傳：
+    接收 Flet 控制事件並處理單位換算的處理函式。"""
+        def handler(e: ft.ControlEvent) -> None:
+            """轉送此輸入列的單位變更事件。
+
+            參數：
+                e: 單位選單觸發的 Flet 控制事件。
+
+            回傳：
+                無。
+            """
+            self.on_property_unit_change(index)
+        return handler
+
+    def on_property_unit_change(self, changed_row_index: int) -> None:
+        """只換算變更列的數值，並獨立保存該列的單位選擇。
+
+        參數：
+            changed_row_index: 觸發單位變更的輸入列索引。
+
+        回傳：
+            無。
+        """
+        if self._is_updating_units:
+            return
+        self._is_updating_units = True
+        try:
+            changed_row = self.input_rows[changed_row_index]
+            property_code = self.get_prop_code(changed_row["prop"].value)
+            new_unit = changed_row["unit"].value
+            old_unit = self._last_prop_units[changed_row_index]
+            raw_value = changed_row["val"].value
+
+            if new_unit != old_unit and old_unit and property_code:
+                if raw_value:
+                    try:
+                        numeric_value = float(raw_value)
+                    except (TypeError, ValueError):
+                        self._mark_calculated_result_stale()
+                    else:
+                        try:
+                            value_si = self.unit_converter.convert_to_si(
+                                property_code, numeric_value, old_unit
+                            )
+                            converted_value = self.unit_converter.convert_from_si(
+                                property_code, value_si, new_unit
+                            )
+                        except Exception:
+                            changed_row["unit"].value = old_unit
+                            self._last_prop_units[changed_row_index] = old_unit
+                            self.workspace_state.set_input_unit(
+                                f"condition_{changed_row_index}_{property_code}", old_unit
+                            )
+                            raise
+                        changed_row["val"].value = f"{converted_value:.7g}"
+                self._last_prop_units[changed_row_index] = new_unit
+                if property_code:
+                    self.workspace_state.set_input_unit(
+                        f"condition_{changed_row_index}_{property_code}", new_unit
+                    )
+        finally:
+            self._is_updating_units = False
+
+        if self.parent:
+            self.update()
+
+    def _validate_known_input(
+        self, property_code: str | None, raw_value: str, unit: str
+    ) -> tuple[float | None, str | None]:
+        """建立領域查詢前，先驗證一筆使用者輸入的熱力性質。
+
+參數：
+    property_code: 選定性質的標準代碼。
+    raw_value: 尚未換算單位的輸入數值文字。
+    unit: 此筆輸入所選的單位。
+
+回傳：
+    有效數值與空錯誤，或 None 與欄位錯誤訊息組成的 二元組。"""
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            return None, "請輸入有效數值。"
+        if not isfinite(value):
+            return None, "數值必須是有限數字。"
+        if property_code is None:
+            return None, "請選擇有效的熱力性質。"
+        try:
+            canonical_value = self.unit_converter.convert_to_si(property_code, value, unit)
+        except ValueError:
+            return None, "目前性質不支援所選單位。"
+        if property_code == "P" and canonical_value <= 0:
+            return None, "絕對壓力必須大於 0。"
+        if property_code == "T" and canonical_value <= 0:
+            return None, "絕對溫度必須大於 0 K。"
+        if property_code == "Q" and not 0 <= value <= 1:
+            return None, "乾度必須介於 0–1。"
+        if property_code == "RH" and not 0 <= value <= 100:
+            return None, "相對濕度必須介於 0–100%。"
+        return value, None
+
+    def perform_calculation(self, e: ft.ControlEvent | None) -> None:
+        """驗證已知條件、呼叫熱力性質查詢服務並更新結果狀態。
+
+參數：
+    e: Flet 計算按鈕事件；由快捷鍵或測試呼叫時可為 None。
 
 回傳：
     無。"""
-        if self._has_calculated_result:
-            self.perform_calculation(None)
-
-    def perform_calculation(self, e):
-        """
-        執行熱力學性質計算的主方法。
-        負責輸入驗證、錯誤處理、UI 反饋和結果展示。
-        """
-        self._has_calculated_result = False
+        self._clear_result_presentation_snapshot()
         fluid = self.fluid_tf.value.strip()
-        
-        # UI 重設：在每次計算開始前，將結果文本和容器邊框重設為預設顏色
-        self.result_text.color = ft.Colors.BLACK 
-        self.result_container.border_color = ft.Colors.BLUE_GREY_200 
 
         # 1. 檢查物質名稱是否有效
         if not self.query_service.is_fluid_valid(fluid):
-            # 物質無效時的錯誤處理和 UI 反饋
-            self.show_error(f"錯誤：找不到流體 '{fluid}'") # 顯示 SnackBar 提示
-            self.result_text.value = f"錯誤：找不到流體 '{fluid}'"
-            self.result_text.color = ft.Colors.RED_700 # 錯誤訊息使用紅色
-            self.result_container.border_color = ft.Colors.RED_700 # 邊框使用紅色
+            self.result_panel.set_error("找不到這個物質，請確認流體名稱。")
+            self.show_error(f"錯誤：找不到流體 '{fluid}'")
             self.update()
             return # 停止計算
 
-        known_props, display_inputs= [], []
-        
-        # 2. 收集輸入的性質 (只取前兩個有數值的作為計算依據)
-        for row in self.input_rows:
-            if row["val"].value.strip():
-                try:
-                    prop_code = self.get_prop_code(row["prop"].value)
-                    unit = row["unit"].value
-                    
-                    # 存儲為 (屬性代碼, 數值, 單位) 格式
-                    known_props.append((prop_code, float(row["val"].value), unit))
-                    # 存儲用於顯示的輸入摘要
-                    display_inputs.append(f"{row['prop'].value}={row['val'].value} {unit}")
-                except (ValueError, TypeError): 
-                    # 忽略無效的數值輸入
-                    pass 
+        known_props, display_inputs = [], []
+        has_field_errors = False
+
+
+        for index, row in enumerate(self.input_rows):
+            raw_value = row["val"].value.strip()
+            self.quantity_inputs[index].set_error(None)
+            if not raw_value:
+                continue
+            prop_code = self.get_prop_code(row["prop"].value)
+            unit = row["unit"].value
+            value, error = self._validate_known_input(prop_code, raw_value, unit)
+            self.quantity_inputs[index].set_error(error)
+            if error:
+                has_field_errors = True
+                continue
+            known_props.append((prop_code, value, unit))
+            display_inputs.append(f"{row['prop'].value}={raw_value} {unit}")
+
+        if has_field_errors:
+            self.result_panel.set_error("請先修正欄位旁的錯誤，再執行計算。")
+            self.raw_output.value = ""
+            self.update()
+            return
+
+        if len(known_props) > 2:
+            self.result_panel.set_error("目前只接受兩個獨立性質；第三列限制條件尚未支援，請移除該值。")
+            self.update()
+            return
 
         # 3. 檢查已知性質數量 (CoolProp 核心要求至少兩個獨立性質)
         if len(known_props) < 2:
+            self.result_panel.set_status("warning", "輸入不足", "請至少輸入兩組有效的獨立性質。")
             # 輸入不足時的錯誤處理和 UI 反饋
             self.show_error("請至少輸入兩組有效的性質。")
-            self.result_text.value = "請至少輸入兩組有效的性質。"
-            self.result_text.color = ft.Colors.ORANGE_700 # 使用警告色
-            self.result_container.border_color = ft.Colors.ORANGE_700
             self.update()
             return # 停止計算
-        
+
+        total_mass_kg = None
+        self.mass_tf.error_text = None
+        if self.extensive_toggle.value:
+            try:
+                mass_value = float(self.mass_tf.value.strip())
+            except (TypeError, ValueError):
+                self.mass_tf.error_text = "請輸入有效的總質量。"
+                self.result_panel.set_error(self.mass_tf.error_text)
+                self.update()
+                return
+            if not isfinite(mass_value) or mass_value <= 0:
+                self.mass_tf.error_text = "總質量必須是大於 0 的有限數值。"
+                self.result_panel.set_error(self.mass_tf.error_text)
+                self.update()
+                return
+            try:
+                total_mass_kg = self.unit_converter.convert_to_si(
+                    "Mass", mass_value, self.mass_unit_dd.value
+                )
+            except ValueError:
+                self.mass_tf.error_text = "目前不支援所選的質量單位。"
+                self.result_panel.set_error(self.mass_tf.error_text)
+                self.update()
+                return
+
         # --- 新增 ---
         # 3.5. 根據 UI 切換按鈕，決定輸出單位
         # 讀取 SegmentedButton 的當前選定值 ("SI" 或 "Imperial")
-        use_imperial = ("Imperial" in self.output_unit_toggle.selected)
+        use_imperial = self.output_unit_system == "Imperial"
         # --- 新增結束 ---
 
         # 4. 設定計算模式 (CoolProp 實際流體 vs. 理想氣體)
         is_ideal = self.ideal_gas_cb.value and self.mode_dd.value.startswith("Water")
         calc_type = " (理想氣體模型)" if is_ideal else ""
-        
-        # 5. 顯示「計算中...」訊息 (提供即時反饋)
-        self.result_text.value = f"--- 輸入 ---\n物質: {fluid}{calc_type}\n已知: {', '.join(display_inputs[:2])}\n\n計算中..."
-        self.result_text.color = ft.Colors.BLUE_GREY # 計算中提示色
-        self.result_container.border_color = ft.Colors.BLUE_GREY_400
-        self.update() # 立即更新 UI 顯示「計算中...」
+        ref_code = self.ref_state_dd.value.split(" ")[0]
+        input_summary = [
+            "--- 輸入 ---",
+            f"計算模式: {self.mode_dd.value}",
+            f"物質: {fluid}{calc_type}",
+            f"參考狀態: {ref_code}",
+            f"已知: {', '.join(display_inputs[:2])}",
+        ]
+        if total_mass_kg is not None:
+            input_summary.append(f"總質量: {self.mass_tf.value.strip()} {self.mass_unit_dd.value}")
+        self._last_input_summary = "\n".join(input_summary)
 
+        # 5. 顯示「計算中」狀態；完整摘要只在成功快照建立後呈現。
+        self.result_panel.set_status("loading", "計算中", "正在查詢熱力性質。")
+        self.update()
         # 6. 執行核心熱力學計算
         try:
             # 執行計算，將前兩個輸入性質傳遞給核心計算器
@@ -517,31 +1025,23 @@ class PropertyTab(ft.Column):
                 )
             )
             
-            # 格式化比性質的輸出 (現在 use_imperial 來自 UI 切換按鈕)
-            final_output = self.formatter.format_specific_properties(si_results, use_imperial)
-            
-            # 處理廣延性質計算 (如果輸入了總質量)
-            if self.mass_tf.value.strip():
-                # 將總質量值換算為 SI 單位 (kg)
-                total_mass_kg = self.unit_converter.convert_to_si(
-                    "Mass", float(self.mass_tf.value), self.mass_unit_dd.value
-                )
-                # 將廣延性質結果追加到輸出字串
-                final_output += self.formatter.format_extensive_properties(si_results, total_mass_kg, use_imperial)
-            
-            # 7. 顯示成功結果
-            self.result_text.value = f"--- 輸入 ---\n物質: {fluid}{calc_type}\n已知: {', '.join(display_inputs[:2])}\n\n{final_output}"
-            self.result_text.color = ft.Colors.BLACK # 成功結果使用黑色
-            self.result_container.border_color = ft.Colors.GREEN_700 # 成功邊框色
+            self._last_si_results = si_results
+            self._last_total_mass_kg = total_mass_kg
             self._has_calculated_result = True
-            
+            metadata = {
+                "Fluid": fluid,
+                "Engine": "Ideal Gas" if is_ideal else "CoolProp",
+                "Reference": ref_code,
+                "Input units": ", ".join(item.rsplit(" ", 1)[-1] for item in display_inputs[:2]),
+                "Output": "Imperial" if use_imperial else "SI",
+            }
+            self._last_result_metadata = metadata.copy()
+            self._render_cached_result()
+
         except Exception as err:
-            # 8. 捕獲計算錯誤
-            error_message = f"計算錯誤: {err}"
-            self.show_error(error_message) # 顯示 SnackBar 提示
-            self.result_text.value = error_message # 結果區顯示詳細錯誤
-            self.result_text.color = ft.Colors.RED_700 # 錯誤訊息使用紅色
-            self.result_container.border_color = ft.Colors.RED_700 # 錯誤邊框色
-            
+            error_message = str(err) if isinstance(err, ValueError) else "無法使用目前條件完成計算。"
+            self._clear_result_presentation_snapshot()
+            self.result_panel.set_error(error_message)
+            self.show_error(error_message)
         finally:
             self.update() # 無論成功或失敗，確保 UI 最終狀態被更新
