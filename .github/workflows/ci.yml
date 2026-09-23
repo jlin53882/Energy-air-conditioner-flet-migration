@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.7.5"
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Check lockfile
+        run: uv lock --check
+
+      - name: Sync locked environment
+        run: uv sync --locked
+
+      - name: Ruff
+        run: uv run ruff check application chart infrastructure run.py
+
+      - name: Compile Python sources
+        run: >-
+          uv run python -m compileall -q
+          Flet_ui Telegram_bot application domain chart infrastructure
+          run.py telegeram_chatid.py
+
+      - name: Check installed dependencies
+        run: uv pip check
+
+      - name: Check revision whitespace
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before || '' }}
+          CURRENT_SHA: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+        run: |
+          set -euo pipefail
+
+          case "$EVENT_NAME" in
+            pull_request)
+              if [[ -z "$PR_BASE_SHA" || -z "$PR_HEAD_SHA" ]]; then
+                printf 'PR base/head SHA is required\n' >&2
+                exit 2
+              fi
+              git cat-file -e "${PR_BASE_SHA}^{commit}"
+              git cat-file -e "${PR_HEAD_SHA}^{commit}"
+              git diff --check "${PR_BASE_SHA}...${PR_HEAD_SHA}"
+              ;;
+            push)
+              if [[ -z "$PUSH_BEFORE" ]]; then
+                printf 'Push before SHA is required\n' >&2
+                exit 2
+              fi
+              if [[ "$PUSH_BEFORE" =~ ^0+$ ]]; then
+                while IFS= read -r revision; do
+                  if git rev-parse --verify "${revision}^1" >/dev/null 2>&1; then
+                    git diff --check "${revision}^1" "$revision"
+                  else
+                    git diff-tree --check --root -r "$revision"
+                  fi
+                done < <(git rev-list --reverse "$CURRENT_SHA")
+              else
+                if ! git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null; then
+                  git fetch --no-tags origin "$PUSH_BEFORE"
+                fi
+                git cat-file -e "${PUSH_BEFORE}^{commit}"
+                git diff --check "${PUSH_BEFORE}..${CURRENT_SHA}"
+              fi
+              ;;
+            workflow_dispatch)
+              if git rev-parse --verify "${CURRENT_SHA}^1" >/dev/null 2>&1; then
+                git diff --check "${CURRENT_SHA}^1" "$CURRENT_SHA"
+              else
+                git diff-tree --check --root -r "$CURRENT_SHA"
+              fi
+              ;;
+            *)
+              printf 'Unsupported GitHub event: %s\n' "$EVENT_NAME" >&2
+              exit 2
+              ;;
+          esac
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.7.5"
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync locked environment
+        run: uv sync --locked
+
+      - name: Run test suite
+        run: uv run pytest -q

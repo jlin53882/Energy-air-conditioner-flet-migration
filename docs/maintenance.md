@@ -68,6 +68,8 @@ Compatibility facade 不代表可以建立永久的第二份 core implementation
 - 已確認 worktree 與目標 branch；
 - push 後讀回 external PR/branch state。
 
+Pull Request 合併前，除 local focused regression 與 final verification 外，也必須確認 repository required GitHub Actions checks 成功。Local verification 提供開發回饋；CI 是可重現的外部 merge gate，彼此不可取代。
+
 ## 7. 目前維護限制
 
 以下是目前的 technical constraint，不是 phase 或 PR history：
