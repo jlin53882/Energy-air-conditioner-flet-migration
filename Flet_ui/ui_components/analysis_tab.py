@@ -199,22 +199,23 @@ class AnalysisTab(ft.Column):
         self.on_analysis_change(None)
 
     def _configure_workspace_layout(self) -> None:
-        """將既有分析控制項整理為分類內選擇與共用工程卡片。
+        """將既有分析控制項整理為分類選擇、共用操作與結果面板。
 
 回傳：
     無。"""
         self.module_nav = ft.Row(controls=[], spacing=8, wrap=True)
+        self.result_header_row = ft.Row([
+            ft.Text("分析結果", theme_style=ft.TextThemeStyle.TITLE_MEDIUM,
+                    weight=ft.FontWeight.W_600, expand=True),
+            self.output_unit_toggle,
+        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
         self.controls = [
             ft.Text("分析模式", theme_style=ft.TextThemeStyle.TITLE_MEDIUM,
                     weight=ft.FontWeight.W_600),
             self.module_nav,
             self.controls_stack,
             self.calc_button_container,
-            ft.Row([
-                ft.Text("分析結果", theme_style=ft.TextThemeStyle.TITLE_MEDIUM,
-                        weight=ft.FontWeight.W_600, expand=True),
-                self.output_unit_toggle,
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            self.result_header_row,
             self.result_container,
         ]
 
@@ -245,10 +246,10 @@ class AnalysisTab(ft.Column):
                 self.update()
 
     def on_analysis_change(self, e):
-            """切換分析模組，並依功能能力顯示對應的共用操作按鈕。
+            """依分析模組能力更新輸入區、共用操作按鈕與結果面板。
 
 參數：
-    e (未指定型別): 函數輸入值。
+    e: Flet 控制項變更事件；程式直接切換時可為 None。
 
 回傳：
     無。"""
@@ -266,7 +267,8 @@ class AnalysisTab(ft.Column):
                 ui.visible = False
 
             # 3. 取得 *選中* 的 UI 容器...
-            selected_ui = self.analysis_map[selected_name]["ui"]
+            selected_definition = self.analysis_map[selected_name]
+            selected_ui = selected_definition["ui"]
 
             # 4. ...並 *只顯示* 它
             selected_ui.visible = True
@@ -274,9 +276,12 @@ class AnalysisTab(ft.Column):
             # --- 新邏輯結束 ---
 
             # --- 模組專屬能力由明確 metadata 表示，而不是由標籤前綴表示。 ---
-            selected_definition = self.analysis_map[selected_name]
             # 熱力圖有專屬繪圖操作，因此不顯示重複的共用執行按鈕。
             self.calc_button_container.visible = selected_definition.get("show_execute_button", True)
+            if hasattr(self, "result_header_row"):
+                show_result_panel = selected_definition.get("show_result_panel", True)
+                self.result_header_row.visible = show_result_panel
+                self.result_container.visible = show_result_panel
             if selected_definition["calculation_mode"] == "psychrometric":
                 for module in self.modules_to_load:
                     if isinstance(module, PsyModule):

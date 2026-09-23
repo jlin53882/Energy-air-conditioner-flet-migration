@@ -1,48 +1,50 @@
-# HVAC UI domain contracts
+# HVAC UI 與領域契約
 
-## Purpose and truth boundary
+## 用途與事實界線
 
-This document records the intended domain-to-UI boundary for thermodynamic and HVAC inputs. Executable code is the implementation truth; this document is the intended contract. Any mismatch is architecture drift that must be investigated and repaired.
+本文記錄熱力學與 HVAC 輸入項目在領域層與 UI 之間預期遵守的界線。可執行程式碼是實際行為的依據；本文則記錄預期契約。若兩者不一致，即代表架構契約已偏移，必須調查並修正。
 
-The Flet presentation layer is not an alternate thermodynamic calculation engine. It adapts user-facing quantities to existing application/domain services and renders values those services actually return.
+Flet 呈現層不是另一套熱力計算引擎。它負責將使用者輸入的量轉交既有應用程式／領域服務，並呈現服務實際回傳的數值。
 
-## Canonical and display units
+## 標準單位與顯示單位
 
-The thermodynamic domain uses canonical SI values: pressure in Pa, temperature in K, enthalpy in J/kg, entropy in J/(kg·K), density in kg/m³, specific volume in m³/kg, and mass in kg. `UnitConverter` owns conversion between user-selected units and those canonical quantities.
+熱力學領域採用標準 SI 值：壓力為 Pa、溫度為 K、焓為 J/kg、熵為 J/(kg·K)、密度為 kg/m³、比容為 m³/kg、質量為 kg。`UnitConverter` 負責使用者所選單位與上述標準量值之間的換算。
 
-Input and output preferences are independent. A global SI/Imperial preference selects result display units; it must not silently replace a field's selected input unit. When a user changes a quantity's unit, convert its numeric value through canonical SI. When a user changes the property type (for example P to T), clear the old numeric value because it is not semantically convertible; refresh the unit options/default and label immediately.
+輸入偏好與輸出偏好彼此獨立。全域 SI／Imperial 偏好用來選擇結果的顯示單位，不得暗中取代欄位已選定的輸入單位。使用者更改某個量的單位時，應透過標準 SI 值換算其數值。使用者更改性質種類（例如由 P 改為 T）時，舊數值在語意上不可換算，必須清除；並立即更新單位選項／預設值與標籤。
 
-## Pressure basis
+## 壓力基準
 
-Pressure is ambiguous unless its basis is explicit. A pressure input must identify `Gauge` or `Absolute` whenever the operation accepts gauge pressure. Thermodynamic property queries and CoolProp state solving require absolute pressure. A gauge-to-absolute adapter must use the configured atmospheric pressure and the selected pressure unit consistently; it must not reinterpret a gauge reading as absolute. Existing HVAC analyzer/module calculations remain the executable contract until a dedicated shared `PressureInput` is migrated across them.
+若未明確指定壓力基準，壓力值便有歧義。凡接受表壓的操作，壓力輸入都必須標示為 `Gauge`（表壓）或 `Absolute`（絕對壓）。熱力性質查詢與 CoolProp 狀態求解都要求絕對壓力。表壓轉絕對壓的轉接邏輯，必須一致採用已設定的大氣壓及所選壓力單位；不得把表壓讀值誤當成絕對壓力。在專用的共用 `PressureInput` 契約完成跨模組遷移前，既有 HVAC 分析器／模組的計算方式仍是實際執行依據。
 
-## Relative humidity and quality
+## 相對濕度與乾度
 
-Relative humidity (`RH`) and vapor quality (`Q`) are different properties with different UI contracts:
+相對濕度（`RH`）與蒸氣乾度（`Q`）是不同性質，必須遵守不同的 UI 契約：
 
-- RH displays a percentage from 0 through 100. The canonical psychrometric boundary normalizes percent to a fraction: `88 %` maps to `0.88`, and a normalized `0.88` is rendered as `88 %`.
-- Quality is dimensionless in the range 0 through 1. `Q = 0.88` displays as `0.88`, never as `88 %` and never as `0.88 %`.
+- RH 以百分比呈現，範圍為 0 至 100。標準心理濕度邊界會將百分比正規化為比例：`88 %` 對應 `0.88`；正規化後的 `0.88` 顯示為 `88 %`。
+- 乾度是無因次量，範圍為 0 至 1。`Q = 0.88` 顯示為 `0.88`，不可顯示成 `88 %`，也不可顯示成 `0.88 %`。
 
-The two properties must not share a percent formatter. RH validation rejects values outside 0–100%; quality validation rejects values outside 0–1.
+兩種性質不得共用百分比格式器。RH 驗證必須拒絕 0–100% 以外的值；乾度驗證必須拒絕 0–1 以外的值。
 
-## Property query and reference state
+## 性質查詢與參考狀態
 
-A property query supplies a fluid, calculation mode, reference-state policy, and the independent input property/value/unit pairs. The UI currently accepts exactly two independent properties for the existing state solver. A visible optional third row is not silently ignored: until additional-constraint validation exists, entering a third value must produce an explicit warning/error and stop the calculation.
+性質查詢會提供流體、計算模式、參考狀態政策，以及成對的獨立輸入性質／數值／單位。現有狀態求解器目前只接受兩個獨立性質。若畫面提供可選的第三列，系統不得默默忽略該列：在尚未支援額外限制條件驗證前，只要第三列有輸入值，就必須明確警告／回報錯誤並停止計算。
 
-Reference-state choices (`ASHRAE`, `IIR`, `NBP`, `Default`) are passed through the existing `resolve_reference_state_policy`/query service. Results identify the fluid, engine, reference convention, actual input units, and output unit system.
+參考狀態選項（`ASHRAE`、`IIR`、`NBP`、`Default`）會傳入既有的 `resolve_reference_state_policy`／查詢服務。結果需標明流體、計算引擎、參考慣例、實際輸入單位及輸出單位系統。
 
-## Result values and metadata
+## 結果數值與中繼資料
 
-Metrics are generated only from keys present in the calculator result. Quality stays unitless. Extensive outputs require a mass value converted to canonical kg; the mass input is hidden until extensive-property calculation is explicitly enabled. Invalid or absent properties are omitted, not replaced with sample numbers.
+只有計算器結果中實際存在的鍵，才能產生對應指標。乾度維持無單位。延伸性質的輸出必須先取得質量並換算為標準 kg；只有在明確啟用延伸性質計算後，才顯示質量輸入欄。無效或缺少的性質應省略，不得以範例數值代替。
 
-A result record should carry enough context to reproduce or interpret it: selected fluid, query inputs with their units, engine/model, reference state, output preference, and result values. Flet controls are never serialized as domain state.
+結果紀錄應包含足以重現或解讀結果的資訊：所選流體、附帶單位的查詢輸入、引擎／模型、參考狀態、輸出偏好及結果數值。Flet 控制項不得序列化為領域狀態。
 
-## State-point and cycle extension
+## 狀態點與循環分析擴充
 
-A future `ThermoStatePoint` adapter may identify a fluid/reference state and carry canonical pressure, temperature, enthalpy, entropy, density, specific volume, quality/phase, original inputs, source, and timestamp. Existing calculators should not be rewritten to depend on that model until adapter contracts and regression coverage are established.
+未來的 `ThermoStatePoint` 轉接模型可識別流體／參考狀態，並承載標準化壓力、溫度、焓、熵、密度、比容、乾度／相態、原始輸入、來源與時間戳記。在轉接契約及回歸測試建立之前，不應要求既有計算器依賴此模型。
 
-Cycle calculations (states 1–4, heat/work/COP/flow) belong in application/domain services, not in UI callbacks. P-h/T-s views consume calculator/chart adapter data and may later reference state-point IDs; they must not duplicate thermodynamic equations.
+循環計算（狀態 1–4、熱量／功／COP／流量）應由應用程式／領域服務負責，不應放在 UI 回呼中。P-h／T-s 畫面應使用計算器／圖表轉接資料，未來可參照狀態點識別碼；不得在 UI 中重複實作熱力方程式。
 
-## Current implementation boundary
+圖表切換契約：P-h／T-s 路由共用熱力圖模組時，切換圖表種類必須清除舊圖形與結果訊息。圖表路由應隱藏通用分析結果面板，避免先前的圖表、表格或分析結果殘留在另一種圖表後方；只保留熱力圖模組專屬的繪圖輸出。
 
-The psychrometric fraction/percent conversion and unit conversion already exist. The property-query adapter now validates finite values, absolute pressure/temperature, quality and RH limits before dispatch, and shows field-local messages; however, a unified reusable pressure-basis control and equivalent validation coverage across every analysis module remain future migration work. Any change to these behaviors requires corresponding boundary/regression tests and an update to this contract.
+## 目前實作界線
+
+心理濕度比例／百分比轉換與單位換算已實作。性質查詢轉接器目前會在派送前驗證有限數值、絕對壓力／溫度、乾度與 RH 範圍，並顯示欄位專屬訊息；不過，共用壓力基準控制項，以及所有分析模組一致的驗證覆蓋，仍屬後續遷移工作。任何行為變更都必須補上相應的邊界／回歸測試，並同步更新本文契約。

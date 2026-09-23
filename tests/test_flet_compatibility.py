@@ -358,6 +358,64 @@ def test_analysis_hides_generic_execute_button_for_thermodiagram() -> None:
     assert analysis_tab.calc_button_container.visible is True
 
 
+def test_chart_routes_hide_the_legacy_analysis_result_panel() -> None:
+    """確認 P-h 與 T-s 圖頁隱藏舊共用結果面板，其他分析仍保留面板。
+
+回傳：
+    無。
+    """
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+
+    for route_key in ("ph_chart", "ts_chart"):
+        shell.navigate(route_key)
+        analysis_tab = shell.views[route_key]
+        assert analysis_tab.result_container.visible is False
+        assert analysis_tab.controls[-2].visible is False
+
+    shell.navigate("compressor")
+    analysis_tab = shell.views["compressor"]
+    assert analysis_tab.result_container.visible is True
+    assert analysis_tab.controls[-2].visible is True
+
+
+def test_chart_route_change_clears_previous_plot_contents() -> None:
+    """確認 P-h 與 T-s 路由切換會清除舊圖表、狀態點及殘留表格。
+
+回傳：
+    無。
+    """
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+    module = next(
+        item for item in shell.views["ph_chart"].modules_to_load
+        if isinstance(item, ThermoDiagramModule)
+    )
+
+    for source_route, target_route, target_diagram in (
+        ("ph_chart", "ts_chart", "T-s"),
+        ("ts_chart", "ph_chart", "P-h"),
+    ):
+        shell.navigate(source_route)
+        figure = module.chart.figure
+        axes = figure.axes[0]
+        axes.plot([0, 1], [0, 1])
+        axes.table(cellText=[["舊資料"]], colLabels=["舊表格"])
+        module.result_text.value = "前一張圖表的結果"
+
+        shell.navigate(target_route)
+
+        assert module.diagram_dd.value == target_diagram
+        assert module.chart.figure is figure
+        assert len(figure.axes) == 1
+        assert len(figure.axes[0].lines) == 0
+        assert len(figure.axes[0].tables) == 0
+        assert any(text.get_text() == "尚未繪製" for text in figure.axes[0].texts)
+        assert module.result_text.value == "請輸入參數並點擊繪圖。"
+
+
 def test_analysis_selection_clears_cached_result_before_unit_refresh() -> None:
     """切換 analysis 後再切單位不得重算尚未執行的新 analysis。
 

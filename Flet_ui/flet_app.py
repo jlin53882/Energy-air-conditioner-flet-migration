@@ -74,7 +74,7 @@ def main(page: ft.Page) -> None:
     }
 
     def on_route_change(route_key: str) -> None:
-        """依穩定路由鍵切換既有 HVAC 分析類別或圖表。
+        """依穩定路由鍵切換 HVAC 分析類別或圖表，並清除圖表舊內容。
 
 參數：
     route_key: 工作區內部使用的路由識別碼。
@@ -85,9 +85,9 @@ def main(page: ft.Page) -> None:
         if route.analysis_category:
             analysis_view.set_category(route.analysis_category)
         if route_key == "ph_chart":
-            diagram_module.diagram_dd.value = "P-h"
+            diagram_module.set_diagram_type("P-h")
         elif route_key == "ts_chart":
-            diagram_module.diagram_dd.value = "T-s"
+            diagram_module.set_diagram_type("T-s")
 
     def on_analysis_unit_change(event: ft.ControlEvent) -> None:
         """將分析頁舊有的輸出單位切換同步到全域偏好。

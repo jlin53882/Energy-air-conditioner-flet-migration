@@ -21,10 +21,16 @@ class ThermoDiagramModule(BaseAnalysisModule):
     # 模組登錄：讓 analysis_tab 自動載入
     # ======================================================
     def get_analysis_definitions(self):
+        """提供熱力圖分析的註冊資料與專屬結果呈現設定。
+
+回傳：
+    以分析名稱為鍵的模組註冊定義。
+    """
         return {
             "熱力圖繪製": {
                 "analysis_id": "thermodynamics.diagram",
                 "show_execute_button": False,
+                "show_result_panel": False,
                 "ui": self.thermo_diagram_ui_container,
                 "calc_func": self.calculate_thermo_diagram
             }
@@ -33,6 +39,42 @@ class ThermoDiagramModule(BaseAnalysisModule):
     # ======================================================
     # 1️⃣ UI 建構區 (與前版相同)
     # ======================================================
+    def set_diagram_type(self, diagram: str) -> None:
+        """切換圖表種類並清除舊圖，避免顯示與目前路由不符的內容。
+
+參數：
+    diagram: 要顯示的圖表種類，限 P-h、T-s、P-v 或 T-v。
+
+回傳：
+    無。
+
+引發：
+    ValueError: 指定的圖表種類不在目前支援選項中。
+        """
+        supported_diagrams = {"P-h", "T-s", "P-v", "T-v"}
+        if diagram not in supported_diagrams:
+            raise ValueError(f"不支援的圖表種類：{diagram}")
+
+        self.diagram_dd.value = diagram
+        figure = self.chart.figure
+        figure.clear()
+        axes = figure.add_subplot(111)
+        axes.text(0.5, 0.5, "尚未繪製", ha="center", va="center", color="gray")
+        self.chart.figure = figure
+        self.result_text.value = "請輸入參數並點擊繪圖。"
+        self.result_text.color = ft.Colors.GREY_600
+        self.fluid_check_result.value = ""
+        self.plot_btn.disabled = False
+
+        try:
+            chart_page = self.chart.page
+        except RuntimeError:
+            chart_page = None
+        if chart_page:
+            self.chart.send_message({"type": "refresh"})
+        if self.parent:
+            self.page.update()
+
     def _build_thermo_diagram_ui(self):
         """建立熱力圖輸入與繪圖區
 
@@ -66,6 +108,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
             options=[ft.dropdown.Option(x) for x in ["P-h", "T-s", "P-v", "T-v"]],
             value="P-h",
             width=160,
+            on_select=lambda event: self.set_diagram_type(event.control.value),
         )
         
         # --- 參考狀態選項 ---
