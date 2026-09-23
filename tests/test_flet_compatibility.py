@@ -15,6 +15,7 @@ from Flet_ui.ui_components.analysis_modules.psy_module import PsyModule
 from Flet_ui.ui_components.analysis_modules import thermo_diagram_module
 from Flet_ui.ui_components.analysis_modules.thermo_diagram_module import ThermoDiagramModule
 from Flet_ui.ui_components.analysis_tab import AnalysisTab
+from Flet_ui.ui.state import WorkspaceState
 from Flet_ui.ui_components.property_tab import PropertyTab
 from Flet_ui.ui_components.unit.HVACAnalyzer import HVACAnalyzer
 from Flet_ui.ui_components.unit.PropertyFormatter import PropertyFormatter
@@ -131,7 +132,10 @@ def test_flet_tabs_and_analysis_controls_construct() -> None:
 
     assert property_tab.controls
     assert analysis_tab.controls
-    assert not property_tab.result_container.expand
+    assert property_tab.result_panel.status == "empty"
+    assert property_tab.scroll is None
+    assert property_tab.controls[-1] is property_tab.action_bar
+    assert property_tab.controls[0].scroll == ft.ScrollMode.AUTO
 
 
 def test_property_dropdown_selection_refreshes_units_through_flet_event() -> None:
@@ -150,6 +154,7 @@ def test_property_dropdown_selection_refreshes_units_through_flet_event() -> Non
     )
 
     row = property_tab.input_rows[0]
+    row["val"].value = "950"
     row["prop"].value = property_tab.prop_names_map["T"]
     assert row["prop"].on_select is not None
     row["prop"].on_select(None)
@@ -157,6 +162,9 @@ def test_property_dropdown_selection_refreshes_units_through_flet_event() -> Non
     option_values = [option.key for option in row["unit"].options]
     assert option_values == ["K", "°C", "°F"]
     assert row["unit"].value == "°C"
+    assert row["val"].value == ""
+    assert property_tab.quantity_inputs[0].label == "Temperature (溫度)"
+    assert property_tab.quantity_inputs[0].label_control.value == "Temperature (溫度)"
     assert property_tab._last_prop_units[0] == "°C"
 
 
@@ -367,20 +375,229 @@ def test_analysis_selection_clears_cached_result_before_unit_refresh() -> None:
     assert analysis_tab._has_calculated_result is False
 
 
-def test_tab_views_wrap_content_for_flet_layout_constraints() -> None:
-    """限制 tab content 範圍，讓 Flet 1 能渲染完整的可捲動 tabs。
-
-回傳：
-    無。"""
+def test_app_shell_replaces_top_level_tabs_and_exposes_implemented_routes() -> None:
+    """The Flet entrypoint mounts the workspace shell with independently reachable tools."""
     page = DummyPage()
     flet_main(page)
 
-    tabs = page.controls[0]
-    tab_bar_view = tabs.content.controls[1]
-    assert all(isinstance(control, ft.Container) for control in tab_bar_view.controls)
-    assert all(control.expand for control in tab_bar_view.controls)
-    assert isinstance(tab_bar_view.controls[0].content, PropertyTab)
-    assert isinstance(tab_bar_view.controls[1].content, AnalysisTab)
+    shell = page.controls[0]
+    assert isinstance(shell, ft.Column)
+    assert shell.sidebar is not None
+    assert shell.top_bar is not None
+    assert shell.workspace is not None
+    assert shell.context_panel is not None
+    assert {"thermo_properties", "compressor", "evaporator", "condenser",
+            "psychrometrics", "ph_chart", "ts_chart"} <= set(shell.views)
+    assert shell.route_header.controls[0].value == "狀態查詢"
+
+
+def test_navigation_routes_update_analysis_category_and_chart_choice() -> None:
+    """Route changes select existing calculation registries rather than label-based placeholders."""
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+
+    workspace_content = shell.workspace.content
+    shell.navigate("compressor")
+    assert shell.views["compressor"].active_category == "compressor"
+    assert shell.views["compressor"].analysis_dd.value in shell.views["compressor"]._active_analysis_names
+    assert shell.workspace.content is workspace_content
+    assert shell.views["thermo_properties"].visible is False
+    assert shell.views["compressor"].visible is True
+    assert shell.views["compressor"].module_nav.controls
+
+    shell.navigate("ph_chart")
+    chart_module = next(
+        module for module in shell.views["ph_chart"].modules_to_load
+        if isinstance(module, ThermoDiagramModule)
+    )
+    assert chart_module.diagram_dd.value == "P-h"
+
+    shell.navigate("ts_chart")
+    assert chart_module.diagram_dd.value == "T-s"
+
+
+def test_responsive_shell_collapses_sidebar_and_context_panel() -> None:
+    """Narrow windows expose the menu drawer and hide the optional context panel."""
+    page = DummyPage()
+    page.width = 760
+    flet_main(page)
+    shell = page.controls[0]
+
+    assert isinstance(shell.content_row, ft.Stack)
+    assert shell.sidebar.visible is False
+    assert shell.context_panel.visible is False
+    assert shell.workspace_region.padding.left == 0
+    page.width = 1024
+    shell._on_resize(None)
+    assert shell.sidebar.visible is True
+    assert shell.sidebar.width == 76
+    assert shell.workspace_region.padding.left == 76
+    assert shell.context_panel.visible is False
+    page.width = 760
+    shell._on_resize(None)
+    shell._toggle_sidebar(None)
+    assert shell.sidebar.visible is True
+    shell._on_keyboard_event(SimpleNamespace(key="Escape", ctrl=False))
+    assert shell.sidebar.visible is False
+
+
+def test_global_output_unit_switch_renders_new_metrics_without_mutating_inputs(monkeypatch) -> None:
+    """Metric rendering follows SI/Imperial preference while each entered unit stays intact."""
+    converter = UnitConverter()
+    service = PropertyQueryService(ThermoStateCalculator(converter).state_service)
+    property_tab = PropertyTab(
+        unit_converter=converter,
+        formatter=PropertyFormatter(converter),
+        page=DummyPage(),
+        query_service=service,
+    )
+    property_tab.update = lambda: None
+    property_tab.show_error = lambda _message: None
+    property_tab.input_rows[0]["val"].value = "1000"
+    property_tab.input_rows[1]["val"].value = "0"
+    query_calls = []
+
+    def fake_query(request):
+        query_calls.append(request)
+        return {
+            "P": 1_000_000.0,
+            "T": 273.15,
+            "H": 300_000.0,
+            "S": 1_000.0,
+            "D": 10.0,
+            "V": 0.1,
+            "Q": 0.88,
+            "phase": "gas",
+        }
+
+    monkeypatch.setattr(service, "query", fake_query)
+
+    property_tab.perform_calculation(None)
+    si_pressure = property_tab.result_panel.metrics["Pressure"]
+    original_units = [row["unit"].value for row in property_tab.input_rows[:2]]
+    property_tab.set_output_unit_system("Imperial")
+
+    assert si_pressure.endswith("kPa")
+    assert property_tab.result_panel.metrics["Pressure"].endswith("psia")
+    assert property_tab.result_panel.metrics["Quality"] == "0.8800"
+    assert [row["unit"].value for row in property_tab.input_rows[:2]] == original_units
+    assert property_tab.raw_output.value
+
+    property_tab.input_rows[0]["val"].value = "-1"
+    property_tab.set_output_unit_system("SI")
+    assert len(query_calls) == 1
+    assert property_tab.result_panel.status == "success"
+    assert property_tab.result_panel.metrics["Pressure"].endswith("kPa")
+    assert property_tab.input_rows[0]["val"].value == "-1"
+
+    property_tab.input_rows[0]["val"].value = "1000"
+    property_tab.input_rows[2]["val"].value = "1"
+    property_tab.perform_calculation(None)
+    assert property_tab.raw_output.value == ""
+    assert property_tab.result_panel.status == "error"
+
+
+def test_analysis_local_unit_toggle_updates_the_global_preference() -> None:
+    """A legacy analysis selector must remain synchronized with shell and property units."""
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+    analysis_view = shell.views["compressor"]
+    analysis_view.output_unit_toggle.selected = ["Imperial"]
+    analysis_view.output_unit_toggle.on_change(
+        SimpleNamespace(control=analysis_view.output_unit_toggle)
+    )
+
+    assert shell.state.output_unit_system == "Imperial"
+    assert shell.unit_toggle.selected == ["Imperial"]
+    assert shell.views["thermo_properties"].output_unit_system == "Imperial"
+
+
+def test_workspace_state_remembers_input_units_by_row_and_property() -> None:
+    """Row-specific unit choices survive property changes without becoming global output units."""
+    converter = UnitConverter()
+    state = WorkspaceState(input_units={"condition_0_T": "°F"})
+    tab = PropertyTab(
+        unit_converter=converter,
+        formatter=PropertyFormatter(converter),
+        page=DummyPage(),
+        query_service=PropertyQueryService(ThermoStateCalculator(converter).state_service),
+        workspace_state=state,
+    )
+
+    assert tab.input_rows[0]["unit"].value == "kPa"
+    tab.input_rows[0]["prop"].value = tab.prop_names_map["T"]
+    tab.input_rows[0]["prop"].on_select(None)
+    assert tab.input_rows[0]["unit"].value == "°F"
+    assert tab.input_rows[0]["val"].value == ""
+    tab.set_output_unit_system("Imperial")
+    assert state.output_unit_system == "Imperial"
+    assert state.input_units["condition_0_T"] == "°F"
+
+
+def test_reference_state_selector_uses_short_executable_codes_with_helper_copy() -> None:
+    """The compact selector displays a stable code and keeps its meaning beside the field."""
+    converter = UnitConverter()
+    tab = PropertyTab(
+        unit_converter=converter,
+        formatter=PropertyFormatter(converter),
+        page=DummyPage(),
+        query_service=PropertyQueryService(ThermoStateCalculator(converter).state_service),
+    )
+
+    assert tab.ref_state_dd.value == "ASHRAE"
+    assert {option.key for option in tab.ref_state_dd.options} == {"ASHRAE", "IIR", "NBP", "Default"}
+    tab.ref_state_dd.value = "NBP"
+    tab.on_ref_state_change(None)
+    assert "Normal boiling point" in tab.reference_state_helper.value
+
+
+def test_property_query_validation_errors_are_attached_to_the_offending_field() -> None:
+    """Invalid pressure is rejected beside its input before the thermodynamic service runs."""
+    converter = UnitConverter()
+    state_calculator = ThermoStateCalculator(converter)
+    tab = PropertyTab(
+        unit_converter=converter,
+        formatter=PropertyFormatter(converter),
+        page=DummyPage(),
+        query_service=PropertyQueryService(state_calculator.state_service),
+    )
+    tab.update = lambda: None
+    tab.input_rows[0]["val"].value = "-1"
+    tab.input_rows[1]["val"].value = "12"
+
+    tab.perform_calculation(None)
+
+    assert "大於 0" in tab.input_rows[0]["val"].error_text
+    assert tab.quantity_inputs[0].error_control.visible is True
+    assert "大於 0" in tab.quantity_inputs[0].error_control.value
+    assert tab.input_rows[1]["val"].error_text is None
+    assert tab.result_panel.status == "error"
+
+    tab._reset_inputs(None)
+
+    assert tab.input_rows[0]["val"].error_text is None
+    assert tab.quantity_inputs[0].error_control.visible is False
+    assert tab.quantity_inputs[0].error_control.value == ""
+    assert tab.result_panel.status == "empty"
+
+
+def test_relative_humidity_and_quality_validation_remain_distinct() -> None:
+    """RH percentage and unitless quality enforce separate user-facing ranges."""
+    converter = UnitConverter()
+    state_calculator = ThermoStateCalculator(converter)
+    tab = PropertyTab(
+        unit_converter=converter,
+        formatter=PropertyFormatter(converter),
+        page=DummyPage(),
+        query_service=PropertyQueryService(state_calculator.state_service),
+    )
+
+    assert tab._validate_known_input("RH", "88", "%") == (88.0, None)
+    assert tab._validate_known_input("Q", "0.88", "-") == (0.88, None)
+    assert "0–100%" in tab._validate_known_input("RH", "120", "%")[1]
+    assert "0–1" in tab._validate_known_input("Q", "1.2", "-")[1]
 
 
 def test_flet_text_theme_styles_use_theme_style_parameter() -> None:
@@ -394,7 +611,6 @@ def test_flet_text_theme_styles_use_theme_style_parameter() -> None:
     ):
         source = (Path(__file__).parents[1] / relative_path).read_text(encoding="utf-8")
         assert ", style=ft.TextThemeStyle" not in source
-        assert "theme_style=ft.TextThemeStyle" in source
 
 
 def test_launcher_uses_flet_only_entrypoint() -> None:
