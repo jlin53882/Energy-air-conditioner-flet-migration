@@ -22,6 +22,9 @@ logs/
 # GitNexus local index
 .gitnexus/
 
+# Local-only UI sketches and comparison artifacts (never commit or upload)
+/sketches/
+
 # IDE and OS metadata
 .vscode/
 .idea/
