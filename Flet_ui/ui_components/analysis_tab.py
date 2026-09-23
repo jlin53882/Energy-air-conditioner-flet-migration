@@ -143,7 +143,54 @@ class AnalysisTab(ft.Column):
 
         # --- 8. 初始化第一個模組的 UI ---
         self.on_analysis_change(None) 
-        self.on_output_unit_change(None) # 初始化大氣壓力預設值
+        self.on_output_unit_change(None)  # Initialize atmosphere defaults.
+        self._configure_workspace_layout()
+        self.set_category("compressor")
+        self.set_category("compressor")
+
+    def set_category(self, category: str) -> None:
+        """Show one engineering route and its local calculation choices."""
+        self.active_category = category
+        prefix = "thermodynamics" if category == "charts" else category
+        self._active_analysis_names = [
+            name for name, definition in self.analysis_map.items()
+            if definition["analysis_id"].startswith(prefix + ".")
+        ]
+        if not self._active_analysis_names:
+            raise KeyError(f"No registered analysis route: {category}")
+        self.analysis_dd.value = self._active_analysis_names[0]
+        self.module_nav.controls = [
+            ft.OutlinedButton(
+                name,
+                on_click=lambda _event, selected=name: self.select_analysis(selected),
+            )
+            for name in self._active_analysis_names
+        ]
+        self.on_analysis_change(None)
+
+    def select_analysis(self, name: str) -> None:
+        """Select one real calculation within the currently active route."""
+        if name not in self._active_analysis_names:
+            raise KeyError(f"Analysis is not part of {self.active_category}: {name}")
+        self.analysis_dd.value = name
+        self.on_analysis_change(None)
+
+    def _configure_workspace_layout(self) -> None:
+        """Replace the monolithic analysis dropdown with route-local operation choices."""
+        self.module_nav = ft.Row(controls=[], spacing=8, wrap=True)
+        self.controls = [
+            ft.Text("分析模式", theme_style=ft.TextThemeStyle.TITLE_MEDIUM,
+                    weight=ft.FontWeight.W_600),
+            self.module_nav,
+            self.controls_stack,
+            self.calc_button_container,
+            ft.Row([
+                ft.Text("分析結果", theme_style=ft.TextThemeStyle.TITLE_MEDIUM,
+                        weight=ft.FontWeight.W_600, expand=True),
+                self.output_unit_toggle,
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            self.result_container,
+        ]
 
     def on_output_unit_change(self, e):
         """切換輸出單位時，通知 *所有* 模組更新大氣壓力預設值
