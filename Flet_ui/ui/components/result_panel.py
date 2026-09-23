@@ -8,7 +8,7 @@ from ..theme import TOKENS
 
 
 class ResultPanel(ft.Container):
-    """呈現計算狀態、真實指標、結果中繼資料與選用的原始輸出。"""
+    """呈現計算狀態、結構化指標與結果中繼資料。"""
 
     SUPPORTED_STATES = frozenset({"empty", "loading", "success", "warning", "error"})
 
@@ -20,7 +20,6 @@ class ResultPanel(ft.Container):
         self.status = "empty"
         self.metrics: dict[str, str] = {}
         self.metadata: dict[str, str] = {}
-        self.raw_output = ""
         self._body = ft.Column(spacing=TOKENS.spacing_md)
         super().__init__(
             content=self._body,

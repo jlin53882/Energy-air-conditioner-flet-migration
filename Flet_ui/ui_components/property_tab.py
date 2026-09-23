@@ -151,14 +151,14 @@ class PropertyTab(ft.Column):
         self.output_unit_system = self.workspace_state.output_unit_system
 
         self.result_text = ft.Text(
-            "點擊 '執行計算' 查看結果...", 
-            selectable=True, 
-            color=ft.Colors.GREY_600 # 初始提示文字使用灰色
+            "", selectable=True, visible=False, color=ft.Colors.GREY_600
         )
         self._has_calculated_result = False
         self._last_si_results: dict[str, object] | None = None
         self._last_total_mass_kg: float | None = None
         self._last_result_metadata: dict[str, str] = {}
+        self._last_input_summary = ""
+        self._last_formatted_output = ""
 
         # 初始化模式設定 (設定 fluid_tf 和 ideal_gas_cb 的初始狀態)
         self.on_mode_change_internal()
@@ -244,11 +244,12 @@ class PropertyTab(ft.Column):
             visible=False,
         )
         self.result_panel = ResultPanel()
-        self.raw_output = self.result_text
-        self.raw_output.visible = False
-        self.details_button = ft.TextButton("查看詳細結果", on_click=self._toggle_raw_output)
+        self.raw_output = ft.Text("", selectable=True, visible=False)
+        self.details_button = ft.TextButton(
+            "查看詳細結果", on_click=self._toggle_raw_output, disabled=True
+        )
         self.copy_result_button = ft.OutlinedButton(
-            "複製結果", icon=ft.Icons.CONTENT_COPY, on_click=self._copy_result
+            "複製結果", icon=ft.Icons.CONTENT_COPY, on_click=self._copy_result, disabled=True
         )
         configuration = EngineeringCard(
             "計算設定",
@@ -285,6 +286,7 @@ class PropertyTab(ft.Column):
             "計算結果",
             ft.Column([
                 self.result_panel,
+                self.result_text,
                 ft.Row([self.details_button, self.copy_result_button]),
                 self.raw_output,
             ], spacing=TOKENS.spacing_sm),
@@ -373,8 +375,26 @@ class PropertyTab(ft.Column):
         except RuntimeError:
             pass
 
+    def _restore_mass_unit_selection(self, old_unit: str, message: str) -> None:
+        """回復失敗換算的質量單位，保留尚未改寫的原始數值。
+
+        參數：
+            old_unit: 換算前有效的質量顯示單位。
+            message: 顯示於質量欄位旁的錯誤說明。
+
+        回傳：
+            無。
+        """
+        self.mass_unit_dd.value = old_unit
+        self._last_mass_unit = old_unit
+        self.mass_tf.error_text = message
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
     def _on_mass_unit_change(self, _event: ft.ControlEvent | None) -> None:
-        """換算質量欄位的顯示單位，保留相同的標準質量值。
+        """換算質量欄位的顯示單位，並對失敗換算回復完整欄位狀態。
 
         參數：
             _event: 質量單位選單的 Flet 變更事件。
@@ -386,7 +406,7 @@ class PropertyTab(ft.Column):
         old_unit = self._last_mass_unit
         if not new_unit or new_unit == old_unit:
             return
-        raw_value = self.mass_tf.value.strip()
+        raw_value = (self.mass_tf.value or "").strip()
         if raw_value:
             try:
                 value = float(raw_value)
@@ -396,8 +416,18 @@ class PropertyTab(ft.Column):
                 try:
                     mass_kg = self.unit_converter.convert_to_si("Mass", value, old_unit)
                     converted = self.unit_converter.convert_from_si("Mass", mass_kg, new_unit)
+                except (TypeError, ValueError):
+                    self._restore_mass_unit_selection(
+                        old_unit, "質量單位換算失敗，已恢復原單位。"
+                    )
+                    return
                 except Exception:
-                    self.mass_unit_dd.value = old_unit
+                    logging.getLogger(__name__).exception(
+                        "Unexpected error while converting the extensive-property mass unit"
+                    )
+                    self._restore_mass_unit_selection(
+                        old_unit, "質量單位換算發生非預期錯誤，已恢復原單位。"
+                    )
                     raise
                 self.mass_tf.value = f"{converted:.7g}"
         self._last_mass_unit = new_unit
@@ -407,6 +437,29 @@ class PropertyTab(ft.Column):
         except RuntimeError:
             pass
 
+    def _clear_result_presentation_snapshot(self) -> None:
+        """清除結果快照及其所有可複製、摘要與詳細資料投影。
+
+        回傳：
+            無。
+        """
+        self._has_calculated_result = False
+        self._last_si_results = None
+        self._last_total_mass_kg = None
+        self._last_result_metadata = {}
+        self._last_input_summary = ""
+        self._last_formatted_output = ""
+        self.result_text.value = ""
+        self.result_text.visible = False
+        self.result_text.color = ft.Colors.GREY_600
+        self.raw_output.value = ""
+        self.raw_output.visible = False
+        self.details_button.text = "查看詳細結果"
+        self.details_button.disabled = True
+        self.copy_result_button.disabled = True
+        self.result_panel.metrics = {}
+        self.result_panel.metadata = {}
+
     def _mark_calculated_result_stale(self) -> None:
         """清除不再對應目前語意輸入的結果與快取。
 
@@ -415,33 +468,39 @@ class PropertyTab(ft.Column):
         """
         if not self._has_calculated_result:
             return
-        self._has_calculated_result = False
-        self._last_si_results = None
-        self._last_total_mass_kg = None
-        self._last_result_metadata = {}
-        self.raw_output.value = ""
-        self.result_panel.metrics = {}
-        self.result_panel.metadata = {}
-        self.result_panel.raw_output = ""
+        self._clear_result_presentation_snapshot()
         self.result_panel.set_status(
             "warning", "輸入已變更", "舊結果已清除，請使用目前輸入重新執行計算。"
         )
-        self.result_text.color = ft.Colors.GREY_600
 
     def _toggle_raw_output(self, _event: ft.ControlEvent | None) -> None:
-        """按需顯示相容性原始文字輸出，不將其作為主要結果畫面。
+        """按需顯示只含格式化性質的詳細文字，不改變摘要或快照資料。
 
 參數：
     _event: Flet 點擊事件；此處不需讀取事件內容。
 
 回傳：
     無。"""
+        if not self._has_calculated_result:
+            return
         self.raw_output.visible = not self.raw_output.visible
         self.details_button.text = "隱藏詳細結果" if self.raw_output.visible else "查看詳細結果"
         try:
             self.update()
         except RuntimeError:
             pass
+
+    def _compose_result_text(self) -> str:
+        """從有效快照組成含輸入摘要及目前輸出單位的可複製文字。
+
+        回傳：
+            目前快照的完整純文字表示；快照已清除時回傳空字串。
+        """
+        if not self._last_formatted_output:
+            return ""
+        if not self._last_input_summary:
+            return self._last_formatted_output
+        return f"{self._last_input_summary}\n\n{self._last_formatted_output}"
 
     async def _copy_result(self, _event: ft.ControlEvent | None) -> None:
         """透過 Flet 剪貼簿服務複製最近一次成功計算的結果。
@@ -453,7 +512,7 @@ class PropertyTab(ft.Column):
     無。"""
         if not self._has_calculated_result:
             return
-        await ft.Clipboard().set(self.result_text.value or "")
+        await ft.Clipboard().set(self._compose_result_text())
 
     def _reset_inputs(self, _event: ft.ControlEvent | None) -> None:
         """清除查詢值、錯誤、快取及選用區塊狀態，保留流體、模式、參考政策與輸出偏好。
@@ -475,18 +534,8 @@ class PropertyTab(ft.Column):
         self.extensive_section.visible = False
         self.mass_tf.value = ""
         self.mass_tf.error_text = None
-        self.raw_output.visible = False
-        self.details_button.text = "查看詳細結果"
-        self._has_calculated_result = False
-        self._last_si_results = None
-        self._last_total_mass_kg = None
-        self._last_result_metadata = {}
-        self.result_panel.metrics = {}
-        self.result_panel.metadata = {}
-        self.result_panel.raw_output = ""
+        self._clear_result_presentation_snapshot()
         self.result_panel.set_status("empty", "尚未計算", "輸入至少兩個獨立性質後執行計算。")
-        self.raw_output.value = "點擊 '執行計算' 查看結果..."
-        self.result_text.color = ft.Colors.GREY_600
         try:
             self.update()
         except RuntimeError:
@@ -534,8 +583,12 @@ class PropertyTab(ft.Column):
             output += self.formatter.format_extensive_properties(
                 self._last_si_results, self._last_total_mass_kg, use_imperial
             )
+        self._last_formatted_output = output
         self.raw_output.value = output
-        self.result_panel.raw_output = output
+        self.result_text.value = self._compose_result_text()
+        self.result_text.visible = True
+        self.details_button.disabled = False
+        self.copy_result_button.disabled = False
 
     def _format_result_metrics(self, si_results: dict[str, object], use_imperial: bool) -> dict[str, str]:
         """將計算結果中可用的數值格式化為結果卡片指標。
@@ -852,26 +905,13 @@ class PropertyTab(ft.Column):
 
 回傳：
     無。"""
-        self._has_calculated_result = False
-        self._last_si_results = None
-        self._last_total_mass_kg = None
-        self._last_result_metadata = {}
-        self.result_panel.metrics = {}
-        self.result_panel.metadata = {}
-        self.result_panel.raw_output = ""
-        self.raw_output.value = ""
+        self._clear_result_presentation_snapshot()
         fluid = self.fluid_tf.value.strip()
-
-        # UI 重設：在每次計算開始前，將結果文本和容器邊框重設為預設顏色
-        self.result_text.color = ft.Colors.BLACK 
 
         # 1. 檢查物質名稱是否有效
         if not self.query_service.is_fluid_valid(fluid):
             self.result_panel.set_error("找不到這個物質，請確認流體名稱。")
-            # 物質無效時的錯誤處理和 UI 反饋
-            self.show_error(f"錯誤：找不到流體 '{fluid}'") # 顯示 SnackBar 提示
-            self.result_text.value = f"錯誤：找不到流體 '{fluid}'"
-            self.result_text.color = ft.Colors.RED_700 # 錯誤訊息使用紅色
+            self.show_error(f"錯誤：找不到流體 '{fluid}'")
             self.update()
             return # 停止計算
 
@@ -910,8 +950,6 @@ class PropertyTab(ft.Column):
             self.result_panel.set_status("warning", "輸入不足", "請至少輸入兩組有效的獨立性質。")
             # 輸入不足時的錯誤處理和 UI 反饋
             self.show_error("請至少輸入兩組有效的性質。")
-            self.result_text.value = "請至少輸入兩組有效的性質。"
-            self.result_text.color = ft.Colors.ORANGE_700 # 使用警告色
             self.update()
             return # 停止計算
 
@@ -949,13 +987,21 @@ class PropertyTab(ft.Column):
         # 4. 設定計算模式 (CoolProp 實際流體 vs. 理想氣體)
         is_ideal = self.ideal_gas_cb.value and self.mode_dd.value.startswith("Water")
         calc_type = " (理想氣體模型)" if is_ideal else ""
-        
-        # 5. 顯示「計算中...」訊息 (提供即時反饋)
-        self.result_panel.set_status("loading", "計算中", "正在查詢熱力性質。")
-        self.result_text.value = f"--- 輸入 ---\n物質: {fluid}{calc_type}\n已知: {', '.join(display_inputs[:2])}\n\n計算中..."
-        self.result_text.color = ft.Colors.BLUE_GREY # 計算中提示色
-        self.update() # 立即更新 UI 顯示「計算中...」
+        ref_code = self.ref_state_dd.value.split(" ")[0]
+        input_summary = [
+            "--- 輸入 ---",
+            f"計算模式: {self.mode_dd.value}",
+            f"物質: {fluid}{calc_type}",
+            f"參考狀態: {ref_code}",
+            f"已知: {', '.join(display_inputs[:2])}",
+        ]
+        if total_mass_kg is not None:
+            input_summary.append(f"總質量: {self.mass_tf.value.strip()} {self.mass_unit_dd.value}")
+        self._last_input_summary = "\n".join(input_summary)
 
+        # 5. 顯示「計算中」狀態；完整摘要只在成功快照建立後呈現。
+        self.result_panel.set_status("loading", "計算中", "正在查詢熱力性質。")
+        self.update()
         # 6. 執行核心熱力學計算
         try:
             # 執行計算，將前兩個輸入性質傳遞給核心計算器
@@ -973,7 +1019,6 @@ class PropertyTab(ft.Column):
             self._last_si_results = si_results
             self._last_total_mass_kg = total_mass_kg
             self._has_calculated_result = True
-            ref_code = self.ref_state_dd.value.split(" ")[0]
             metadata = {
                 "Fluid": fluid,
                 "Engine": "Ideal Gas" if is_ideal else "CoolProp",
@@ -983,27 +1028,11 @@ class PropertyTab(ft.Column):
             }
             self._last_result_metadata = metadata.copy()
             self._render_cached_result()
-            self.result_text.value = (
-                f"--- 輸入 ---\n物質: {fluid}{calc_type}\n"
-                f"已知: {', '.join(display_inputs[:2])}\n\n{self.raw_output.value}"
-            )
-            self.result_text.color = ft.Colors.BLACK
 
         except Exception as err:
-            # 8. 捕獲計算錯誤
-            self._has_calculated_result = False
-            self._last_si_results = None
-            self._last_total_mass_kg = None
-            self._last_result_metadata = {}
-            self.result_panel.metrics = {}
-            self.result_panel.metadata = {}
-            self.result_panel.raw_output = ""
             error_message = str(err) if isinstance(err, ValueError) else "無法使用目前條件完成計算。"
+            self._clear_result_presentation_snapshot()
             self.result_panel.set_error(error_message)
-            self.raw_output.value = ""
-            self.show_error(error_message) # 顯示 SnackBar 提示
-            self.result_text.value = error_message # 結果區顯示詳細錯誤
-            self.result_text.color = ft.Colors.RED_700 # 錯誤訊息使用紅色
-            
+            self.show_error(error_message)
         finally:
             self.update() # 無論成功或失敗，確保 UI 最終狀態被更新

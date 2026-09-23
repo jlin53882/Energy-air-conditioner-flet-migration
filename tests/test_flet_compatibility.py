@@ -1,5 +1,6 @@
 """Flet 1.0 migration boundary 的 regression test。"""
 
+import asyncio
 from pathlib import Path
 from subprocess import run
 from sys import executable
@@ -933,7 +934,7 @@ def test_property_result_becomes_stale_after_numeric_input_change(monkeypatch: p
     assert tab._last_result_metadata == {}
     assert tab.result_panel.metrics == {}
     assert tab.result_panel.metadata == {}
-    assert tab.result_panel.raw_output == ""
+    assert tab.raw_output.value == ""
 
     tab.set_output_unit_system("Imperial")
     assert tab.result_panel.status != "success"
@@ -1137,8 +1138,8 @@ def test_property_reset_restores_optional_ui_state(monkeypatch: pytest.MonkeyPat
     assert tab.result_panel.status == "empty"
     assert tab.result_panel.metrics == {}
     assert tab.result_panel.metadata == {}
-    assert tab.result_panel.raw_output == ""
-    assert tab.raw_output.value == "點擊 '執行計算' 查看結果..."
+    assert tab.raw_output.value == ""
+    assert tab.result_text.value == ""
     assert tab.mass_tf.value == ""
     assert tab.mass_tf.error_text is None
     assert tab._has_calculated_result is False
@@ -1163,7 +1164,7 @@ def test_failed_recalculation_clears_previous_result_snapshot(monkeypatch: pytes
     """
     tab, _calls = _build_property_tab_with_fake_query(monkeypatch)
     _calculate_property_tab(tab)
-    assert tab.result_panel.raw_output
+    assert tab.raw_output.value
 
     def fail_query(_request: object) -> dict[str, object]:
         """模擬查詢服務在重新計算時失敗。
@@ -1182,11 +1183,16 @@ def test_failed_recalculation_clears_previous_result_snapshot(monkeypatch: pytes
     assert tab.result_panel.status == "error"
     assert tab.result_panel.metrics == {}
     assert tab.result_panel.metadata == {}
-    assert tab.result_panel.raw_output == ""
+    assert tab.raw_output.value == ""
     assert tab._has_calculated_result is False
     assert tab._last_si_results is None
     assert tab._last_total_mass_kg is None
     assert tab._last_result_metadata == {}
+    assert tab._last_input_summary == ""
+    assert tab._last_formatted_output == ""
+    assert tab.result_text.value == ""
+    assert tab.raw_output.value == ""
+    assert tab.copy_result_button.disabled is True
 
 
 @pytest.mark.parametrize(
@@ -1283,3 +1289,294 @@ def test_mass_unit_representation_change_preserves_extensive_snapshot(monkeypatc
     assert "總質量 (Mass): 22.0462 lbm" in tab.raw_output.value
     assert "Btu" in tab.raw_output.value
     assert len(calls) == 1
+
+
+def test_property_result_text_keeps_input_summary_after_output_unit_rerender(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """輸出單位重繪只改格式，保留最近成功計算的輸入摘要。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, calls = _build_property_tab_with_fake_query(monkeypatch)
+    _calculate_property_tab(tab)
+    si_summary = tab.result_text.value
+    si_input_summary = si_summary.partition("\n\n")[0]
+    si_copy = tab._compose_result_text()
+    assert si_copy == si_summary
+
+    assert "計算模式" in si_summary
+    assert "R32" in si_summary
+    assert "已知:" in si_summary
+    assert "1000 kPa" in si_summary
+    assert "25 °C" in si_summary
+    assert "kJ/kg" in si_copy
+
+    tab.set_output_unit_system("Imperial")
+    imperial_copy = tab._compose_result_text()
+
+    assert tab.result_text.value.startswith(si_input_summary)
+    assert tab.result_text.value != si_summary
+    assert tab.result_text.value == imperial_copy
+    assert "計算模式" in tab.result_text.value
+    assert "R32" in tab.result_text.value
+    assert "已知:" in tab.result_text.value
+    assert "1000 kPa" in tab.result_text.value
+    assert "25 °C" in tab.result_text.value
+    assert "psia" in tab.raw_output.value
+    assert "Btu/lbm" in imperial_copy
+    assert imperial_copy != si_copy
+    assert len(calls) == 1
+
+
+def test_property_raw_output_is_not_the_same_control_as_result_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """詳細文字控制項不得與輸入摘要控制項共用同一個 Flet 物件。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, _calls = _build_property_tab_with_fake_query(monkeypatch)
+    _calculate_property_tab(tab)
+
+    assert tab.raw_output is not tab.result_text
+    assert not hasattr(tab.result_panel, "raw_output")
+    result_card_content = tab.controls[0].controls[-1].content.controls[-1]
+    assert tab.result_text in result_card_content.controls
+    assert tab.raw_output.visible is False
+    assert tab.result_text.visible is True
+
+
+def test_property_copy_result_contract_is_stable_across_unit_rerender(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """複製內容由有效快照組成，切換輸出單位只改格式而不改摘要結構。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, calls = _build_property_tab_with_fake_query(monkeypatch)
+    _calculate_property_tab(tab)
+    copied: list[str] = []
+
+    class ClipboardCapture:
+        """收集測試中複製的文字，不存取作業系統剪貼簿。"""
+
+        async def set(self, value: str) -> None:
+            """記錄剪貼簿服務收到的內容。
+
+            參數：
+                value: 要複製的完整結果文字。
+
+            回傳：
+                無。
+            """
+            copied.append(value)
+
+    monkeypatch.setattr(ft, "Clipboard", ClipboardCapture)
+    asyncio.run(tab._copy_result(None))
+    si_copy = copied[-1]
+
+    tab.set_output_unit_system("Imperial")
+    asyncio.run(tab._copy_result(None))
+    imperial_copy = copied[-1]
+
+    for result in (si_copy, imperial_copy):
+        assert "計算模式" in result
+        assert "R32" in result
+        assert "已知:" in result
+        assert "1000 kPa" in result
+        assert "25 °C" in result
+    assert "kJ/kg" in si_copy
+    assert "Btu/lbm" in imperial_copy
+    assert si_copy != imperial_copy
+    assert len(calls) == 1
+
+
+def test_property_stale_result_clears_copy_and_detail_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """語意輸入改變後不得再複製或展開前一筆成功結果。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, _calls = _build_property_tab_with_fake_query(monkeypatch)
+    _calculate_property_tab(tab)
+    previous_summary = tab.result_text.value
+    previous_detail = tab.raw_output.value
+    tab._toggle_raw_output(None)
+    assert tab.raw_output.visible is True
+
+    tab.input_rows[0]["val"].value = "2000"
+    tab.input_rows[0]["val"].on_change(SimpleNamespace(control=tab.input_rows[0]["val"]))
+
+    copied: list[str] = []
+
+    class ClipboardCapture:
+        """收集是否錯誤複製了已失效的結果。"""
+
+        async def set(self, value: str) -> None:
+            """記錄剪貼簿服務收到的內容。
+
+            參數：
+                value: 要複製的文字。
+
+            回傳：
+                無。
+            """
+            copied.append(value)
+
+    monkeypatch.setattr(ft, "Clipboard", ClipboardCapture)
+    asyncio.run(tab._copy_result(None))
+
+    assert copied == []
+    assert tab._has_calculated_result is False
+    assert tab.copy_result_button.disabled is True
+    assert tab.raw_output.value == ""
+    assert tab.raw_output.visible is False
+    assert tab.result_text.value == ""
+    assert tab.result_text.visible is False
+    assert tab._last_input_summary == ""
+    assert tab._last_formatted_output == ""
+    assert previous_summary
+    assert previous_detail
+
+
+def test_property_reset_clears_presentation_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """重設清除摘要、格式化輸出、詳細文字與可複製快照。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, _calls = _build_property_tab_with_fake_query(monkeypatch)
+    _calculate_property_tab(tab)
+    tab._toggle_raw_output(None)
+    assert tab._last_input_summary
+    assert tab._last_formatted_output
+
+    tab._reset_inputs(None)
+
+    assert tab._last_input_summary == ""
+    assert tab._last_formatted_output == ""
+    assert tab.result_text.value == ""
+    assert tab.result_text.visible is False
+    assert tab.raw_output.value == ""
+    assert tab.raw_output.visible is False
+    assert tab.copy_result_button.disabled is True
+    assert tab.details_button.disabled is True
+    assert tab.result_panel.status == "empty"
+    assert tab.result_panel.metrics == {}
+    assert tab.result_panel.metadata == {}
+    assert tab._has_calculated_result is False
+
+
+def test_mass_unit_conversion_failure_rolls_back_without_partial_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """預期的質量換算錯誤會回復單位，保留原值與有效計算快照。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, calls = _build_property_tab_with_fake_query(monkeypatch)
+    tab.extensive_toggle.value = True
+    tab.extensive_toggle.on_change(SimpleNamespace(control=tab.extensive_toggle))
+    tab.mass_tf.value = "10"
+    tab._on_mass_input_change(SimpleNamespace(control=tab.mass_tf))
+    _calculate_property_tab(tab)
+    assert tab.mass_unit_dd.value == "kg"
+    assert tab._last_total_mass_kg == pytest.approx(10.0)
+
+    def fail_mass_conversion(property_code: str, value: float, unit: str) -> float:
+        """模擬質量顯示單位轉換發生可預期的領域錯誤。
+
+        參數：
+            property_code: 轉換的性質代碼。
+            value: 原始質量值。
+            unit: 原始顯示單位。
+
+        回傳：
+            不會回傳；此函式會注入轉換錯誤。
+        """
+        if property_code == "Mass" and unit == "kg":
+            raise ValueError("injected mass conversion failure")
+        return UnitConverter().convert_to_si(property_code, value, unit)
+
+    monkeypatch.setattr(tab.unit_converter, "convert_to_si", fail_mass_conversion)
+    tab.mass_unit_dd.value = "lbm"
+    tab.mass_unit_dd.on_select(SimpleNamespace(control=tab.mass_unit_dd))
+
+    assert tab.mass_unit_dd.value == "kg"
+    assert tab._last_mass_unit == "kg"
+    assert tab.mass_tf.value == "10"
+    assert tab.mass_tf.error_text
+    assert tab._last_total_mass_kg == pytest.approx(10.0)
+    assert tab._has_calculated_result is True
+    assert tab.result_panel.status == "success"
+    assert len(calls) == 1
+
+
+def test_mass_unit_unexpected_error_is_logged_and_rolls_back(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """非預期的質量轉換錯誤會記錄例外、回復欄位並保留錯誤傳播。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+        caplog: pytest 的日誌擷取工具。
+
+    回傳：
+        無。
+    """
+    tab, _calls = _build_property_tab_with_fake_query(monkeypatch)
+    tab.update = lambda: None
+    tab.mass_tf.value = "10"
+
+    def fail_unexpectedly(_property_code: str, _value: float, _unit: str) -> float:
+        """注入非預期程式錯誤，確認事件處理器不會無聲吞掉。
+
+        參數：
+            _property_code: 要轉換的性質代碼。
+            _value: 原始質量值。
+            _unit: 原始顯示單位。
+
+        回傳：
+            不會回傳；此函式會注入程式錯誤。
+        """
+        raise RuntimeError("injected programmer error")
+
+    monkeypatch.setattr(tab.unit_converter, "convert_to_si", fail_unexpectedly)
+    tab.mass_unit_dd.value = "lbm"
+
+    with pytest.raises(RuntimeError, match="injected programmer error"):
+        tab.mass_unit_dd.on_select(SimpleNamespace(control=tab.mass_unit_dd))
+
+    assert tab.mass_unit_dd.value == "kg"
+    assert tab._last_mass_unit == "kg"
+    assert tab.mass_tf.value == "10"
+    assert "非預期錯誤" in tab.mass_tf.error_text
+    assert any(
+        "Unexpected error while converting the extensive-property mass unit" in record.message
+        for record in caplog.records
+    )
