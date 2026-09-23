@@ -113,6 +113,11 @@ class AnalysisTab(ft.Column):
         )
 
         # --- 7. 組合 AnalysisTab 自己的 UI ---
+        self.calc_button_container = ft.Container(
+            content=self.calc_button,
+            padding=ft.Padding.only(top=15, bottom=15),
+            alignment=ft.Alignment.CENTER,
+        )
         self.controls = [
             ft.Container(
                 content=self.analysis_dd,
@@ -123,11 +128,7 @@ class AnalysisTab(ft.Column):
             
             self.controls_stack, # 包含所有模組 UI 的容器
             
-            ft.Container(
-                content=self.calc_button,
-                padding=ft.Padding.only(top=15, bottom=15),
-                alignment=ft.Alignment.CENTER
-            ),
+            self.calc_button_container,
             
             ft.Row(
                 controls=[
@@ -171,7 +172,7 @@ class AnalysisTab(ft.Column):
                 self.update()
 
     def on_analysis_change(self, e):
-            """切換顯示的 UI 模組 (已修正共用 UI 的邏輯)
+            """切換分析模組，並依功能能力顯示對應的共用操作按鈕。
 
 參數：
     e (未指定型別): 函數輸入值。
@@ -201,6 +202,8 @@ class AnalysisTab(ft.Column):
 
             # --- 模組專屬能力由明確 metadata 表示，而不是由標籤前綴表示。 ---
             selected_definition = self.analysis_map[selected_name]
+            # 熱力圖有專屬繪圖操作，因此不顯示重複的共用執行按鈕。
+            self.calc_button_container.visible = selected_definition.get("show_execute_button", True)
             if selected_definition["calculation_mode"] == "psychrometric":
                 for module in self.modules_to_load:
                     if isinstance(module, PsyModule):

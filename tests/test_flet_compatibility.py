@@ -319,6 +319,33 @@ def test_analysis_output_toggle_reformats_existing_result() -> None:
     assert "°F" in imperial_result
 
 
+def test_analysis_hides_generic_execute_button_for_thermodiagram() -> None:
+    """熱力圖使用專屬繪圖按鈕，不顯示共用的執行分析按鈕。
+
+回傳：
+    無。"""
+    converter = UnitConverter()
+    analysis_tab = AnalysisTab(
+        unit_converter=converter,
+        page=DummyPage(),
+        analyzer=HVACAnalyzer(),
+        psy_calculator=PsychrometricCalculator(),
+        state_calculator=ThermoStateCalculator(converter),
+    )
+
+    assert analysis_tab.calc_button_container.visible is True
+    analysis_tab.analysis_dd.value = "熱力圖繪製"
+    analysis_tab.on_analysis_change(None)
+
+    heatmap = next(item for item in analysis_tab.modules_to_load if isinstance(item, ThermoDiagramModule))
+    assert analysis_tab.calc_button_container.visible is False
+    assert heatmap.plot_btn.visible is True
+
+    analysis_tab.analysis_dd.value = next(name for name in analysis_tab.analysis_map if name != "熱力圖繪製")
+    analysis_tab.on_analysis_change(None)
+    assert analysis_tab.calc_button_container.visible is True
+
+
 def test_analysis_selection_clears_cached_result_before_unit_refresh() -> None:
     """切換 analysis 後再切單位不得重算尚未執行的新 analysis。
 

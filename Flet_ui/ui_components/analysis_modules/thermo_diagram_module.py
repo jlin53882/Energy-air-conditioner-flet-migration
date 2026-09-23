@@ -24,6 +24,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
         return {
             "熱力圖繪製": {
                 "analysis_id": "thermodynamics.diagram",
+                "show_execute_button": False,
                 "ui": self.thermo_diagram_ui_container,
                 "calc_func": self.calculate_thermo_diagram
             }
