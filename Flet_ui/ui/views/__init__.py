@@ -1,1 +1,1 @@
-"""Workspace views assembled from existing calculation adapters."""
+"""由既有計算 介接器 組成的工作區畫面。"""

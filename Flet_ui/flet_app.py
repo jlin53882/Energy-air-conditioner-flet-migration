@@ -17,9 +17,15 @@ from .ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
 from .ui_components.unit.UnitConverter import UnitConverter
 from application.property_queries import PropertyQueryService
 
-# 定義主函數
+
 def main(page: ft.Page) -> None:
-    """Compose HVAC views and mount the navigation shell without changing calculations."""
+    """組合 HVAC 工作區畫面並掛載導覽外殼，不改動既有計算邏輯。
+
+參數：
+    page: Flet 提供的應用程式頁面。
+
+回傳：
+    無。"""
     page.title = "HVAC & Thermodynamics Engineering Workspace"
     page.window_width = 1440
     page.window_height = 960
@@ -68,7 +74,13 @@ def main(page: ft.Page) -> None:
     }
 
     def on_route_change(route_key: str) -> None:
-        """Select the registered HVAC analysis within its dedicated sidebar route."""
+        """依穩定路由鍵切換既有 HVAC 分析類別或圖表。
+
+參數：
+    route_key: 工作區內部使用的路由識別碼。
+
+回傳：
+    無。"""
         route = ROUTE_BY_KEY[route_key]
         if route.analysis_category:
             analysis_view.set_category(route.analysis_category)
@@ -78,20 +90,38 @@ def main(page: ft.Page) -> None:
             diagram_module.diagram_dd.value = "T-s"
 
     def on_analysis_unit_change(event: ft.ControlEvent) -> None:
-        """Route legacy analysis output toggles through the shell's shared preference."""
+        """將分析頁舊有的輸出單位切換同步到全域偏好。
+
+參數：
+    event: 含有目前選取單位系統的 Flet 控制事件。
+
+回傳：
+    無。"""
         selected = next(iter(event.control.selected), "SI")
         shell_ref["shell"].set_output_unit_system(selected)
 
     analysis_view.output_unit_toggle.on_change = on_analysis_unit_change
 
     def on_unit_system_change(unit_system: str) -> None:
-        """Re-render outputs globally while leaving independently selected input units alone."""
+        """更新全域輸出偏好並重新呈現輸出，不改寫各輸入欄位單位。
+
+參數：
+    unit_system: 要套用的輸出單位系統。
+
+回傳：
+    無。"""
         property_view.set_output_unit_system(unit_system)
         analysis_view.output_unit_toggle.selected = [unit_system]
         analysis_view.on_output_unit_change(None)
 
     def choose_fluid(fluid: str) -> None:
-        """Apply a context-panel refrigerant shortcut to the property workspace."""
+        """將常用冷媒捷徑套用至熱力性質工作區。
+
+參數：
+    fluid: 要選取的流體名稱。
+
+回傳：
+    無。"""
         shell_ref["shell"].navigate("thermo_properties")
         property_view.fluid_tf.value = fluid
         property_view.on_fluid_change(None)

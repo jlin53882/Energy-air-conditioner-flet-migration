@@ -1,11 +1,11 @@
-"""Stable route definitions for implemented HVAC workspace views."""
+"""定義目前已實作工作區畫面的穩定路由。"""
 
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class WorkspaceRoute:
-    """Describe one reachable workspace view using a stable internal key."""
+    """描述一個可到達的工作區畫面及其穩定內部路由鍵。"""
 
     key: str
     label: str

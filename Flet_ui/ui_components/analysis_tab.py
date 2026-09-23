@@ -22,12 +22,23 @@ from .analysis_modules.thermo_diagram_module import ThermoDiagramModule
 # from .analysis_modules.hvac_expansion_valve_module import ExpansionValveModule
 
 class AnalysisTab(ft.Column):
-     #新增state_calculator: ThermoStateCalculator  獲取 熱力學查表標準
     def __init__(self, unit_converter: UnitConverter, page: ft.Page, 
                  analyzer: HVACAnalyzer, psy_calculator: PsychrometricCalculator,
                  state_calculator: ThermoStateCalculator,
                  property_query_service: PropertyQueryService | None = None):
         
+        """建立既有分析模組，並組成分析分類與結果控制項。
+
+參數：
+    unit_converter: 分析模組共用的單位轉換器。
+    page: Flet 應用程式頁面。
+    analyzer: HVAC 分析服務。
+    psy_calculator: 濕空氣計算服務。
+    state_calculator: 熱力狀態計算服務。
+    property_query_service: 選用的熱力性質查詢服務。
+
+回傳：
+    無。"""
         super().__init__(scroll=ft.ScrollMode.AUTO, expand=True)
         
         # --- 2. 實例化所有 "功能群組" 模組 ---
@@ -143,13 +154,19 @@ class AnalysisTab(ft.Column):
 
         # --- 8. 初始化第一個模組的 UI ---
         self.on_analysis_change(None) 
-        self.on_output_unit_change(None)  # Initialize atmosphere defaults.
+        self.on_output_unit_change(None)
         self._configure_workspace_layout()
         self.set_category("compressor")
         self.set_category("compressor")
 
     def set_category(self, category: str) -> None:
-        """Show one engineering route and its local calculation choices."""
+        """切換至指定工程分類，並顯示該分類現有的分析選項。
+
+參數：
+    category: 既有分析模組使用的分類代碼。
+
+回傳：
+    無。"""
         self.active_category = category
         prefix = "thermodynamics" if category == "charts" else category
         self._active_analysis_names = [
@@ -169,14 +186,23 @@ class AnalysisTab(ft.Column):
         self.on_analysis_change(None)
 
     def select_analysis(self, name: str) -> None:
-        """Select one real calculation within the currently active route."""
+        """在目前分析分類中選取一項已實作的計算。
+
+參數：
+    name: 既有分析註冊表中的計算名稱。
+
+回傳：
+    無。"""
         if name not in self._active_analysis_names:
             raise KeyError(f"Analysis is not part of {self.active_category}: {name}")
         self.analysis_dd.value = name
         self.on_analysis_change(None)
 
     def _configure_workspace_layout(self) -> None:
-        """Replace the monolithic analysis dropdown with route-local operation choices."""
+        """將既有分析控制項整理為分類內選擇與共用工程卡片。
+
+回傳：
+    無。"""
         self.module_nav = ft.Row(controls=[], spacing=8, wrap=True)
         self.controls = [
             ft.Text("分析模式", theme_style=ft.TextThemeStyle.TITLE_MEDIUM,
@@ -314,6 +340,13 @@ class AnalysisTab(ft.Column):
             self.update()
 
     def show_error(self, message):
+        """在已掛載的 Flet 頁面中顯示全域 SnackBar 錯誤提示。
+
+參數：
+    message: 要向使用者顯示的錯誤摘要。
+
+回傳：
+    無。"""
         snack = ft.SnackBar(ft.Text(message), bgcolor=ft.Colors.ERROR)
         self.page.overlay.append(snack)
         snack.open = True

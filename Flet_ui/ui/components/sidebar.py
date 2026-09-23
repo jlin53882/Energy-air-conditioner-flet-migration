@@ -1,4 +1,4 @@
-"""Sectioned sidebar navigation with semantic keys and accessible tooltips."""
+"""依工程工作流程分組並使用語意路由鍵的側邊導覽。"""
 
 import flet as ft
 from collections.abc import Callable
@@ -8,10 +8,17 @@ from ..theme import TOKENS
 
 
 class Sidebar(ft.Container):
-    """Expose reachable routes grouped by engineering workflow."""
+    """依工程流程分組，提供可到達的工作區路由。"""
 
     def __init__(self, on_select: Callable[[str], None], selected_key: str) -> None:
-        """Build icon-and-label items and report stable route keys on selection."""
+        """建立含圖示與標籤的導覽項目，選取時回傳穩定路由鍵。
+
+參數：
+    on_select: 使用者選取路由時呼叫的 回呼函式。
+    selected_key: 初始選取的穩定路由鍵。
+
+回傳：
+    無。"""
         self.on_select = on_select
         self.selected_key = selected_key
         self.items: dict[str, ft.Control] = {}
@@ -38,7 +45,13 @@ class Sidebar(ft.Container):
         )
 
     def set_compact(self, compact: bool) -> None:
-        """Hide labels and section headings when the rail cannot fit full navigation."""
+        """窄版導覽列空間不足時隱藏文字標籤與分類標題。
+
+參數：
+    compact: True 表示採用精簡圖示列。
+
+回傳：
+    無。"""
         for label in self.section_labels:
             label.visible = not compact
         for item in self.items.values():
@@ -49,7 +62,13 @@ class Sidebar(ft.Container):
             )
 
     def _route_item(self, route: WorkspaceRoute) -> ft.Control:
-        """Build one route control whose callback carries a stable key, not its label."""
+        """建立單一路由控制項，回呼函式 傳遞穩定鍵而非顯示標籤。
+
+參數：
+    route: 要呈現的工作區路由定義。
+
+回傳：
+    對應路由的 Flet 容器控制項。"""
         selected = route.key == self.selected_key
         icon = getattr(ft.Icons, route.icon)
         return ft.Container(

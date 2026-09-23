@@ -1,4 +1,4 @@
-"""Desktop-first application shell with responsive navigation regions."""
+"""以桌面為主並支援不同視窗寬度的應用程式外殼。"""
 
 import flet as ft
 from collections.abc import Callable
@@ -10,7 +10,7 @@ from .theme import TOKENS
 
 
 class AppShell(ft.Column):
-    """Own top-level navigation and layout while delegating each calculation view."""
+    """負責頂層導覽與版面配置，並將計算工作交由各畫面處理。"""
 
     REGIONS = frozenset({"sidebar", "top_bar", "workspace", "context_panel"})
 
@@ -20,7 +20,18 @@ class AppShell(ft.Column):
                  on_unit_system_change: Callable[[str], None] | None = None,
                  on_fluid_shortcut: Callable[[str], None] | None = None,
                  state: WorkspaceState | None = None) -> None:
-        """Compose application regions without coupling route state to display labels."""
+        """建立導覽與工作區版面，並保留 路由鍵 與顯示標籤的分離。
+
+參數：
+    page: Flet 頁面，用於讀取視窗尺寸與註冊事件。
+    views: 由穩定路由鍵映射至 Flet 畫面的字典。
+    on_route_change: 選用的路由切換 回呼函式。
+    on_unit_system_change: 選用的輸出單位偏好 回呼函式。
+    on_fluid_shortcut: 選用的常用冷媒捷徑 回呼函式。
+    state: 選用的工作區狀態；未提供時建立新狀態。
+
+回傳：
+    無。"""
         super().__init__(expand=True, spacing=0)
         self._page_ref = page
         self.views = views
@@ -114,7 +125,17 @@ class AppShell(ft.Column):
         self._on_resize(None)
 
     def navigate(self, route_key: str, *, notify: bool = True) -> None:
-        """Select an implemented view by stable route key and refresh its heading."""
+        """依穩定路由鍵選取畫面並更新頁面標題。
+
+參數：
+    route_key: 要切換至的工作區路由鍵。
+    notify: 是否通知路由 回呼函式；初始化時可設為 False。
+
+回傳：
+    無。
+
+引發：
+    KeyError: 路由鍵未註冊，或沒有對應畫面時。"""
         if route_key not in ROUTE_BY_KEY:
             raise KeyError(f"Unknown workspace route: {route_key}")
         route = ROUTE_BY_KEY[route_key]
@@ -145,7 +166,13 @@ class AppShell(ft.Column):
             pass
 
     def set_output_unit_system(self, unit_system: str) -> None:
-        """Update only the global output preference and notify the active view adapter."""
+        """更新全域輸出單位偏好，並通知目前的畫面 介接器。
+
+參數：
+    unit_system: 要使用的輸出單位系統。
+
+回傳：
+    無。"""
         self.state.set_output_unit_system(unit_system)
         self.unit_toggle.selected = [unit_system]
         if self.on_unit_system_change:
@@ -156,12 +183,24 @@ class AppShell(ft.Column):
             pass
 
     def _on_unit_change(self, event: ft.ControlEvent | None) -> None:
-        """Forward a display preference without rewriting per-field input units."""
+        """轉送顯示單位偏好，不改寫個別欄位所選的輸入單位。
+
+參數：
+    event: 單位切換事件；未提供時沿用目前的偏好。
+
+回傳：
+    無。"""
         selected = next(iter(event.control.selected), "SI") if event else self.state.output_unit_system
         self.set_output_unit_system(selected)
 
     def _toggle_sidebar(self, _event: ft.ControlEvent | None) -> None:
-        """Open or close the full navigation drawer only at narrow widths."""
+        """只在窄視窗中開啟或關閉完整導覽抽屜。
+
+參數：
+    _event: Flet 點擊事件；此處不需讀取事件內容。
+
+回傳：
+    無。"""
         if (getattr(self._page_ref, "width", None) or 1280) >= 800:
             return
         self.sidebar.set_compact(False)
@@ -172,7 +211,13 @@ class AppShell(ft.Column):
             pass
 
     def _on_keyboard_event(self, event: ft.KeyboardEvent) -> None:
-        """Run the active calculation on Ctrl+Enter and dismiss a narrow nav drawer on Esc."""
+        """以 Ctrl+Enter 執行目前畫面的計算，並以 Esc 關閉窄視窗導覽抽屜。
+
+參數：
+    event: 包含按鍵與修飾鍵狀態的 Flet 鍵盤事件。
+
+回傳：
+    無。"""
         key = (event.key or "").lower()
         if event.ctrl and key in {"enter", "numpad enter"}:
             view = self.views[self.state.route_key]
@@ -189,7 +234,13 @@ class AppShell(ft.Column):
                 pass
 
     def _on_resize(self, _event: ft.ControlEvent | None) -> None:
-        """Use compact navigation and collapse contextual content as the window narrows."""
+        """依視窗寬度切換導覽尺寸，並在窄版面收起情境面板。
+
+參數：
+    _event: Flet 尺寸變更事件；版面依 page 的最新寬度計算。
+
+回傳：
+    無。"""
         width = getattr(self._page_ref, "width", None) or 1280
         if width < 800:
             self.sidebar.set_compact(False)

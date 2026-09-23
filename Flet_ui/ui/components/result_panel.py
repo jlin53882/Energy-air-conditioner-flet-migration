@@ -1,4 +1,4 @@
-"""Structured result states and metric cards for engineering calculations."""
+"""呈現計算狀態與結構化指標卡片。"""
 
 from collections.abc import Mapping
 
@@ -8,12 +8,15 @@ from ..theme import TOKENS
 
 
 class ResultPanel(ft.Container):
-    """Render calculation status, truthful metrics, metadata, and optional raw output."""
+    """呈現計算狀態、真實指標、結果中繼資料與選用的原始輸出。"""
 
     SUPPORTED_STATES = frozenset({"empty", "loading", "success", "warning", "error"})
 
     def __init__(self) -> None:
-        """Start in an explicit empty state until a calculation succeeds."""
+        """初始化為明確的空狀態，直到計算成功後才呈現結果。
+
+回傳：
+    無。"""
         self.status = "empty"
         self.metrics: dict[str, str] = {}
         self.metadata: dict[str, str] = {}
@@ -29,7 +32,15 @@ class ResultPanel(ft.Container):
         self.set_status("empty", "尚未計算", "輸入條件後執行計算。")
 
     def set_status(self, status: str, title: str, message: str = "") -> None:
-        """Show a named state with text and icon so color is never the only signal."""
+        """同時使用文字與圖示呈現狀態，避免只靠顏色傳達訊息。
+
+參數：
+    status: 支援的計算狀態代碼。
+    title: 狀態標題。
+    message: 選用的狀態補充說明。
+
+回傳：
+    無。"""
         if status not in self.SUPPORTED_STATES:
             raise ValueError(f"Unsupported result state: {status}")
         self.status = status
@@ -52,7 +63,15 @@ class ResultPanel(ft.Container):
         *,
         status_detail: str | None = None,
     ) -> None:
-        """Present only values supplied by the calculation result adapter."""
+        """只呈現計算結果 介接器 實際提供的指標與中繼資料。
+
+參數：
+    metrics: 指標名稱與格式化值的對應。
+    metadata: 選用的結果來源與單位中繼資料。
+    status_detail: 選用的狀態補充文字。
+
+回傳：
+    無。"""
         self.metrics = dict(metrics)
         self.metadata = dict(metadata or {})
         self.set_status("success", "計算完成", status_detail or "結果由目前計算服務提供。")
@@ -78,7 +97,13 @@ class ResultPanel(ft.Container):
             )
 
     def set_error(self, summary: str) -> None:
-        """Replace prior metrics with a concise user-facing error state."""
+        """以簡短、面向使用者的錯誤狀態取代先前的指標。
+
+參數：
+    summary: 可供使用者理解的錯誤摘要。
+
+回傳：
+    無。"""
         self.metrics = {}
         self.metadata = {}
         self.set_status("error", "計算無法完成", summary)

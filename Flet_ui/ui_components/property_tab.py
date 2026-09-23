@@ -29,12 +29,17 @@ class PropertyTab(ft.Column):
                  page: ft.Page,
                  query_service: PropertyQueryService,
                  workspace_state: WorkspaceState | None = None):
-        """
-        初始化 PropertyTab，設定 UI 組件和數據綁定。
+        """建立熱力性質查詢介面，並連結單位轉換、結果格式化與查詢服務。
 
-        :param calculator: 核心計算邏輯實例 (ThermoCalculator)
-        :param page: Flet 頁面實例
-        """
+參數：
+    unit_converter: 負責輸入與輸出單位轉換的服務。
+    formatter: 將計算結果整理為使用者可讀內容的格式器。
+    page: Flet 應用程式頁面。
+    query_service: 執行熱力性質查詢並管理參考狀態的服務。
+    workspace_state: 選用的工作區狀態；未提供時建立預設狀態。
+
+回傳：
+    無。"""
         # 初始化 ft.Column 的屬性：啟用垂直滾動，並展開佔滿可用空間
         super().__init__(expand=True, spacing=0)
 
@@ -159,10 +164,12 @@ class PropertyTab(ft.Column):
             # 這裡使用 print 或 logging，因為此時 UI 可能還未完全載入
             print(f"警告：初始化 CoolProp 參考點失敗 ({default_fluid} to {default_ref_state}): {e}")
 
-    # --- 邏輯方法維持不變，僅為保持完整性 ---
 
     def _build_workspace_controls(self) -> list[ft.Control]:
-        """Arrange existing calculation controls into reusable engineering cards."""
+        """將既有熱力性質查詢控制項排列為共用工程卡片。
+
+回傳：
+    無。"""
         self.quantity_inputs = []
         condition_rows = []
         for index, row in enumerate(self.input_rows):
@@ -262,7 +269,13 @@ class PropertyTab(ft.Column):
         return [scroll_area, self.action_bar]
 
     def _show_additional_condition(self, _event: ft.ControlEvent | None) -> None:
-        """Reveal the optional third constraint without silently discarding its value."""
+        """顯示額外條件列，避免使用者輸入後條件被靜默忽略。
+
+參數：
+    _event: Flet 點擊事件；此處不需讀取事件內容。
+
+回傳：
+    無。"""
         row = self.input_rows[2]
         for control in row.values():
             control.visible = True
@@ -273,7 +286,13 @@ class PropertyTab(ft.Column):
             pass
 
     def _apply_property_preset(self, property_codes: tuple[str, str]) -> None:
-        """Select a known property pair and refresh each unit menu immediately."""
+        """套用已知性質組合，並立即更新各列可用的單位選項。
+
+參數：
+    property_codes: 預設組合中的兩個性質代碼。
+
+回傳：
+    無。"""
         for index, code in enumerate(property_codes):
             row = self.input_rows[index]
             row["prop"].value = self.prop_names_map[code]
@@ -284,7 +303,13 @@ class PropertyTab(ft.Column):
             pass
 
     def _toggle_extensive(self, event: ft.ControlEvent) -> None:
-        """Show the total-mass input only when extensive properties are requested."""
+        """只在使用者要求計算廣延性質時顯示總質量輸入欄位。
+
+參數：
+    event: 包含切換後狀態的 Flet 控制事件。
+
+回傳：
+    無。"""
         self.extensive_section.visible = bool(event.control.value)
         try:
             self.update()
@@ -292,7 +317,13 @@ class PropertyTab(ft.Column):
             pass
 
     def _toggle_raw_output(self, _event: ft.ControlEvent | None) -> None:
-        """Expose the compatibility text output on demand, not as the primary result."""
+        """按需顯示相容性原始文字輸出，不將其作為主要結果畫面。
+
+參數：
+    _event: Flet 點擊事件；此處不需讀取事件內容。
+
+回傳：
+    無。"""
         self.raw_output.visible = not self.raw_output.visible
         self.details_button.text = "隱藏詳細結果" if self.raw_output.visible else "查看詳細結果"
         try:
@@ -301,13 +332,25 @@ class PropertyTab(ft.Column):
             pass
 
     async def _copy_result(self, _event: ft.ControlEvent | None) -> None:
-        """Copy the last successful result through Flet's clipboard service."""
+        """透過 Flet 剪貼簿服務複製最近一次成功計算的結果。
+
+參數：
+    _event: Flet 點擊事件；此處不需讀取事件內容。
+
+回傳：
+    無。"""
         if not self._has_calculated_result:
             return
         await ft.Clipboard().set(self.result_text.value or "")
 
     def _reset_inputs(self, _event: ft.ControlEvent | None) -> None:
-        """Clear user-entered conditions while retaining the current fluid and policies."""
+        """清除使用者輸入與結果，但保留目前流體及參考政策。
+
+參數：
+    _event: Flet 點擊事件；此處不需讀取事件內容。
+
+回傳：
+    無。"""
         for row in self.input_rows:
             row["val"].value = ""
         for quantity_input in self.quantity_inputs:
@@ -324,7 +367,13 @@ class PropertyTab(ft.Column):
             pass
 
     def set_output_unit_system(self, unit_system: str) -> None:
-        """Re-render cached properties without recalculating from mutable controls."""
+        """以快取的計算結果重新呈現所選單位，不重跑熱力性質查詢。
+
+參數：
+    unit_system: 要使用的全域輸出單位系統。
+
+回傳：
+    無。"""
         self.workspace_state.set_output_unit_system(unit_system)
         self.output_unit_system = unit_system
         if self._has_calculated_result:
@@ -335,7 +384,10 @@ class PropertyTab(ft.Column):
                 pass
 
     def _render_cached_result(self) -> None:
-        """Render the last SI result in the selected units without another domain query."""
+        """將最近一次 SI 結果轉成所選輸出單位，不再呼叫領域計算服務。
+
+回傳：
+    無。"""
         if self._last_si_results is None:
             return
         use_imperial = self.output_unit_system == "Imperial"
@@ -356,7 +408,14 @@ class PropertyTab(ft.Column):
         )
 
     def _format_result_metrics(self, si_results: dict[str, object], use_imperial: bool) -> dict[str, str]:
-        """Convert available calculated values into truthful result-card metrics."""
+        """將計算結果中可用的數值格式化為結果卡片指標。
+
+參數：
+    si_results: 以 SI 為基準的計算結果。
+    use_imperial: 是否將輸出格式化為英制。
+
+回傳：
+    指標名稱與顯示文字的對應字典。"""
         unit_map = self.unit_converter.imperial_units if use_imperial else self.unit_converter.default_units
         labels = {"T": "Temperature", "P": "Pressure", "H": "Enthalpy", "S": "Entropy",
                   "D": "Density", "V": "Specific Volume", "Q": "Quality"}
@@ -473,13 +532,14 @@ class PropertyTab(ft.Column):
         self.on_mode_change_internal(e) # 執行模式切換的邏輯 (如改變物質名稱、理想氣體核取方塊可見性等)
         if self.parent: self.update()      # 更新 UI，反映模式變更 (如物質名稱改變)
 
-# --- 新增 2: 參考點變更事件處理器 ---
     def on_ref_state_change(self, e: ft.ControlEvent) -> None:
-        """Apply the selected reference policy to the currently selected fluid.
+        """依目前流體套用所選的參考狀態政策。
 
-        Args:
-            e: Flet event for the reference-state selection.
-        """
+參數：
+    e: 參考狀態選單觸發的 Flet 控制事件。
+
+回傳：
+    無。"""
         ref_code = self.ref_state_dd.value
         self.reference_state_helper.value = self.ref_state_descriptions[ref_code]
         if self.mode_dd.value.startswith("CoolProp"):
@@ -495,13 +555,14 @@ class PropertyTab(ft.Column):
             self.update()
 
     def update_units_menu(self, row_index: int, *, update_view: bool = True) -> None:
-        """
-        根據輸入行目前的性質，更新單位選項、預設值與 tracking state。
-        初始化與性質變更事件都使用同一套單位解析邏輯；只有事件路徑會要求 UI refresh。
+        """依輸入列的性質更新單位選項、預設值與追蹤狀態。
 
-        :param row_index: 變動的輸入行索引 (0, 1, 2)
-        :param update_view: 是否在更新後刷新 Flet UI
-        """
+參數：
+    row_index: 要更新的輸入列索引。
+    update_view: 是否在更新控制項後刷新已掛載的畫面。
+
+回傳：
+    無。"""
         row = self.input_rows[row_index]
         prop_code = self.get_prop_code(row["prop"].value)
         previous_code = self._last_prop_codes[row_index]
@@ -535,33 +596,53 @@ class PropertyTab(ft.Column):
             self.update()
 
     def create_prop_change_handler(self, index: int) -> Callable[[ft.ControlEvent], None]:
-        """
-        使用閉包為每個性質下拉選單創建 on_select 事件處理器。
-        
-        :param index: 輸入行索引
-        :return: 處理函數 (handler)
-        """
-        # 當性質改變時，呼叫 update_units_menu 來更新單位
-        def handler(e: ft.ControlEvent) -> None: self.update_units_menu(index)
+        """建立閉包，讓各性質選單的事件能保留所屬輸入列索引。
+
+參數：
+    index: 此事件處理器所屬的輸入列索引。
+
+回傳：
+    接收 Flet 控制事件並更新對應單位選項的處理函式。"""
+        def handler(e: ft.ControlEvent) -> None:
+            """更新此輸入列的性質對應單位選項。
+
+            參數：
+                e: 性質選單觸發的 Flet 控制事件。
+
+            回傳：
+                無。
+            """
+            self.update_units_menu(index)
         return handler
 
     def create_unit_change_handler(self, index: int) -> Callable[[ft.ControlEvent], None]:
-        """
-        使用閉包為每個單位下拉選單創建 on_select 事件處理器。
-        
-        :param index: 輸入行索引
-        :return: 處理函數 (handler)
-        """
-        # 當單位改變時，呼叫 on_property_unit_change 來處理數值換算和單位同步
-        def handler(e: ft.ControlEvent) -> None: self.on_property_unit_change(index)
+        """建立閉包，讓各單位選單的事件能保留所屬輸入列索引。
+
+參數：
+    index: 此事件處理器所屬的輸入列索引。
+
+回傳：
+    接收 Flet 控制事件並處理單位換算的處理函式。"""
+        def handler(e: ft.ControlEvent) -> None:
+            """轉送此輸入列的單位變更事件。
+
+            參數：
+                e: 單位選單觸發的 Flet 控制事件。
+
+            回傳：
+                無。
+            """
+            self.on_property_unit_change(index)
         return handler
 
     def on_property_unit_change(self, changed_row_index: int) -> None:
-        """
-        單位變更的核心處理邏輯：執行數值換算並同步相同性質的單位。
-        
-        :param changed_row_index: 觸發變更的輸入行索引
-        """
+        """換算變更列的數值，並同步相同性質輸入列的單位。
+
+參數：
+    changed_row_index: 觸發單位變更的輸入列索引。
+
+回傳：
+    無。"""
         # 1. 避免遞迴調用：如果正在執行單位更新，則立即返回
         if self._is_updating_units: return
         self._is_updating_units = True # 設置鎖定標記
@@ -604,16 +685,15 @@ class PropertyTab(ft.Column):
     def _validate_known_input(
         self, property_code: str | None, raw_value: str, unit: str
     ) -> tuple[float | None, str | None]:
-        """Validate one user-entered property before constructing a domain request.
+        """建立領域查詢前，先驗證一筆使用者輸入的熱力性質。
 
-        Args:
-            property_code: Canonical property identifier selected in the row.
-            raw_value: User-entered number before unit conversion.
-            unit: Unit selected for that specific input.
+參數：
+    property_code: 選定性質的標準代碼。
+    raw_value: 尚未換算單位的輸入數值文字。
+    unit: 此筆輸入所選的單位。
 
-        Returns:
-            The finite numeric input and no error, or ``None`` and a field message.
-        """
+回傳：
+    有效數值與空錯誤，或 None 與欄位錯誤訊息組成的 二元組。"""
         try:
             value = float(raw_value)
         except (TypeError, ValueError):
@@ -637,10 +717,13 @@ class PropertyTab(ft.Column):
         return value, None
 
     def perform_calculation(self, e: ft.ControlEvent | None) -> None:
-        """
-        執行熱力學性質計算的主方法。
-        負責輸入驗證、錯誤處理、UI 反饋和結果展示。
-        """
+        """驗證已知條件、呼叫熱力性質查詢服務並更新結果狀態。
+
+參數：
+    e: Flet 計算按鈕事件；由快捷鍵或測試呼叫時可為 None。
+
+回傳：
+    無。"""
         self._has_calculated_result = False
         self.raw_output.value = ""
         fluid = self.fluid_tf.value.strip()
@@ -661,7 +744,7 @@ class PropertyTab(ft.Column):
         known_props, display_inputs = [], []
         has_field_errors = False
 
-        # 2. Validate each populated row locally; never silently skip invalid input.
+
         for index, row in enumerate(self.input_rows):
             raw_value = row["val"].value.strip()
             self.quantity_inputs[index].set_error(None)

@@ -1,4 +1,4 @@
-"""Home dashboard linking users to real, implemented engineering tools."""
+"""連結至目前確實可用工程工具的首頁。"""
 
 import flet as ft
 from collections.abc import Callable
@@ -9,10 +9,16 @@ from ..theme import TOKENS
 
 
 class HomeView(ft.Column):
-    """Show direct shortcuts without presenting unimplemented roadmap items as usable."""
+    """提供前往目前確實已實作工程工具的首頁捷徑。"""
 
     def __init__(self, on_navigate: Callable[[str], None]) -> None:
-        """Build shortcuts from the same stable route registry used by the sidebar."""
+        """使用與側邊導覽相同的穩定路由清單建立首頁捷徑。
+
+參數：
+    on_navigate: 點選捷徑時執行的路由切換 回呼函式。
+
+回傳：
+    無。"""
         cards = []
         for route in ROUTES:
             if route.key == "home":

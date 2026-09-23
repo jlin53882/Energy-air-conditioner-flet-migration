@@ -1,4 +1,4 @@
-"""Composable quantity controls that keep numeric value adjacent to its unit."""
+"""將數值欄位與單位選擇器並置的可組合數量輸入元件。"""
 
 import flet as ft
 
@@ -6,7 +6,7 @@ from ..theme import TOKENS
 
 
 class QuantityInput:
-    """Bundle a quantity label, numeric field, unit menu, and local validation."""
+    """將數量標籤、數值欄位、單位選單與欄位驗證組合為單一元件。"""
 
     def __init__(
         self,
@@ -17,7 +17,17 @@ class QuantityInput:
         unit_control: ft.Dropdown | None = None,
         helper_text: str | None = None,
     ) -> None:
-        """Create a display component, optionally adopting compatible controls."""
+        """建立數量輸入元件；可選擇沿用呼叫端提供的相容控制項。
+
+參數：
+    label: 顯示在欄位上方的名稱。
+    property_code: 對應的標準熱力性質代碼。
+    value_control: 選用的數值輸入控制項。
+    unit_control: 選用的單位選擇控制項。
+    helper_text: 選用的欄位輔助說明。
+
+回傳：
+    無。"""
         self.label = label
         self.property_code = property_code
         self.value_control = value_control or ft.TextField(
@@ -39,7 +49,13 @@ class QuantityInput:
         self.control = ft.Column(content, spacing=TOKENS.spacing_xs, tight=True, expand=True)
 
     def set_error(self, message: str | None) -> None:
-        """Show validation next to the field instead of routing it only to a snackbar."""
+        """在欄位旁顯示驗證訊息，避免錯誤只出現在全域提示中。
+
+參數：
+    message: 要顯示的錯誤文字；None 代表清除錯誤。
+
+回傳：
+    無。"""
         self.value_control.error_text = message
         self.error_control.value = message or ""
         self.error_control.visible = bool(message)

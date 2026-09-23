@@ -1,4 +1,4 @@
-"""Regression contracts for the HVAC engineering workspace UI migration."""
+"""HVAC 工程工作區 UI 遷移的回歸契約測試。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,16 @@ import importlib
 
 
 def _module(name: str):
-    """Import one target UI module after checking that the migration created it."""
+    """確認遷移所需 UI 模組存在後再匯入。
+
+參數：
+    name: 完整的 Python 模組名稱。
+
+回傳：
+    匯入成功的模組。
+
+引發：
+    AssertionError: 必要的工作區模組不存在時。"""
     try:
         return importlib.import_module(name)
     except ModuleNotFoundError as error:
@@ -16,7 +25,10 @@ def _module(name: str):
 
 
 def test_navigation_uses_stable_route_ids_and_exposes_existing_calculators() -> None:
-    """Navigation identity must be stable and all existing tools independently reachable."""
+    """確認導覽採穩定路由識別碼，且現有工具可分別到達。
+
+回傳：
+    無。"""
     navigation = _module("Flet_ui.ui.navigation")
     route_ids = {route.key for route in navigation.ROUTES}
 
@@ -32,7 +44,10 @@ def test_navigation_uses_stable_route_ids_and_exposes_existing_calculators() -> 
 
 
 def test_app_shell_owns_sidebar_top_bar_workspace_and_context_panel() -> None:
-    """The application shell must provide the required independent navigation regions."""
+    """確認應用程式外殼包含必要的導覽與工作區區域。
+
+回傳：
+    無。"""
     shell = _module("Flet_ui.ui.app_shell")
     assert hasattr(shell, "AppShell")
     assert {"sidebar", "top_bar", "workspace", "context_panel"} <= set(
@@ -41,7 +56,10 @@ def test_app_shell_owns_sidebar_top_bar_workspace_and_context_panel() -> None:
 
 
 def test_shared_quantity_input_keeps_value_and_unit_semantically_together() -> None:
-    """Reusable quantity control must own its value and unit controls as one component."""
+    """確認共用數量輸入元件將數值與單位控制項組合在一起。
+
+回傳：
+    無。"""
     module = _module("Flet_ui.ui.components.quantity_input")
     component = module.QuantityInput(label="入口壓力", property_code="P")
 
@@ -53,7 +71,10 @@ def test_shared_quantity_input_keeps_value_and_unit_semantically_together() -> N
 
 
 def test_structured_result_panel_has_non_dump_success_and_error_states() -> None:
-    """Result rendering must expose semantic states instead of relying on text color alone."""
+    """確認結果面板提供明確狀態，不只以文字顏色區分結果。
+
+回傳：
+    無。"""
     module = _module("Flet_ui.ui.components.result_panel")
     panel = module.ResultPanel()
 
@@ -64,7 +85,10 @@ def test_structured_result_panel_has_non_dump_success_and_error_states() -> None
 
 
 def test_global_unit_preference_is_separate_from_input_units() -> None:
-    """Switching output preferences must not replace independently selected inputs."""
+    """確認切換輸出偏好不會取代個別欄位的輸入單位。
+
+回傳：
+    無。"""
     module = _module("Flet_ui.ui.state")
     state = module.WorkspaceState(output_unit_system="SI")
     state.set_input_unit("suction_pressure", "psi")
@@ -75,7 +99,10 @@ def test_global_unit_preference_is_separate_from_input_units() -> None:
 
 
 def test_relative_humidity_and_quality_keep_distinct_display_contracts() -> None:
-    """RH uses percentage display while thermodynamic quality remains a unitless fraction."""
+    """確認 RH 以百分比呈現，熱力學乾度則維持無單位比例值。
+
+回傳：
+    無。"""
     from Flet_ui.ui_components.unit.PropertyFormatter import PropertyFormatter
     from Flet_ui.ui_components.unit.UnitConverter import UnitConverter
 

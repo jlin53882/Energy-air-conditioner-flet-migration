@@ -28,6 +28,10 @@ class DummyPage:
     """提供 control construction tests 使用的最小 page surface。"""
 
     def __init__(self) -> None:
+        """初始化最小頁面替身，供 UI 控制項建構測試使用。
+
+回傳：
+    無。"""
         self.controls = []
         self.overlay = []
 
@@ -108,7 +112,7 @@ def test_thermo_diagram_uses_consistent_pressure_units_and_refreshes_existing_ch
 
 
 def test_flet_tabs_and_analysis_controls_construct() -> None:
-    """不開啟 desktop session 建構兩個已遷移的 tabs。
+    """不啟動桌面工作階段，直接建構已遷移的兩個分頁。
 
 回傳：
     無。"""
@@ -139,7 +143,7 @@ def test_flet_tabs_and_analysis_controls_construct() -> None:
 
 
 def test_property_dropdown_selection_refreshes_units_through_flet_event() -> None:
-    """Property Dropdown 的 `on_select` 必須更新 options、預設值與 tracking state。
+    """透過 Flet 選取事件驗證性質變更會更新單位選項、預設值與追蹤狀態。
 
 回傳：
     無。"""
@@ -376,7 +380,10 @@ def test_analysis_selection_clears_cached_result_before_unit_refresh() -> None:
 
 
 def test_app_shell_replaces_top_level_tabs_and_exposes_implemented_routes() -> None:
-    """The Flet entrypoint mounts the workspace shell with independently reachable tools."""
+    """確認 Flet 入口掛載工作區外殼，並提供現有工具的獨立導覽路由。
+
+回傳：
+    無。"""
     page = DummyPage()
     flet_main(page)
 
@@ -392,7 +399,10 @@ def test_app_shell_replaces_top_level_tabs_and_exposes_implemented_routes() -> N
 
 
 def test_navigation_routes_update_analysis_category_and_chart_choice() -> None:
-    """Route changes select existing calculation registries rather than label-based placeholders."""
+    """確認路由切換選取既有分析分類與圖表，而非依顯示文字建立假功能。
+
+回傳：
+    無。"""
     page = DummyPage()
     flet_main(page)
     shell = page.controls[0]
@@ -418,7 +428,10 @@ def test_navigation_routes_update_analysis_category_and_chart_choice() -> None:
 
 
 def test_responsive_shell_collapses_sidebar_and_context_panel() -> None:
-    """Narrow windows expose the menu drawer and hide the optional context panel."""
+    """確認窄視窗會收合側邊導覽並隱藏選用情境面板。
+
+回傳：
+    無。"""
     page = DummyPage()
     page.width = 760
     flet_main(page)
@@ -443,7 +456,13 @@ def test_responsive_shell_collapses_sidebar_and_context_panel() -> None:
 
 
 def test_global_output_unit_switch_renders_new_metrics_without_mutating_inputs(monkeypatch) -> None:
-    """Metric rendering follows SI/Imperial preference while each entered unit stays intact."""
+    """確認輸出單位偏好能重新呈現指標，同時保留各欄位原輸入單位。
+
+參數：
+    monkeypatch: pytest 提供的替換工具，用於隔離熱力性質查詢服務。
+
+回傳：
+    無。"""
     converter = UnitConverter()
     service = PropertyQueryService(ThermoStateCalculator(converter).state_service)
     property_tab = PropertyTab(
@@ -459,6 +478,13 @@ def test_global_output_unit_switch_renders_new_metrics_without_mutating_inputs(m
     query_calls = []
 
     def fake_query(request):
+        """以固定的 SI 性質值替代查詢服務，隔離輸出單位重繪測試。
+
+參數：
+    request: 傳入查詢服務的熱力性質請求。
+
+回傳：
+    模擬查詢結果中的 SI 性質值。"""
         query_calls.append(request)
         return {
             "P": 1_000_000.0,
@@ -499,7 +525,10 @@ def test_global_output_unit_switch_renders_new_metrics_without_mutating_inputs(m
 
 
 def test_analysis_local_unit_toggle_updates_the_global_preference() -> None:
-    """A legacy analysis selector must remain synchronized with shell and property units."""
+    """確認分析頁沿用的單位切換會同步更新全域偏好。
+
+回傳：
+    無。"""
     page = DummyPage()
     flet_main(page)
     shell = page.controls[0]
@@ -515,7 +544,10 @@ def test_analysis_local_unit_toggle_updates_the_global_preference() -> None:
 
 
 def test_workspace_state_remembers_input_units_by_row_and_property() -> None:
-    """Row-specific unit choices survive property changes without becoming global output units."""
+    """確認工作區依輸入列與性質分別保存單位，不與輸出偏好混用。
+
+回傳：
+    無。"""
     converter = UnitConverter()
     state = WorkspaceState(input_units={"condition_0_T": "°F"})
     tab = PropertyTab(
@@ -537,7 +569,10 @@ def test_workspace_state_remembers_input_units_by_row_and_property() -> None:
 
 
 def test_reference_state_selector_uses_short_executable_codes_with_helper_copy() -> None:
-    """The compact selector displays a stable code and keeps its meaning beside the field."""
+    """確認參考狀態選單使用簡短代碼，並就近提供完整說明。
+
+回傳：
+    無。"""
     converter = UnitConverter()
     tab = PropertyTab(
         unit_converter=converter,
@@ -554,7 +589,10 @@ def test_reference_state_selector_uses_short_executable_codes_with_helper_copy()
 
 
 def test_property_query_validation_errors_are_attached_to_the_offending_field() -> None:
-    """Invalid pressure is rejected beside its input before the thermodynamic service runs."""
+    """確認無效壓力會在呼叫熱力服務前顯示於對應欄位旁。
+
+回傳：
+    無。"""
     converter = UnitConverter()
     state_calculator = ThermoStateCalculator(converter)
     tab = PropertyTab(
@@ -584,7 +622,10 @@ def test_property_query_validation_errors_are_attached_to_the_offending_field() 
 
 
 def test_relative_humidity_and_quality_validation_remain_distinct() -> None:
-    """RH percentage and unitless quality enforce separate user-facing ranges."""
+    """確認 RH 百分比與無單位乾度採用不同的欄位驗證範圍。
+
+回傳：
+    無。"""
     converter = UnitConverter()
     state_calculator = ThermoStateCalculator(converter)
     tab = PropertyTab(
@@ -601,7 +642,7 @@ def test_relative_humidity_and_quality_validation_remain_distinct() -> None:
 
 
 def test_flet_text_theme_styles_use_theme_style_parameter() -> None:
-    """防止 Flet 1 將 TextThemeStyle 視為 TextStyle object。
+    """防止 Flet 1 將 TextThemeStyle 當成文字樣式物件使用。
 
 回傳：
     無。"""

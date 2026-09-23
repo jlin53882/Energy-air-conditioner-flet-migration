@@ -1,4 +1,4 @@
-"""Shared visual tokens for the engineering workspace."""
+"""集中管理工程工作區的視覺設計 設計 設計參數。"""
 
 from dataclasses import dataclass
 
@@ -7,7 +7,7 @@ import flet as ft
 
 @dataclass(frozen=True)
 class DesignTokens:
-    """Centralize spacing, sizing, color, and typography decisions."""
+    """集中定義工作區的間距、尺寸、色彩與字體層級。"""
 
     spacing_xs: int = 4
     spacing_sm: int = 8
@@ -43,5 +43,8 @@ TOKENS = DesignTokens()
 
 
 def workspace_theme() -> ft.Theme:
-    """Build the light engineering theme used by the application shell."""
+    """建立應用程式外殼共用的淺色工程主題。
+
+回傳：
+    套用中央設計 設計 設計參數 的 Flet Theme。"""
     return ft.Theme(color_scheme_seed=TOKENS.primary)
