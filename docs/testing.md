@@ -71,3 +71,18 @@ git diff --check
 ```
 
 迭代期間先執行 focused test，最後一次 edit 後再執行完整 suite。回報必須使用工具實際輸出；pending external CI 不等於 local pass。
+
+## GitHub Actions
+
+所有 targeting `master` 的 Pull Request，以及推送至 `master` 的更新，均執行正式 CI；也可從 GitHub Actions 手動啟動。
+
+Required verification 包含：
+
+- `uv lock --check` 與 `uv sync --locked`；
+- Ruff lint（目前維護的 `application`、`chart`、`infrastructure` 與 `run.py` 範圍）；
+- production source `compileall`；
+- `uv pip check`；
+- 針對觸發 revision 的 `git diff --check`；
+- 完整測試套件 `uv run pytest -q`。
+
+Workflow 是 executable verification truth；本文是 intended testing contract。兩者不一致視為 verification drift，應判斷並修正 workflow 或文件，不得讓差異靜默存在。
