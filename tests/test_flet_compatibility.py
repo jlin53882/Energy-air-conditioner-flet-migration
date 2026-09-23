@@ -289,6 +289,29 @@ def test_analysis_output_toggle_reformats_existing_result() -> None:
     imperial_result = analysis_tab.result_text.value
     assert imperial_result != si_result
     assert "°F" in imperial_result
+
+
+def test_analysis_selection_clears_cached_result_before_unit_refresh() -> None:
+    """切換 analysis 後再切單位不得重算尚未執行的新 analysis。
+
+回傳：
+    無。"""
+    converter = UnitConverter()
+    analysis_tab = AnalysisTab(
+        unit_converter=converter,
+        page=DummyPage(),
+        analyzer=HVACAnalyzer(),
+        psy_calculator=PsychrometricCalculator(),
+        state_calculator=ThermoStateCalculator(converter),
+    )
+    analysis_tab._has_calculated_result = True
+    analysis_tab.analysis_dd.value = list(analysis_tab.analysis_map)[1]
+
+    analysis_tab.on_analysis_change(None)
+
+    assert analysis_tab._has_calculated_result is False
+
+
 def test_tab_views_wrap_content_for_flet_layout_constraints() -> None:
     """限制 tab content 範圍，讓 Flet 1 能渲染完整的可捲動 tabs。
 

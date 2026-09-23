@@ -714,7 +714,7 @@ class ThermoCalculator:
             wet_bulb_value = result["Twb"] - 273.15
         elif "RH" in known_props:
             result = self._psychrometric_service.calculate_from_tdb_rh(
-                tdb_c + 273.15, known_props["RH"], altitude
+                tdb_c + 273.15, known_props["RH"] / 100.0, altitude
             )
             wet_bulb_label = "計算濕球溫度 (Calculated Wet-Bulb Temp)"
             wet_bulb_value = result["Twb"] - 273.15

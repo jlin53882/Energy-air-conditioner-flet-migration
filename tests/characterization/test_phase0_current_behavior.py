@@ -161,7 +161,7 @@ def test_current_psychrometric_adapters_expose_different_output_contracts(
     無。"""
     flet_result = PsychrometricCalculator().calculate_from_tdb_rh(
         tdb_k=298.15,
-        rh=50.0,
+        rh=0.5,
         altitude_m=0.0,
     )
     telegram_result = telegram_thermo.calculate_psychrometric_properties(

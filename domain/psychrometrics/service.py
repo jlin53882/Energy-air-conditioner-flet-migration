@@ -65,7 +65,9 @@ class PsychrometricService:
             )
         )
         dew_point_c = self._model.cal_Tdp_from_Pw(vapor_pressure_kpa)
-        rh_fraction = self._normalize_rh_fraction(rh)
+        if not 0.0 <= rh <= 100.0:
+            raise ValueError("Legacy model RH must be between 0.0 and 100.0 percent")
+        rh_fraction = rh / 100.0
         return self._build_result(
             altitude_m=altitude_m,
             pressure=pressure_kpa * 1000.0,
@@ -127,19 +129,19 @@ class PsychrometricService:
 
     @staticmethod
     def _normalize_rh_fraction(rh: float) -> float:
-        """將 RH 輸入正規化為 domain fraction。
+        """驗證 domain RH fraction，維持單一 canonical input semantics。
 
 參數：
-    rh (float): domain fraction 或 legacy percentage input。
+    rh (float): 0.0 至 1.0 的 domain RH fraction。
 
 回傳：
-    float：0.0 至 1.0 的 RH fraction。
+    float：原樣回傳的 RH fraction。
 
 引發：
-    ValueError：RH 超出 0 至 100 的 compatibility input 範圍。"""
-        if not 0.0 <= rh <= 100.0:
-            raise ValueError("RH must be between 0.0 and 1.0 as a fraction, or 0.0 and 100.0 as a legacy percentage")
-        return rh if rh <= 1.0 else rh / 100.0
+    ValueError：RH 不在 0.0 至 1.0 的 domain 範圍。"""
+        if not 0.0 <= rh <= 1.0:
+            raise ValueError("RH must be a fraction between 0.0 and 1.0")
+        return rh
 
     @staticmethod
     def _build_result(

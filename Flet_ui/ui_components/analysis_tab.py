@@ -178,6 +178,7 @@ class AnalysisTab(ft.Column):
 
 回傳：
     無。"""
+            self._has_calculated_result = False
             selected_name = self.analysis_dd.value
 
             # --- 新邏輯 ---
