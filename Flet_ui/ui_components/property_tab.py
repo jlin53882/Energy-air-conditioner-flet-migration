@@ -490,11 +490,20 @@ class PropertyTab(ft.Column):
         except RuntimeError:
             pass
 
-    def _compose_result_text(self) -> str:
-        """從有效快照組成含輸入摘要及目前輸出單位的可複製文字。
+    def _compose_result_summary(self) -> str:
+        """產生不重複格式化詳細結果的常駐摘要。
 
-        回傳：
-            目前快照的完整純文字表示；快照已清除時回傳空字串。
+        :return: 輸入摘要及目前輸出單位；尚無有效輸入快照時回傳空字串。
+        """
+        if not self._last_input_summary:
+            return ""
+        output_label = "Imperial" if self.output_unit_system == "Imperial" else "SI"
+        return f"{self._last_input_summary}\n輸出單位: {output_label}"
+
+    def _compose_result_text(self) -> str:
+        """組成供複製使用的輸入摘要與完整格式化結果。
+
+        :return: 目前快照的完整純文字表示；快照已清除時回傳空字串。
         """
         if not self._last_formatted_output:
             return ""
@@ -585,7 +594,7 @@ class PropertyTab(ft.Column):
             )
         self._last_formatted_output = output
         self.raw_output.value = output
-        self.result_text.value = self._compose_result_text()
+        self.result_text.value = self._compose_result_summary()
         self.result_text.visible = True
         self.details_button.disabled = False
         self.copy_result_button.disabled = False

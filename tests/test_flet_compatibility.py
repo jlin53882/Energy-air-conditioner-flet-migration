@@ -1291,10 +1291,10 @@ def test_mass_unit_representation_change_preserves_extensive_snapshot(monkeypatc
     assert len(calls) == 1
 
 
-def test_property_result_text_keeps_input_summary_after_output_unit_rerender(
+def test_property_summary_and_detail_track_output_unit_without_requery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """輸出單位重繪只改格式，保留最近成功計算的輸入摘要。
+    """輸出單位重繪更新摘要與詳細資料，但保留輸入快照且不重查詢。
 
     參數：
         monkeypatch: pytest 的屬性替換工具。
@@ -1305,31 +1305,39 @@ def test_property_result_text_keeps_input_summary_after_output_unit_rerender(
     tab, calls = _build_property_tab_with_fake_query(monkeypatch)
     _calculate_property_tab(tab)
     si_summary = tab.result_text.value
-    si_input_summary = si_summary.partition("\n\n")[0]
-    si_copy = tab._compose_result_text()
-    assert si_copy == si_summary
+    input_summary = tab._last_input_summary
+    si_output = tab._last_formatted_output
 
     assert "計算模式" in si_summary
     assert "R32" in si_summary
+    assert "參考狀態" in si_summary
     assert "已知:" in si_summary
     assert "1000 kPa" in si_summary
     assert "25 °C" in si_summary
-    assert "kJ/kg" in si_copy
+    assert "輸出單位: SI" in si_summary
+    assert si_output not in si_summary
+    assert si_output in tab._compose_result_text()
+    assert "kJ/kg" in si_output
+    assert tab.raw_output.value == si_output
+    assert len(calls) == 1
 
     tab.set_output_unit_system("Imperial")
-    imperial_copy = tab._compose_result_text()
+    imperial_summary = tab.result_text.value
+    imperial_output = tab._last_formatted_output
 
-    assert tab.result_text.value.startswith(si_input_summary)
-    assert tab.result_text.value != si_summary
-    assert tab.result_text.value == imperial_copy
-    assert "計算模式" in tab.result_text.value
-    assert "R32" in tab.result_text.value
-    assert "已知:" in tab.result_text.value
-    assert "1000 kPa" in tab.result_text.value
-    assert "25 °C" in tab.result_text.value
-    assert "psia" in tab.raw_output.value
-    assert "Btu/lbm" in imperial_copy
-    assert imperial_copy != si_copy
+    assert tab._last_input_summary == input_summary
+    assert "計算模式" in imperial_summary
+    assert "R32" in imperial_summary
+    assert "參考狀態" in imperial_summary
+    assert "已知:" in imperial_summary
+    assert "1000 kPa" in imperial_summary
+    assert "25 °C" in imperial_summary
+    assert "輸出單位: Imperial" in imperial_summary
+    assert imperial_output not in imperial_summary
+    assert "psia" in imperial_output
+    assert "Btu/lbm" in imperial_output
+    assert tab.raw_output.value == imperial_output
+    assert imperial_output in tab._compose_result_text()
     assert len(calls) == 1
 
 
@@ -1353,6 +1361,61 @@ def test_property_raw_output_is_not_the_same_control_as_result_summary(
     assert tab.result_text in result_card_content.controls
     assert tab.raw_output.visible is False
     assert tab.result_text.visible is True
+    assert tab.raw_output.value == tab._last_formatted_output
+    assert tab.result_text.value != tab._compose_result_text()
+    assert tab._last_formatted_output not in tab.result_text.value
+
+
+def test_property_summary_does_not_duplicate_raw_detail_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """常駐摘要只列輸入與輸出單位，不重複完整格式化詳細結果。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, _calls = _build_property_tab_with_fake_query(monkeypatch)
+    _calculate_property_tab(tab)
+
+    assert tab.result_text.visible is True
+    assert tab.raw_output.visible is False
+    assert "計算模式" in tab.result_text.value
+    assert "R32" in tab.result_text.value
+    assert "參考狀態" in tab.result_text.value
+    assert "已知:" in tab.result_text.value
+    assert "輸出單位: SI" in tab.result_text.value
+    assert tab._last_formatted_output not in tab.result_text.value
+    assert tab.result_text.value != tab._compose_result_text()
+    assert tab.raw_output.value == tab._last_formatted_output
+
+
+def test_property_detail_toggle_only_reveals_raw_formatted_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """詳細按鈕只展開 formatter 輸出，不改變簡潔摘要。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, _calls = _build_property_tab_with_fake_query(monkeypatch)
+    _calculate_property_tab(tab)
+    summary = tab.result_text.value
+
+    assert tab.raw_output.visible is False
+    tab._toggle_raw_output(None)
+    assert tab.raw_output.visible is True
+    assert tab.raw_output.value == tab._last_formatted_output
+    assert tab.result_text.value == summary
+
+    tab._toggle_raw_output(None)
+    assert tab.raw_output.visible is False
+    assert tab.result_text.value == summary
 
 
 def test_property_copy_result_contract_is_stable_across_unit_rerender(
@@ -1385,12 +1448,20 @@ def test_property_copy_result_contract_is_stable_across_unit_rerender(
             copied.append(value)
 
     monkeypatch.setattr(ft, "Clipboard", ClipboardCapture)
+    assert tab._last_formatted_output not in tab.result_text.value
+    assert tab._last_formatted_output in tab._compose_result_text()
+    assert tab.result_text.value != tab._compose_result_text()
     asyncio.run(tab._copy_result(None))
     si_copy = copied[-1]
+    assert tab._last_formatted_output in si_copy
 
     tab.set_output_unit_system("Imperial")
+    assert tab._last_formatted_output not in tab.result_text.value
+    assert tab._last_formatted_output in tab._compose_result_text()
+    assert tab.result_text.value != tab._compose_result_text()
     asyncio.run(tab._copy_result(None))
     imperial_copy = copied[-1]
+    assert tab._last_formatted_output in imperial_copy
 
     for result in (si_copy, imperial_copy):
         assert "計算模式" in result
@@ -1402,6 +1473,90 @@ def test_property_copy_result_contract_is_stable_across_unit_rerender(
     assert "Btu/lbm" in imperial_copy
     assert si_copy != imperial_copy
     assert len(calls) == 1
+
+
+def test_property_results_follow_summary_detail_copy_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """驗證成功、詳情、單位重繪、輸入失效、重算與重設的完整呈現生命週期。
+
+    參數：
+        monkeypatch: pytest 的屬性替換工具。
+
+    回傳：
+        無。
+    """
+    tab, calls = _build_property_tab_with_fake_query(monkeypatch)
+    copied: list[str] = []
+
+    class ClipboardCapture:
+        """保留測試中的完整複製表示。"""
+
+        async def set(self, value: str) -> None:
+            """記錄剪貼簿收到的完整結果。
+
+            參數：
+                value: 完整複製表示。
+
+            回傳：
+                無。
+            """
+            copied.append(value)
+
+    monkeypatch.setattr(ft, "Clipboard", ClipboardCapture)
+    _calculate_property_tab(tab)
+    assert len(calls) == 1
+    assert tab.result_panel.metrics["Pressure"].endswith("kPa")
+    assert tab.result_text.visible is True
+    assert tab.raw_output.visible is False
+    assert tab.details_button.disabled is False
+    assert tab.copy_result_button.disabled is False
+    assert tab._last_formatted_output not in tab.result_text.value
+
+    summary = tab.result_text.value
+    tab._toggle_raw_output(None)
+    assert tab.raw_output.visible is True
+    assert tab.raw_output.value == tab._last_formatted_output
+    assert tab.result_text.value == summary
+    asyncio.run(tab._copy_result(None))
+    assert tab._last_formatted_output in copied[-1]
+
+    tab.set_output_unit_system("Imperial")
+    assert len(calls) == 1
+    assert tab.result_panel.metrics["Pressure"].endswith("psia")
+    assert "輸出單位: Imperial" in tab.result_text.value
+    assert "psia" in tab.raw_output.value
+    assert "Btu/lbm" in tab.raw_output.value
+    asyncio.run(tab._copy_result(None))
+    assert tab._last_formatted_output in copied[-1]
+
+    tab.input_rows[0]["val"].value = "2000"
+    tab.input_rows[0]["val"].on_change(SimpleNamespace(control=tab.input_rows[0]["val"]))
+    assert tab.result_panel.status == "warning"
+    assert tab._last_si_results is None
+    assert tab._last_input_summary == ""
+    assert tab._last_formatted_output == ""
+    assert tab.result_text.value == ""
+    assert tab.result_text.visible is False
+    assert tab.raw_output.value == ""
+    assert tab.raw_output.visible is False
+    assert tab.details_button.disabled is True
+    assert tab.copy_result_button.disabled is True
+
+    _calculate_property_tab(tab)
+    assert len(calls) == 2
+    assert tab.result_panel.status == "success"
+    tab._reset_inputs(None)
+    assert tab.result_panel.status == "empty"
+    assert tab.result_panel.metrics == {}
+    assert tab.result_text.value == ""
+    assert tab.result_text.visible is False
+    assert tab.raw_output.value == ""
+    assert tab.raw_output.visible is False
+    assert tab._last_input_summary == ""
+    assert tab._last_formatted_output == ""
+    assert tab.copy_result_button.disabled is True
+    assert tab.details_button.disabled is True
 
 
 def test_property_stale_result_clears_copy_and_detail_snapshot(
