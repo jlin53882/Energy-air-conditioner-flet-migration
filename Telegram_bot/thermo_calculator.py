@@ -727,7 +727,7 @@ class ThermoCalculator:
             "乾球溫度 (Dry-Bulb Temperature)": f"{tdb_c:.2f} °C",
             wet_bulb_label: f"{wet_bulb_value:.2f} °C",
             "露點溫度 (Dew Point Temperature)": f"{result['Tdp'] - 273.15:.2f} °C",
-            "相對濕度 (Relative Humidity)": f"{result['RH']:.2f} %",
+            "相對濕度 (Relative Humidity)": f"{result['RH'] * 100.0:.2f} %",
             "濕度比 (Humidity Ratio)": f"{result['W']:.6f} kg/kg",
             "濕空氣之焓值 (Enthalpy)": f"{result['H'] / 1000.0:.4f} kJ/kg",
             "濕空氣之比容 (Specific Volume)": f"{result['V']:.4f} m³/kg",

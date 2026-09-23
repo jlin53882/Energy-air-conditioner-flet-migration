@@ -41,6 +41,43 @@ def test_psychrometric_rh_input_uses_fraction_boundary_and_si_pressure() -> None
     assert result["W"] == pytest.approx(0.009662404)
     assert result["H"] == pytest.approx(40037.239511)
     assert result["V"] == pytest.approx(0.830444155)
+
+
+def test_psychrometric_rh_compatibility_input_preserves_fraction_output() -> None:
+    """legacy percentage input 僅在 adapter boundary 相容，domain output 仍固定為 fraction。
+
+回傳：
+    無。"""
+    service = PsychrometricService(LegacyPsychrometricModelAdapter())
+
+    result = service.calculate_from_tdb_rh(tdb_k=288.65, rh=88.0, altitude_m=0.0)
+
+    assert result["RH"] == pytest.approx(0.88)
+
+
+def test_psychrometric_rh_out_of_compatibility_range_is_rejected() -> None:
+    """RH 超出 fraction／legacy percentage 範圍時必須明確失敗。
+
+回傳：
+    無。"""
+    service = PsychrometricService(LegacyPsychrometricModelAdapter())
+
+    with pytest.raises(ValueError, match="RH must be between"):
+        service.calculate_from_tdb_rh(tdb_k=288.65, rh=101.0, altitude_m=0.0)
+
+
+def test_psychrometric_tdb_twb_path_normalizes_rh_to_fraction() -> None:
+    """乾球／濕球 path 也必須將 legacy model 的 RH percentage 正規化為 fraction。
+
+回傳：
+    無。"""
+    service = PsychrometricService(LegacyPsychrometricModelAdapter())
+
+    result = service.calculate_from_tdb_twb(tdb_k=298.15, twb_k=290.15, altitude_m=0.0)
+
+    assert result["RH"] == pytest.approx(0.4463178211755029)
+
+
 def test_flet_psychrometric_adapter_matches_shared_service() -> None:
     """Flet adapter 原樣提供 shared service result。
 

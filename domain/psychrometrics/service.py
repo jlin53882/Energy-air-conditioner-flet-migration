@@ -65,13 +65,14 @@ class PsychrometricService:
             )
         )
         dew_point_c = self._model.cal_Tdp_from_Pw(vapor_pressure_kpa)
+        rh_fraction = self._normalize_rh_fraction(rh)
         return self._build_result(
             altitude_m=altitude_m,
             pressure=pressure_kpa * 1000.0,
             tdb_k=tdb_k,
             twb_k=twb_k,
             dew_point_k=dew_point_c + 273.15,
-            rh=rh,
+            rh=rh_fraction,
             w=w,
             enthalpy=enthalpy * 1000.0,
             volume=volume,
@@ -98,7 +99,7 @@ class PsychrometricService:
 回傳：
     dict[str, Any]：函數計算或處理後的結果。"""
         tdb_c = tdb_k - 273.15
-        rh_fraction = rh if 0.0 <= rh <= 1.0 else rh / 100.0
+        rh_fraction = self._normalize_rh_fraction(rh)
         twb_c, pressure_kpa, vapor_pressure_kpa, pws_db_kpa, pws_wb_kpa, w, ws, wss, _, enthalpy, volume = (
             self._model.Calculation_process_m_Tdb_RH(
                 m=altitude_m,
@@ -113,7 +114,7 @@ class PsychrometricService:
             tdb_k=tdb_k,
             twb_k=twb_c + 273.15,
             dew_point_k=dew_point_c + 273.15,
-            rh=rh_fraction if rh <= 1.0 else rh,
+            rh=rh_fraction,
             w=w,
             enthalpy=enthalpy * 1000.0,
             volume=volume,
@@ -123,6 +124,22 @@ class PsychrometricService:
             ws=ws,
             wss=wss,
         )
+
+    @staticmethod
+    def _normalize_rh_fraction(rh: float) -> float:
+        """將 RH 輸入正規化為 domain fraction。
+
+參數：
+    rh (float): domain fraction 或 legacy percentage input。
+
+回傳：
+    float：0.0 至 1.0 的 RH fraction。
+
+引發：
+    ValueError：RH 超出 0 至 100 的 compatibility input 範圍。"""
+        if not 0.0 <= rh <= 100.0:
+            raise ValueError("RH must be between 0.0 and 1.0 as a fraction, or 0.0 and 100.0 as a legacy percentage")
+        return rh if rh <= 1.0 else rh / 100.0
 
     @staticmethod
     def _build_result(

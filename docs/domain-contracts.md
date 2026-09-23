@@ -69,7 +69,7 @@ Adapter conversion 或 architecture refactor 不得改變 physics formula。
 
 ## 8. Psychrometric contract
 
-Shared psychrometric service 接受 numeric SI-oriented input 並回傳 neutral numeric result。特別是 temperature 使用 `K`、pressure 使用 `Pa`、enthalpy 使用 `J/kg`，result 使用 structured mapping。
+Shared psychrometric service 接受 numeric SI-oriented input 並回傳 neutral numeric result。特別是 temperature 使用 `K`、pressure 使用 `Pa`、enthalpy 使用 `J/kg`，result 使用 structured mapping。`PsychrometricService` 的 `result["RH"]` 永遠是 `0.0–1.0` fraction；若 compatibility caller 傳入 `0–100` percentage，僅在 legacy model adapter boundary 正規化，canonical output semantic 不變。
 
 Flet 與 Telegram 負責 label、display unit、string 以及 message/control rendering。Telegram display string 不是 domain output contract。
 
