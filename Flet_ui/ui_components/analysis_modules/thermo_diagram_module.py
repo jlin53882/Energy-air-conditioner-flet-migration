@@ -39,7 +39,8 @@ class ThermoDiagramModule(BaseAnalysisModule):
     無。"""
         #單位處理
         temp_unit = self.unit_converter.default_units["T"]
-        press_unit = self.unit_converter.default_units["P"]
+        # Heatmap defaults use MPa because the example values are 0.16 and 0.70 MPa.
+        press_unit = "MPa"
         enthalpy_unit = self.unit_converter.default_units["H"]
         entropy_unit = self.unit_converter.default_units["S"]
         volume_unit = self.unit_converter.default_units["V"] 
@@ -121,39 +122,82 @@ class ThermoDiagramModule(BaseAnalysisModule):
 
         # --- 結果輸出與按鈕 ---
         self.result_text = ft.Text("請輸入參數並點擊繪圖。", selectable=True)
-        self.plot_btn = ft.Button("繪圖", icon=ft.Icons.AUTO_GRAPH, on_click=self._on_plot_click)
-        self.connect_points_cb = ft.Checkbox(label="連接狀態點", value=True)
 
         # --- 初始空圖 ---
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = plt.subplots(figsize=(8, 5.5))
         ax.text(0.5, 0.5, "尚未繪製", ha="center", va="center", color="gray")
         self.chart = fch.MatplotlibChart(figure=fig, expand=True)
-        chart_container = ft.Container(self.chart, expand=True, height=480)
+        self.chart_container = ft.Container(
+            content=self.chart,
+            expand=True,
+            height=520,
+        )
 
-        # --- 版面配置 ---
+        # --- 版面配置：左側設定、右側結果圖表 ---
         self.info_text = ft.Text(
-            "請輸入 T1, T2 (用 , 分隔) 和 P1, P2 (用 , 分隔)。將自動繪製 s1, s2s, s2 三點。", 
-            size=11, color="grey")
+            "格式：T1,T2 與 P1,P2，各輸入兩筆；範例：10, 50 與 0.16, 0.70 MPa。",
+            size=12,
+            color=ft.Colors.BLUE_GREY_700,
+        )
+        self.plot_btn = ft.Button(
+            "繪圖",
+            icon=ft.Icons.AUTO_GRAPH,
+            on_click=self._on_plot_click,
+            bgcolor=ft.Colors.BLUE_700,
+            color=ft.Colors.WHITE,
+            tooltip="依目前設定繪製熱力圖",
+        )
+        self.connect_points_cb = ft.Checkbox(label="連接狀態點", value=True)
 
-        layout = ft.Column([
-            ft.Row( 
-                [self.fluid_tf, self.check_fluid_btn, self.diagram_dd], 
-                spacing=5, vertical_alignment=ft.CrossAxisAlignment.CENTER
+        settings_card = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("繪圖設定", theme_style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_600),
+                    ft.Row([self.fluid_tf, self.check_fluid_btn], spacing=8),
+                    self.fluid_check_result,
+                    self.diagram_dd,
+                    self.ref_state_dd,
+                    self.pressure_unit_dd,
+                    self.input_pair_dd,
+                    self.all_entries["td_T"]["ui_row"],
+                    self.all_entries["td_P"]["ui_row"],
+                    self.all_entries["td_H"]["ui_row"],
+                    self.all_entries["td_S"]["ui_row"],
+                    self.all_entries["td_V"]["ui_row"],
+                    self.info_text,
+                    ft.Row([self.plot_btn, self.connect_points_cb], spacing=12),
+                    self.result_text,
+                ],
+                spacing=12,
             ),
-            ft.Row([self.fluid_check_result]), 
-            ft.Row([self.ref_state_dd, self.pressure_unit_dd], spacing=15), 
-            ft.Row([self.input_pair_dd], spacing=15),
-            self.info_text, 
-            self.all_entries["td_T"]["ui_row"],
-            self.all_entries["td_P"]["ui_row"],
-            self.all_entries["td_H"]["ui_row"],
-            self.all_entries["td_S"]["ui_row"],
-            self.all_entries["td_V"]["ui_row"],
-            ft.Row([self.plot_btn, self.connect_points_cb], spacing=15, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            ft.Container(self.result_text, padding=ft.Padding.only(top=5)),
-            ft.Divider(),
-            chart_container
-        ], spacing=5) 
+            padding=20,
+            bgcolor=ft.Colors.GREY_50,
+            border=ft.Border.all(1, ft.Colors.BLUE_GREY_100),
+            border_radius=ft.BorderRadius.all(10),
+            col={"sm": 12, "md": 5, "lg": 4},
+        )
+        chart_card = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("熱力圖結果", theme_style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_600),
+                    ft.Text("繪圖完成後，P-h／T-s 等圖表會顯示在這裡。", size=12, color=ft.Colors.BLUE_GREY_700),
+                    self.chart_container,
+                ],
+                spacing=8,
+                expand=True,
+            ),
+            padding=16,
+            bgcolor=ft.Colors.WHITE,
+            border=ft.Border.all(1, ft.Colors.BLUE_GREY_100),
+            border_radius=ft.BorderRadius.all(10),
+            col={"sm": 12, "md": 7, "lg": 8},
+            height=600,
+        )
+        layout = ft.ResponsiveRow(
+            controls=[settings_card, chart_card],
+            spacing=16,
+            run_spacing=16,
+        )
 
         self.thermo_diagram_ui_container = ft.Container(layout, expand=True)
 
@@ -378,19 +422,19 @@ class ThermoDiagramModule(BaseAnalysisModule):
                 input_mode=input_mode,           
                 ref_state=ref_state,             
                 target_P_unit=pressure_unit_y_axis, 
-                unit_converter=self.unit_converter
+                unit_converter=self.unit_converter,
+                figure=self.chart.figure,
             )
 
+            # Reuse the attached figure so Flet Charts keeps its live WebSocket manager.
             self.chart.figure = fig
-            # headless 計算可能在圖表
-            # 附加到 page 前產生圖形；只有在存在附加關係時才推送 UI 更新。
             try:
                 chart_page = self.chart.page
             except RuntimeError:
                 chart_page = None
             if chart_page:
-                self.chart.update()
-
+                # Ask the existing Flet Charts manager to render the refreshed figure.
+                self.chart.send_message({"type": "refresh"})
             point_count = len(state_points_si)
             if point_count == 0:
                  return f"成功繪製 {fluid} 的 {diagram} 圖 (無狀態點)。"

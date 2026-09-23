@@ -12,6 +12,8 @@ import pytest
 from Flet_ui.flet_app import main as flet_main
 from application.property_queries import PropertyQueryService
 from Flet_ui.ui_components.analysis_modules.psy_module import PsyModule
+from Flet_ui.ui_components.analysis_modules import thermo_diagram_module
+from Flet_ui.ui_components.analysis_modules.thermo_diagram_module import ThermoDiagramModule
 from Flet_ui.ui_components.analysis_tab import AnalysisTab
 from Flet_ui.ui_components.property_tab import PropertyTab
 from Flet_ui.ui_components.unit.HVACAnalyzer import HVACAnalyzer
@@ -78,6 +80,32 @@ def test_flet_matplotlib_backend_survives_chart_helper_import() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "module://flet_charts.matplotlib_backends.backend_flet_agg" in result.stdout
+
+
+def test_thermo_diagram_uses_consistent_pressure_units_and_refreshes_existing_chart(monkeypatch) -> None:
+    """熱力圖輸入單位與座標設定一致，繪圖後刷新既有 chart control。
+
+回傳：
+    無。"""
+    module = ThermoDiagramModule(UnitConverter(), None, None, None)
+    assert module.all_entries["td_P"]["unit"].value == "MPa"
+
+    module.input_pair_dd.value = "T-P"
+    initial_chart = module.chart.figure
+    monkeypatch.setattr(thermo_diagram_module, "check_coolprop_fluid", lambda _: (True, ""))
+    monkeypatch.setattr(
+        thermo_diagram_module,
+        "generate_thermo_diagram",
+        lambda **kwargs: kwargs["figure"],
+    )
+
+    result = module.calculate_thermo_diagram(use_imperial=False)
+
+    assert result == "成功繪製 R134a 的 P-h 圖 (2 個點)。"
+    assert module.chart.figure is initial_chart
+    assert module.chart_container.content is module.chart
+
+
 def test_flet_tabs_and_analysis_controls_construct() -> None:
     """不開啟 desktop session 建構兩個已遷移的 tabs。
 

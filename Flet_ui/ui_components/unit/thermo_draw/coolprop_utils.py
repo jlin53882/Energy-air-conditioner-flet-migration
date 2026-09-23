@@ -197,7 +197,7 @@ def _get_saturation_curve_unlocked(fluid, ref_state, mode="T", num_points=400):
 def generate_thermo_diagram(fluid, diagram, state_points_si, unit_converter,
                           connect_points=False, input_mode=None, ref_state="Auto",
                           target_P_unit="MPa", # 接受Y軸壓力單位
-                          result_text=None):
+                          result_text=None, figure=None):
     """持有共用 CoolProp transaction lock 時建立圖表。
 
 參數：
@@ -210,6 +210,7 @@ def generate_thermo_diagram(fluid, diagram, state_points_si, unit_converter,
     ref_state (未指定型別): 函數輸入值。
     target_P_unit (未指定型別): 函數輸入值。
     result_text (未指定型別): 函數輸入值。
+    figure (未指定型別): 可選的既有 Flet Charts figure；提供時會原地刷新。
 
 回傳：
     未指定型別：函數計算或處理後的結果。"""
@@ -218,12 +219,12 @@ def generate_thermo_diagram(fluid, diagram, state_points_si, unit_converter,
     ):
         return _generate_thermo_diagram_unlocked(
             fluid, diagram, state_points_si, unit_converter, connect_points,
-            input_mode, ref_state, target_P_unit, result_text
+            input_mode, ref_state, target_P_unit, result_text, figure
         )
 
 def _generate_thermo_diagram_unlocked(fluid, diagram, state_points_si, unit_converter,
                           connect_points=False, input_mode=None, ref_state="Auto",
-                          target_P_unit="MPa", result_text=None):
+                          target_P_unit="MPa", result_text=None, figure=None):
     """建立熱力圖（P-h、T-s、P-v、T-v）
 
 參數：
@@ -236,16 +237,20 @@ def _generate_thermo_diagram_unlocked(fluid, diagram, state_points_si, unit_conv
     ref_state (未指定型別): 函數輸入值。
     target_P_unit (未指定型別): 函數輸入值。
     result_text (未指定型別): 函數輸入值。
+    figure (未指定型別): 可選的既有 Flet Charts figure；提供時會原地刷新。
 
 回傳：
     未指定型別：函數計算或處理後的結果。"""
-    plt.close('all')
+    if figure is None:
+        plt.close('all')
 
     # CoolProp reference-state 設定由 public wrapper 擁有。
     try:
         CP.PropsSI("Tcrit", fluid)
     except Exception:
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig = figure or plt.figure(figsize=(8, 6))
+        fig.clear()
+        ax = fig.add_subplot(111)
         # (修改) 更新錯誤訊息
         ax.text(0.5, 0.5, f"CoolProp 無法初始化流體 '{fluid}'\n(或參考狀態 '{ref_state}' 不適用)", 
                 ha='center', va='center', color='red', wrap=True)
@@ -263,7 +268,9 @@ def _generate_thermo_diagram_unlocked(fluid, diagram, state_points_si, unit_conv
     # 定義通用格式 (小數優先)
     log_fmt = FuncFormatter(lambda x, pos: f"{x:g}")
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig = figure or plt.figure(figsize=(8, 6))
+    fig.clear()
+    ax = fig.add_subplot(111)
     x_label = "" 
     y_label = "" 
 
