@@ -9,10 +9,10 @@ def calculate_specific_exerpy(h1, s1, T0_dead, ho_dead, s0_dead):
     公式為： specific_exerpy_1= (h1 - ho_dead) - T0_dead*(s1 - s0_dead)
 
     參數:
-    h1 (float): 狀態 1 的比焓 (Specific Enthalpy)。
+    h1 (float): 狀態 1 的比焓。
     ho_dead (float): 死狀態 (Dead State, 0) 的比焓。
     T0_dead (float): 死狀態 (Dead State, 0) 的溫度 (C)。
-    s1 (float): 狀態 1 的比熵 (Specific Entropy)。
+    s1 (float): 狀態 1 的比熵。
     s0_dead (float): 死狀態 (Dead State, 0) 的比熵。
 
     回傳:

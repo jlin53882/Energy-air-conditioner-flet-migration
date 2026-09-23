@@ -1,8 +1,9 @@
 import flet as ft
+import flet_charts as fch
 import matplotlib.pyplot as plt
-from flet.matplotlib_chart import MatplotlibChart
 from .base_analysis_module import BaseAnalysisModule
 from ..unit.thermo_draw.coolprop_utils import generate_thermo_diagram, safe_props, check_coolprop_fluid 
+from chart.state_point_parser import StatePointParser
 import traceback # 用於印出詳細錯誤
 
 class ThermoDiagramModule(BaseAnalysisModule):
@@ -12,6 +13,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
 
     def __init__(self, unit_converter, page, analyzer, state_calculator):
         super().__init__(unit_converter, page, analyzer=analyzer, state_calculator=state_calculator)
+        self.state_point_parser = StatePointParser()
         self._build_thermo_diagram_ui()
         self._setup_unit_sync() # (修改) 現在會呼叫我們覆寫的 _setup_unit_sync
 
@@ -21,6 +23,8 @@ class ThermoDiagramModule(BaseAnalysisModule):
     def get_analysis_definitions(self):
         return {
             "熱力圖繪製": {
+                "analysis_id": "thermodynamics.diagram",
+                "show_execute_button": False,
                 "ui": self.thermo_diagram_ui_container,
                 "calc_func": self.calculate_thermo_diagram
             }
@@ -30,10 +34,14 @@ class ThermoDiagramModule(BaseAnalysisModule):
     # 1️⃣ UI 建構區 (與前版相同)
     # ======================================================
     def _build_thermo_diagram_ui(self):
-        """建立熱力圖輸入與繪圖區"""
+        """建立熱力圖輸入與繪圖區
+
+回傳：
+    無。"""
         #單位處理
         temp_unit = self.unit_converter.default_units["T"]
-        press_unit = self.unit_converter.default_units["P"]
+        # Heatmap defaults use MPa because the example values are 0.16 and 0.70 MPa.
+        press_unit = "MPa"
         enthalpy_unit = self.unit_converter.default_units["H"]
         entropy_unit = self.unit_converter.default_units["S"]
         volume_unit = self.unit_converter.default_units["V"] 
@@ -64,9 +72,8 @@ class ThermoDiagramModule(BaseAnalysisModule):
         self.ref_state_dd = ft.Dropdown(
             label="參考狀態 (Reference State)",
             options=[
-                ft.dropdown.Option("Auto", "自動 (冷媒:ASHRAE, 水:IAPWS)"),
+                ft.dropdown.Option("Auto", "自動 (冷媒:ASHRAE, 水:Default)"),
                 ft.dropdown.Option("ASHRAE", "ASHRAE (冷媒常用)"),
-                ft.dropdown.Option("IAPWS", "IAPWS (水/水蒸氣標準)"),
                 ft.dropdown.Option("NBP", "NBP (常壓沸點為 0)"),
                 ft.dropdown.Option("IIR", "IIR (0°C 飽和液體為基準)"),
             ],
@@ -99,7 +106,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
             ],
             value="Compressor", 
             width=390, 
-            on_change=self._on_input_mode_change
+            on_select=self._on_input_mode_change
         )
 
         # --- 建立所有輸入欄 ---
@@ -116,39 +123,82 @@ class ThermoDiagramModule(BaseAnalysisModule):
 
         # --- 結果輸出與按鈕 ---
         self.result_text = ft.Text("請輸入參數並點擊繪圖。", selectable=True)
-        self.plot_btn = ft.ElevatedButton("繪圖", icon=ft.Icons.AUTO_GRAPH, on_click=self._on_plot_click)
-        self.connect_points_cb = ft.Checkbox(label="連接狀態點", value=True)
 
         # --- 初始空圖 ---
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = plt.subplots(figsize=(8, 5.5))
         ax.text(0.5, 0.5, "尚未繪製", ha="center", va="center", color="gray")
-        self.chart = MatplotlibChart(fig, expand=True, isolated=True)
-        chart_container = ft.Container(self.chart, expand=True, height=480)
+        self.chart = fch.MatplotlibChart(figure=fig, expand=True)
+        self.chart_container = ft.Container(
+            content=self.chart,
+            expand=True,
+            height=520,
+        )
 
-        # --- 版面配置 ---
+        # --- 版面配置：左側設定、右側結果圖表 ---
         self.info_text = ft.Text(
-            "請輸入 T1, T2 (用 , 分隔) 和 P1, P2 (用 , 分隔)。將自動繪製 s1, s2s, s2 三點。", 
-            size=11, color="grey")
+            "格式：T1,T2 與 P1,P2，各輸入兩筆；範例：10, 50 與 0.16, 0.70 MPa。",
+            size=12,
+            color=ft.Colors.BLUE_GREY_700,
+        )
+        self.plot_btn = ft.Button(
+            "繪圖",
+            icon=ft.Icons.AUTO_GRAPH,
+            on_click=self._on_plot_click,
+            bgcolor=ft.Colors.BLUE_700,
+            color=ft.Colors.WHITE,
+            tooltip="依目前設定繪製熱力圖",
+        )
+        self.connect_points_cb = ft.Checkbox(label="連接狀態點", value=True)
 
-        layout = ft.Column([
-            ft.Row( 
-                [self.fluid_tf, self.check_fluid_btn, self.diagram_dd], 
-                spacing=5, vertical_alignment=ft.CrossAxisAlignment.CENTER
+        settings_card = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("繪圖設定", theme_style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_600),
+                    ft.Row([self.fluid_tf, self.check_fluid_btn], spacing=8),
+                    self.fluid_check_result,
+                    self.diagram_dd,
+                    self.ref_state_dd,
+                    self.pressure_unit_dd,
+                    self.input_pair_dd,
+                    self.all_entries["td_T"]["ui_row"],
+                    self.all_entries["td_P"]["ui_row"],
+                    self.all_entries["td_H"]["ui_row"],
+                    self.all_entries["td_S"]["ui_row"],
+                    self.all_entries["td_V"]["ui_row"],
+                    self.info_text,
+                    ft.Row([self.plot_btn, self.connect_points_cb], spacing=12),
+                    self.result_text,
+                ],
+                spacing=12,
             ),
-            ft.Row([self.fluid_check_result]), 
-            ft.Row([self.ref_state_dd, self.pressure_unit_dd], spacing=15), 
-            ft.Row([self.input_pair_dd], spacing=15),
-            self.info_text, 
-            self.all_entries["td_T"]["ui_row"],
-            self.all_entries["td_P"]["ui_row"],
-            self.all_entries["td_H"]["ui_row"],
-            self.all_entries["td_S"]["ui_row"],
-            self.all_entries["td_V"]["ui_row"],
-            ft.Row([self.plot_btn, self.connect_points_cb], spacing=15, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            ft.Container(self.result_text, padding=ft.padding.only(top=5)),
-            ft.Divider(),
-            chart_container
-        ], spacing=5) 
+            padding=20,
+            bgcolor=ft.Colors.GREY_50,
+            border=ft.Border.all(1, ft.Colors.BLUE_GREY_100),
+            border_radius=ft.BorderRadius.all(10),
+            col={"sm": 12, "md": 5, "lg": 4},
+        )
+        chart_card = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("熱力圖結果", theme_style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_600),
+                    ft.Text("繪圖完成後，P-h／T-s 等圖表會顯示在這裡。", size=12, color=ft.Colors.BLUE_GREY_700),
+                    self.chart_container,
+                ],
+                spacing=8,
+                expand=True,
+            ),
+            padding=16,
+            bgcolor=ft.Colors.WHITE,
+            border=ft.Border.all(1, ft.Colors.BLUE_GREY_100),
+            border_radius=ft.BorderRadius.all(10),
+            col={"sm": 12, "md": 7, "lg": 8},
+            height=600,
+        )
+        layout = ft.ResponsiveRow(
+            controls=[settings_card, chart_card],
+            spacing=16,
+            run_spacing=16,
+        )
 
         self.thermo_diagram_ui_container = ft.Container(layout, expand=True)
 
@@ -156,12 +206,18 @@ class ThermoDiagramModule(BaseAnalysisModule):
     # 1a. 冷媒驗證事件 (無變更)
     # ======================================================
     def _on_check_fluid(self, e):
-        """使用者按下 [驗證] 按鈕時"""
+        """使用者按下 [驗證] 按鈕時
+
+參數：
+    e (未指定型別): 函數輸入值。
+
+回傳：
+    無。"""
         fluid_name = self.fluid_tf.value.strip()
         if not fluid_name:
             self.fluid_check_result.value = "請輸入冷媒名稱"
             self.fluid_check_result.color = "red"
-            if self.page: self.page.update()
+            if self.parent: self.page.update()
             return
 
         is_valid, msg = check_coolprop_fluid(fluid_name)
@@ -173,7 +229,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
             self.fluid_check_result.value = f"'{fluid_name}' 無效: {msg}"
             self.fluid_check_result.color = "red"
         
-        if self.page: self.page.update()
+        if self.parent: self.page.update()
 
     # ======================================================
     # 1b. UI 模式切換 (無變更)
@@ -213,18 +269,24 @@ class ThermoDiagramModule(BaseAnalysisModule):
             self.all_entries["td_V"]["ui_row"].visible = True
             
         
-        if self.page: self.page.update()
+        if self.parent: self.page.update()
 
     # ======================================================
     # 2️⃣ 繪圖邏輯：事件觸發 (無變更)
     # ======================================================
     def _on_plot_click(self, e):
-        """使用者按下 [繪圖] 按鈕時"""
+        """使用者按下 [繪圖] 按鈕時
+
+參數：
+    e (未指定型別): 函數輸入值。
+
+回傳：
+    無。"""
         
         self.result_text.value = "繪製中..."
         self.result_text.color = "blue"
         self.plot_btn.disabled = True
-        if self.page: self.page.update()
+        if self.parent: self.page.update()
 
         try:
             result_str = self.calculate_thermo_diagram(use_imperial=False)
@@ -239,15 +301,19 @@ class ThermoDiagramModule(BaseAnalysisModule):
         
         finally:
             self.plot_btn.disabled = False
-            if self.page: self.page.update()
+            if self.parent: self.page.update()
 
     # ======================================================
     # 3️⃣ 核心邏輯：計算並繪製圖形 (無變更)
     # ======================================================
     def calculate_thermo_diagram(self, use_imperial: bool) -> str:
-        """
-        呼叫 coolprop_utils.generate_thermo_diagram() 執行繪圖
-        """
+        """呼叫 coolprop_utils.generate_thermo_diagram() 執行繪圖
+
+參數：
+    use_imperial (bool): 函數輸入值。
+
+回傳：
+    str：函數計算或處理後的結果。"""
         try:
             # --- 繪圖前驗證冷媒 ---
             fluid = self.fluid_tf.value.strip()
@@ -258,12 +324,12 @@ class ThermoDiagramModule(BaseAnalysisModule):
             if not is_valid:
                 self.fluid_check_result.value = f"'{fluid}' 無效: {msg}"
                 self.fluid_check_result.color = "red"
-                if self.page: self.page.update()
+                if self.parent: self.page.update()
                 raise ValueError(f"冷媒 '{fluid}' 無效: {msg}")
             else:
                 self.fluid_check_result.value = f"'{fluid}' 驗證成功"
                 self.fluid_check_result.color = "green"
-                if self.page: self.page.update()
+                if self.parent: self.page.update()
             # --- 驗證結束 ---
 
             # 取得 UI 選項
@@ -283,18 +349,20 @@ class ThermoDiagramModule(BaseAnalysisModule):
                 P_val_str = self.all_entries["td_P"]["val"].value
                 T_unit = self.all_entries["td_T"]["unit"].value
                 P_unit = self.all_entries["td_P"]["unit"].value
-                T_vals_str_list = [v.strip() for v in T_val_str.split(',') if v.strip()]
-                P_vals_str_list = [v.strip() for v in P_val_str.split(',') if v.strip()]
-                if len(T_vals_str_list) != 2 or len(P_vals_str_list) != 2:
+                points = self.state_point_parser.parse(
+                    pressures=P_val_str,
+                    temperatures=T_val_str,
+                    pressure_unit=P_unit,
+                    temperature_unit=T_unit,
+                )
+                if len(points) != 2:
                     raise ValueError("壓縮機分析模式需要 T1, T2 (共 2 筆溫度) 和 P1, P2 (共 2 筆壓力)。")
-                T1_K = self.unit_converter.convert_to_si("T", float(T_vals_str_list[0]), T_unit)
-                T2_K = self.unit_converter.convert_to_si("T", float(T_vals_str_list[1]), T_unit)
-                P1_Pa = self.unit_converter.convert_to_si("P", float(P_vals_str_list[0]), P_unit)
-                P2_Pa = self.unit_converter.convert_to_si("P", float(P_vals_str_list[1]), P_unit)
+                T1_K, T2_K = points[0].temperature_k, points[1].temperature_k
+                P1_Pa, P2_Pa = points[0].pressure_pa, points[1].pressure_pa
 
                 s1_J_kgK = safe_props("S", "T", T1_K, "P", P1_Pa, fluid, ref_state)
                 if s1_J_kgK is None or s1_J_kgK != s1_J_kgK:
-                    raise ValueError(f"無法計算 s1 (T1={T_vals_str_list[0]}, P1={P_vals_str_list[0]})")
+                    raise ValueError(f"無法計算 s1 (T1={T_val_str}, P1={P_val_str})")
                 
                 state_points_si.append({
                     "input_type": "T-P", "T_K": T1_K, "P_Pa": P1_Pa,
@@ -355,12 +423,19 @@ class ThermoDiagramModule(BaseAnalysisModule):
                 input_mode=input_mode,           
                 ref_state=ref_state,             
                 target_P_unit=pressure_unit_y_axis, 
-                unit_converter=self.unit_converter
+                unit_converter=self.unit_converter,
+                figure=self.chart.figure,
             )
 
+            # Reuse the attached figure so Flet Charts keeps its live WebSocket manager.
             self.chart.figure = fig
-            self.chart.update()
-
+            try:
+                chart_page = self.chart.page
+            except RuntimeError:
+                chart_page = None
+            if chart_page:
+                # Ask the existing Flet Charts manager to render the refreshed figure.
+                self.chart.send_message({"type": "refresh"})
             point_count = len(state_points_si)
             if point_count == 0:
                  return f"成功繪製 {fluid} 的 {diagram} 圖 (無狀態點)。"
@@ -381,8 +456,8 @@ class ThermoDiagramModule(BaseAnalysisModule):
     def _create_multi_value_unit_sync_handler(self, unit_type, sync_group):
         """
         (覆寫)
-        Factory function to create an on_change handler that supports
-        comma-separated values (例如 "-10, 50") for unit conversion.
+        建立 on_change handler 的 factory function，支援
+        comma-separated values (例如 "-10, 50") 進行單位轉換。
         """
         def on_change_handler(e):
             # 1. 找到是哪個輸入框觸發了事件
@@ -461,10 +536,10 @@ class ThermoDiagramModule(BaseAnalysisModule):
                     if self.all_entries[key].get("unit"):
                         setattr(self.all_entries[key]["unit"], "previous_unit", new_unit)
 
-            if self.page:
+            if self.parent:
                 self.page.update()
         
-        # --- End of on_change_handler ---
+        # --- on_change_handler 結束 ---
         return on_change_handler
 
     # ======================================================
@@ -478,26 +553,33 @@ class ThermoDiagramModule(BaseAnalysisModule):
         """
         # 壓力 (P)
         p_sync_group = ["td_P"]
-        self.all_entries["td_P"]["unit"].on_change = self._create_unit_sync_handler("P", p_sync_group)
+        self.all_entries["td_P"]["unit"].on_select = self._create_unit_sync_handler("P", p_sync_group)
         
         # 焓 (H)
         h_sync_group = ["td_H"] 
-        self.all_entries["td_H"]["unit"].on_change = self._create_unit_sync_handler("H", h_sync_group)
+        self.all_entries["td_H"]["unit"].on_select = self._create_unit_sync_handler("H", h_sync_group)
 
         # 熵 (S)
         s_sync_group = ["td_S"]
-        self.all_entries["td_S"]["unit"].on_change = self._create_unit_sync_handler("S", s_sync_group)
+        self.all_entries["td_S"]["unit"].on_select = self._create_unit_sync_handler("S", s_sync_group)
 
         # 溫度 (T)
         t_sync_group = ["td_T"]
-        self.all_entries["td_T"]["unit"].on_change = self._create_unit_sync_handler("T", t_sync_group)
+        self.all_entries["td_T"]["unit"].on_select = self._create_unit_sync_handler("T", t_sync_group)
 
         # 比容 (V)
         v_sync_group = ["td_V"]
-        self.all_entries["td_V"]["unit"].on_change = self._create_unit_sync_handler("V", v_sync_group)
+        self.all_entries["td_V"]["unit"].on_select = self._create_unit_sync_handler("V", v_sync_group)
         
         def setup_sync_for_group(unit_type, sync_group):
-            """輔助函式：綁定 handler 並設定初始單位"""
+            """輔助函式：綁定 handler 並設定初始單位
+
+參數：
+    unit_type (未指定型別): 函數輸入值。
+    sync_group (未指定型別): 函數輸入值。
+
+回傳：
+    無。"""
             
             # 1. 建立客製化的 handler
             handler = self._create_multi_value_unit_sync_handler(unit_type, sync_group)
@@ -505,8 +587,8 @@ class ThermoDiagramModule(BaseAnalysisModule):
             initial_unit = None
             for key in sync_group:
                 if key in self.all_entries and self.all_entries[key].get("unit"):
-                    # 2. 綁定 on_change 事件
-                    self.all_entries[key]["unit"].on_change = handler
+                    # 2. 綁定 on_select 事件
+                    self.all_entries[key]["unit"].on_select = handler
                     
                     # 3. 獲取初始單位
                     if initial_unit is None:

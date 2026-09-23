@@ -32,7 +32,13 @@ class PropertyFormatter:
         }
         
     def _get_phase_description(self, phase_str):
-        """ 根據 CoolProp 回傳的相態字串，返回更易讀的描述。"""
+        """根據 CoolProp 回傳的相態字串，返回更易讀的描述。
+
+參數：
+    phase_str (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
         phase_map = {
             'liquid': 'Compressed Liquid (壓縮液)',
             'twophase': 'Two-Phase (Saturated) (兩相飽和區)',
@@ -47,7 +53,7 @@ class PropertyFormatter:
 
     def format_specific_properties(self, si_results, use_imperial_units):
         """
-        格式化所有比性質 (specific properties) 的輸出。
+        格式化所有比性質 (比性質) 的輸出。
         
         :param si_results: 包含 SI 單位 (K, Pa, J/kg...) 的熱力學狀態字典
         :param use_imperial_units: 布林值，True 表示輸出英制，False 表示輸出公制
@@ -89,7 +95,7 @@ class PropertyFormatter:
 
     def format_extensive_properties(self, si_results, total_mass_kg, use_imperial_units):
         """
-        格式化廣延性質 (total properties)。
+        格式化廣延性質 (總性質)。
         注意：total_mass_kg 應始終以 SI (kg) 傳入。
         """
         lines = ["\n--- 廣延性質 (Extensive Properties) ---"]

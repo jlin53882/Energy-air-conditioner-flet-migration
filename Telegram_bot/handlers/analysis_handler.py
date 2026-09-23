@@ -74,7 +74,13 @@ def get_pressure_units_keyboard(columns: int = 3) -> InlineKeyboardMarkup:
 
 # 輔助函式：檢查並轉換輸入的數值
 def check_and_get_float(text: str):
-    """嘗試將文字轉換為浮點數，如果失敗則拋出 ValueError。"""
+    """嘗試將文字轉換為浮點數，如果失敗則拋出 ValueError。
+
+參數：
+    text (str): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
     try:
         return float(text.strip())
     except ValueError:
@@ -83,9 +89,14 @@ def check_and_get_float(text: str):
 # --- 3. 處理函式 (Handlers) ---
 
 async def analysis_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AnalysisStates:
-    """
-    對話的起始點：詢問分析項目。
-    """
+    """對話的起始點：詢問分析項目。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    AnalysisStates：函數計算或處理後的結果。"""
     query = update.callback_query
     await query.answer()
     context.user_data.clear()
@@ -109,9 +120,14 @@ async def analysis_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return AnalysisStates.SELECTING_TYPE
 
 async def analysis_select_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AnalysisStates:
-    """
-    接收分析項目的選擇，並導向對應的輸入流程。
-    """
+    """接收分析項目的選擇，並導向對應的輸入流程。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    AnalysisStates：函數計算或處理後的結果。"""
     query = update.callback_query
     await query.answer()
     
@@ -140,7 +156,14 @@ async def analysis_select_type(update: Update, context: ContextTypes.DEFAULT_TYP
 # --- 壓縮機功 (Win) 流程處理 ---
 
 async def win_received_mdot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AnalysisStates:
-    """接收質量流率，並詢問 h1。"""
+    """接收質量流率，並詢問 h1。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    AnalysisStates：函數計算或處理後的結果。"""
     try:
         context.user_data['m_dot'] = check_and_get_float(update.message.text)
         await update.message.reply_text("請輸入入口焓 <code>h1</code> (kJ/kg)：", parse_mode='HTML')
@@ -150,7 +173,14 @@ async def win_received_mdot(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return AnalysisStates.WIN_ENTERING_MDOT
 
 async def win_received_h1(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AnalysisStates:
-    """接收 h1，並詢問 h2。"""
+    """接收 h1，並詢問 h2。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    AnalysisStates：函數計算或處理後的結果。"""
     try:
         context.user_data['h1'] = check_and_get_float(update.message.text)
         await update.message.reply_text("請輸入出口焓 <code>h2</code> (kJ/kg)：", parse_mode='HTML')
@@ -160,7 +190,14 @@ async def win_received_h1(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return AnalysisStates.WIN_ENTERING_H1
 
 async def win_calculate_and_finish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """接收 h2，執行 Win 計算並結束對話。"""
+    """接收 h2，執行 Win 計算並結束對話。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    int：函數計算或處理後的結果。"""
     try:
         h2 = check_and_get_float(update.message.text)
         m_dot, h1 = context.user_data['m_dot'], context.user_data['h1']
@@ -190,7 +227,14 @@ async def win_calculate_and_finish(update: Update, context: ContextTypes.DEFAULT
 # --- 壓縮比 (CR) 流程處理 ---
 
 async def cr_received_pin_val(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AnalysisStates:
-    """接收 P_in 數值，並詢問壓力類型 (絕對/錶)。"""
+    """接收 P_in 數值，並詢問壓力類型 (絕對/錶)。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    AnalysisStates：函數計算或處理後的結果。"""
     try:
         context.user_data['P_in_val'] = check_and_get_float(update.message.text)
         
@@ -202,7 +246,14 @@ async def cr_received_pin_val(update: Update, context: ContextTypes.DEFAULT_TYPE
         return AnalysisStates.CR_ENTERING_PIN
 
 async def cr_received_pin_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AnalysisStates:
-    """接收 P_in 類型，並詢問 P_in 單位。"""
+    """接收 P_in 類型，並詢問 P_in 單位。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    AnalysisStates：函數計算或處理後的結果。"""
     query = update.callback_query
     await query.answer()
     context.user_data['P_in_type'] = query.data # 'abs' or 'gauge'
@@ -211,7 +262,14 @@ async def cr_received_pin_type(update: Update, context: ContextTypes.DEFAULT_TYP
     return AnalysisStates.CR_SELECTING_PIN_UNIT
 
 async def cr_received_pin_unit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AnalysisStates:
-    """接收 P_in 單位，並詢問 P_out 數值。"""
+    """接收 P_in 單位，並詢問 P_out 數值。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    AnalysisStates：函數計算或處理後的結果。"""
     query = update.callback_query
     await query.answer()
     context.user_data['P_in_unit'] = query.data
@@ -220,7 +278,14 @@ async def cr_received_pin_unit(update: Update, context: ContextTypes.DEFAULT_TYP
     return AnalysisStates.CR_ENTERING_POUT
 
 async def cr_received_pout_val(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AnalysisStates:
-    """接收 P_out 數值，並詢問壓力類型。"""
+    """接收 P_out 數值，並詢問壓力類型。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    AnalysisStates：函數計算或處理後的結果。"""
     try:
         context.user_data['P_out_val'] = check_and_get_float(update.message.text)
         
@@ -232,7 +297,14 @@ async def cr_received_pout_val(update: Update, context: ContextTypes.DEFAULT_TYP
         return AnalysisStates.CR_ENTERING_POUT
 
 async def cr_received_pout_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AnalysisStates:
-    """接收 P_out 類型，並詢問 P_out 單位。"""
+    """接收 P_out 類型，並詢問 P_out 單位。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    AnalysisStates：函數計算或處理後的結果。"""
     query = update.callback_query
     await query.answer()
     context.user_data['P_out_type'] = query.data # 'abs' or 'gauge'
@@ -263,7 +335,7 @@ async def cr_check_and_calculate(update: Update, context: ContextTypes.DEFAULT_T
     # 如果任一為錶壓力，則需要大氣壓力
     if p_in_type == 'gauge' or p_out_type == 'gauge':
         # 預設值 101.325 kPa (或換算成選定單位)
-        default_atm_val_si = calculator._convert_from_si('P', 101325, p_in_unit) # 101.325 kPa in selected unit
+        default_atm_val_si = calculator._convert_from_si('P', 101325, p_in_unit) # 101.325 kPa（換算為選定單位）
         
         await query.edit_message_text(
             f"由於您選擇了錶壓力，請輸入大氣壓力 <code>P_atm</code> 的數值 ({p_in_unit})：\n(預設值: {default_atm_val_si:.3f})", 
@@ -276,7 +348,14 @@ async def cr_check_and_calculate(update: Update, context: ContextTypes.DEFAULT_T
         return await cr_calculate_and_finish(update, context, no_patm=True)
 
 async def cr_received_patm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """接收大氣壓力數值，執行 CR 計算並結束對話。"""
+    """接收大氣壓力數值，執行 CR 計算並結束對話。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    int：函數計算或處理後的結果。"""
     try:
         # 如果使用者輸入了數值
         if update.message and update.message.text:
@@ -295,9 +374,15 @@ async def cr_received_patm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return AnalysisStates.CR_ENTERING_PATM
 
 async def cr_calculate_and_finish(update: Update, context: ContextTypes.DEFAULT_TYPE, no_patm: bool) -> int:
-    """
-    執行壓縮比 (CR) 計算的核心邏輯，並結束對話。
-    """
+    """執行壓縮比 (CR) 計算的核心邏輯，並結束對話。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+    no_patm (bool): 函數輸入值。
+
+回傳：
+    int：函數計算或處理後的結果。"""
     
     # 處理 update 類型 (來自 Message 或 CallbackQuery)
     if update.callback_query:
@@ -355,7 +440,14 @@ async def cr_calculate_and_finish(update: Update, context: ContextTypes.DEFAULT_
 # --- 蒸發器熱交換率 (Qe) 流程處理 (結構與 Win 相似) ---
 
 async def qe_received_mdot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AnalysisStates:
-    """接收質量流率，並詢問 h_in。"""
+    """接收質量流率，並詢問 h_in。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    AnalysisStates：函數計算或處理後的結果。"""
     try:
         context.user_data['m_dot'] = check_and_get_float(update.message.text)
         await update.message.reply_text("請輸入入口焓 <code>h_in</code> (kJ/kg)：", parse_mode='HTML')
@@ -365,7 +457,14 @@ async def qe_received_mdot(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return AnalysisStates.QE_ENTERING_MDOT
 
 async def qe_received_hin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AnalysisStates:
-    """接收 h_in，並詢問 h_out。"""
+    """接收 h_in，並詢問 h_out。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    AnalysisStates：函數計算或處理後的結果。"""
     try:
         context.user_data['h_in'] = check_and_get_float(update.message.text)
         await update.message.reply_text("請輸入出口焓 <code>h_out</code> (kJ/kg)：", parse_mode='HTML')
@@ -375,7 +474,14 @@ async def qe_received_hin(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return AnalysisStates.QE_ENTERING_HIN
 
 async def qe_calculate_and_finish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """接收 h_out，執行 Qe 計算並結束對話。"""
+    """接收 h_out，執行 Qe 計算並結束對話。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    int：函數計算或處理後的結果。"""
     try:
         h_out = check_and_get_float(update.message.text)
         m_dot, h_in = context.user_data['m_dot'], context.user_data['h_in']

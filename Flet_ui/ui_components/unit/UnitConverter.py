@@ -1,4 +1,5 @@
 # UnitConverter.py
+from domain.units.converter import CanonicalUnitConverter
 # 職責：只處理單位轉換。不認識 CoolProp，也不執行任何熱力學計算。
 
 class UnitConverter:
@@ -117,6 +118,7 @@ class UnitConverter:
         
         # 建立完整的轉換映射表
         self.conversion_map = self._build_conversion_map()
+        self._canonical_converter = CanonicalUnitConverter()
 
     def _build_conversion_map(self):
         """
@@ -274,26 +276,46 @@ class UnitConverter:
         return cmap
 
     def convert_to_si(self, prop_code, value, unit_code):
-        """
-        將顯示單位值轉換為 SI 基礎單位 (比性質)。
-        """
+        """將顯示單位值轉換為 SI 基礎單位 (比性質)。
+
+參數：
+    prop_code (未指定型別): 函數輸入值。
+    value (未指定型別): 函數輸入值。
+    unit_code (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
+        if prop_code in self._canonical_converter.CORE_PROPERTIES:
+            return self._canonical_converter.convert_to_si(prop_code, value, unit_code)
         if prop_code in self.conversion_map and unit_code in self.conversion_map[prop_code]["to_si"]:
             return self.conversion_map[prop_code]["to_si"][unit_code](value)
         return value # 如果找不到轉換，返回原值
 
     def convert_from_si(self, prop_code, value_si, unit_code):
-        """
-        將 SI 單位值轉換為目標顯示單位 (比性質)。
-        """
+        """將 SI 單位值轉換為目標顯示單位 (比性質)。
+
+參數：
+    prop_code (未指定型別): 函數輸入值。
+    value_si (未指定型別): 函數輸入值。
+    unit_code (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
+        if prop_code in self._canonical_converter.CORE_PROPERTIES:
+            return self._canonical_converter.convert_from_si(prop_code, value_si, unit_code)
         if prop_code in self.conversion_map and unit_code in self.conversion_map[prop_code]["from_si"]:
             return self.conversion_map[prop_code]["from_si"][unit_code](value_si)
         return value_si # 如果找不到轉換，返回原值
         
     # --- 修改 ---
     def get_available_units(self, prop_code):
-        """
-        安全地返回所有可用的單位列表，並依照 self.unit_order 排序。
-        """
+        """安全地返回所有可用的單位列表，並依照 self.unit_order 排序。
+
+參數：
+    prop_code (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
         if prop_code in self.conversion_map:
             # 獲取所有已定義的單位 (來自 conversion_map)
             defined_units = set(self.conversion_map[prop_code]["to_si"].keys())

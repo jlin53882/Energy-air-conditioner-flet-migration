@@ -1,30 +1,23 @@
 # 職責：冷凝器計算
 #condenser_heat_rate.py
 from .exergy import calculate_specific_exerpy,calculate_change_specific_exerpy1_2_simple
+from domain.hvac.basic import calculate_condenser_heat_rate_si
 import CoolProp.CoolProp as CP
+from domain.thermodynamics.reference_state import ReferenceStateService
 
-def calculate_condenser_heat_rate( mass_flow_rate,h1, h2):
-    """
-    計算冷凝器熱交換率 (Qe)。
-    公式: Qcond = ṁ * (h1 - h2)
-    :param mass_flow_rate: 質量流率 (單位: kg/s)
-    :param h1: 冷氣器器入口焓值 (單位: kJ/kg)
-    :param h2: 冷凝器出口焓值 (單位: kJ/kg)
-    :return: 冷凝器熱交換率 (單位: kW)
-    """
-    
-    if mass_flow_rate < 0 or h1 < 0 or h2 < 0:
-        raise ValueError("質量流率和焓值必須為正數。")
-    elif h1<h2:
-        raise ValueError("入口焓值必須大於出口焓值。")
-    #print("h1:",h1)
-    #print("h2:",h2)
-    #print("mass_flow_rate:",mass_flow_rate)
-    heat_rate_kw = mass_flow_rate * ( h1 - h2)
+_REFERENCE_STATE = ReferenceStateService()
 
-   
-    return heat_rate_kw
+def calculate_condenser_heat_rate(mass_flow_rate, h1, h2):
+    """針對舊版 kJ/kg API 回傳以 kW 為單位的冷凝器熱傳率。
 
+參數：
+    mass_flow_rate (未指定型別): 函數輸入值。
+    h1 (未指定型別): 函數輸入值。
+    h2 (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
+    return calculate_condenser_heat_rate_si(mass_flow_rate, h1 * 1000.0, h2 * 1000.0) / 1000.0
 
 def ebe_water_cooled_condenser(m_dot_R, h1, h2, m_dot_w, h3, h4):
     """
@@ -205,7 +198,7 @@ def exergy_efficiency_condenser(m_dot_R, h1, h2, s1, s2, T0_dead, Q_dot_H=None, 
     回傳:
     float: 冷凝器的㶲效率。
     """
-    # Exergy Input (Ex_dot_1 - Ex_dot_2) - 製冷劑㶲減少量
+    # 㶲輸入 (Ex_dot_1 - Ex_dot_2) - 製冷劑㶲減少量
     # 注意：根據比㶲公式 ex = (h - h0) - T0 * (s - s0)，
     # ex1 - ex2 = (h1 - h2) - T0 * (s1 - s2)
     Ex_dot_decrease = m_dot_R * calculate_change_specific_exerpy1_2_simple(h1, h2, s1, s2, T0_dead)
@@ -228,17 +221,36 @@ def exergy_efficiency_condenser(m_dot_R, h1, h2, s1, s2, T0_dead, Q_dot_H=None, 
         raise ValueError("必須提供 (Q_dot_H 和 T) 或 Ex_dot_dest 才能計算㶲效率。")
     
 def calculate_condenser_example_air(m_dot_R, P1, P2, T1, T2,P0_dead, T0_dead,substance: str,ref_state_code: str):
+    """在共用狀態同步機制下計算舊版冷凝器範例。
+
+參數：
+    m_dot_R (未指定型別): 函數輸入值。
+    P1 (未指定型別): 函數輸入值。
+    P2 (未指定型別): 函數輸入值。
+    T1 (未指定型別): 函數輸入值。
+    T2 (未指定型別): 函數輸入值。
+    P0_dead (未指定型別): 函數輸入值。
+    T0_dead (未指定型別): 函數輸入值。
+    substance (str): 函數輸入值。
+    ref_state_code (str): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
+    with _REFERENCE_STATE.calculation_scope(substance, ref_state_code):
+        return _calculate_condenser_example_air_unlocked(
+            m_dot_R, P1, P2, T1, T2, P0_dead, T0_dead, substance, ref_state_code
+        )
+
+def _calculate_condenser_example_air_unlocked(m_dot_R, P1, P2, T1, T2,P0_dead, T0_dead,substance: str,ref_state_code: str):
     """
     計算空冷 冷凝器 傳熱
     Exergy loss
     Exergy efficiency
     """
-    CP.set_reference_state(substance, ref_state_code)
     #state 1 (冷凝器入口狀態的熱力學性質計算)
-    # H: 比焓 (Specific Enthalpy)
-    CP.set_reference_state(substance, ref_state_code)
+    # H: 比焓
     h1_j_kg=CP.PropsSI('H', 'P', P1, 'T', T1, substance)
-    # S: 比熵 (Specific Entropy)
+    # S: 比熵
     s1_j_kgk=CP.PropsSI('S', 'P', P1, 'T', T1, substance)
     
     #單位換算
@@ -261,10 +273,10 @@ def calculate_condenser_example_air(m_dot_R, P1, P2, T1, T2,P0_dead, T0_dead,sub
     h0_dead = h0_dead_j_kg / 1000.0
     s0_dead = s0_dead_j_kgk / 1000.0
 
-    #calculate exerpy state 1 (計算入口狀態的比㶲/比㶲)
+    # 計算 exerpy state 1（計算入口狀態的比㶲）
     ex1=calculate_specific_exerpy(h1,s1,T0_dead,h0_dead,s0_dead)
 
-    #calculate exerpy state 2 (計算出口狀態的比㶲/比㶲)
+    # 計算 exerpy state 2（計算出口狀態的比㶲）
     ex2=calculate_specific_exerpy(h2,s2,T0_dead,h0_dead,s0_dead)
 
     Q_dot_H= calculate_condenser_heat_rate(m_dot_R, h1, h2)

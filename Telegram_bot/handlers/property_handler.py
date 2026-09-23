@@ -34,7 +34,7 @@ def get_property_keyboard(prop_list, columns=3):
         prop_list (dict): 屬性字典，格式為 {'代碼': '名稱', ...}。
         columns (int): 鍵盤每行顯示的按鈕數量，預設為 3。
         
-    Returns:
+    回傳：
         InlineKeyboardMarkup: 生成的鍵盤物件。
     """
     # 根據字典生成所有按鈕物件
@@ -69,9 +69,14 @@ def get_units_keyboard(prop_code, columns=3):
 # === 對話流程處理函式 ===
 
 async def prop_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> PropStates:
-    """
-    對話的進入點。當使用者點擊「性質查詢」按鈕時觸發。
-    """
+    """對話的進入點。當使用者點擊「性質查詢」按鈕時觸發。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    PropStates：函數計算或處理後的結果。"""
     query = update.callback_query
     await query.answer() # 回應 callback query，讓客戶端知道機器人已收到請求
     context.user_data.clear() # 清空之前的對話資料，確保一個乾淨的開始
@@ -85,9 +90,14 @@ async def prop_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Prop
     return PropStates.SELECTING_FLUID
 
 async def prop_received_fluid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> PropStates:
-    """
-    接收並驗證使用者輸入的流體名稱。
-    """
+    """接收並驗證使用者輸入的流體名稱。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    PropStates：函數計算或處理後的結果。"""
     fluid_name = update.message.text.strip() # 獲取使用者輸入的文字並去除頭尾空白
 
     # --- 呼叫 calculator 進行驗證 ---
@@ -113,9 +123,14 @@ async def prop_received_fluid(update: Update, context: ContextTypes.DEFAULT_TYPE
         return PropStates.SELECTING_FLUID
 
 async def prop_received_prop1(update: Update, context: ContextTypes.DEFAULT_TYPE) -> PropStates:
-    """
-    處理使用者選擇的第一個性質。
-    """
+    """處理使用者選擇的第一個性質。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    PropStates：函數計算或處理後的結果。"""
     query = update.callback_query
     await query.answer()
     
@@ -134,9 +149,14 @@ async def prop_received_prop1(update: Update, context: ContextTypes.DEFAULT_TYPE
     return PropStates.ENTERING_VALUE1
 
 async def prop_received_value1(update: Update, context: ContextTypes.DEFAULT_TYPE) -> PropStates:
-    """
-    處理使用者輸入的第一個數值，並驗證其是否為數字。
-    """
+    """處理使用者輸入的第一個數值，並驗證其是否為數字。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    PropStates：函數計算或處理後的結果。"""
     try:
         # 嘗試將使用者輸入轉換為浮點數
         value1 = float(update.message.text.strip())
@@ -163,9 +183,14 @@ async def prop_received_value1(update: Update, context: ContextTypes.DEFAULT_TYP
         return PropStates.ENTERING_VALUE1
 
 async def prop_received_unit1_and_ask_prop2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> PropStates:
-    """
-    處理使用者選擇的第一個單位，並引導使用者選擇第二個性質。
-    """
+    """處理使用者選擇的第一個單位，並引導使用者選擇第二個性質。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    PropStates：函數計算或處理後的結果。"""
     query = update.callback_query
     await query.answer()
     context.user_data['unit1'] = query.data # 儲存單位
@@ -188,9 +213,14 @@ async def prop_received_unit1_and_ask_prop2(update: Update, context: ContextType
 # 這部分的邏輯與第一組參數的處理非常相似。
 
 async def prop_received_prop2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> PropStates:
-    """
-    處理使用者選擇的第二個性質。
-    """
+    """處理使用者選擇的第二個性質。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    PropStates：函數計算或處理後的結果。"""
     query = update.callback_query
     await query.answer()
     prop2_code = query.data
@@ -203,9 +233,14 @@ async def prop_received_prop2(update: Update, context: ContextTypes.DEFAULT_TYPE
     return PropStates.ENTERING_VALUE2
 
 async def prop_received_value2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> PropStates:
-    """
-    處理使用者輸入的第二個數值。
-    """
+    """處理使用者輸入的第二個數值。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    PropStates：函數計算或處理後的結果。"""
     try:
         value2 = float(update.message.text.strip())
         context.user_data['value2'] = value2
@@ -223,9 +258,14 @@ async def prop_received_value2(update: Update, context: ContextTypes.DEFAULT_TYP
         return PropStates.ENTERING_VALUE2
 
 async def prop_calculate_and_finish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    接收完所有參數後，進行最終計算並結束對話。
-    """
+    """接收完所有參數後，進行最終計算並結束對話。
+
+參數：
+    update (Update): 函數輸入值。
+    context (ContextTypes.DEFAULT_TYPE): 函數輸入值。
+
+回傳：
+    int：函數計算或處理後的結果。"""
     query = update.callback_query
     await query.answer()
     context.user_data['unit2'] = query.data

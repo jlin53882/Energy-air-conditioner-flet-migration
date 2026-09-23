@@ -8,6 +8,7 @@ from .ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
 from .ui_components.unit.PropertyFormatter import PropertyFormatter
 from .ui_components.unit.HVACAnalyzer import HVACAnalyzer
 from .ui_components.unit.PsychrometricCalculator import PsychrometricCalculator
+from application.property_queries import PropertyQueryService
 
 # 從 "ui_components" 套件導入 UI 類
 from .ui_components.property_tab import PropertyTab #熱力學分析
@@ -25,6 +26,7 @@ def main(page: ft.Page):
     unit_converter = UnitConverter()
     state_calculator = ThermoStateCalculator(unit_converter)
     formatter = PropertyFormatter(unit_converter)
+    property_query_service = PropertyQueryService(state_calculator.state_service)
     
     # --- 在這裡建立 "服務"，而不是在 Tab 內部 ---
     hvac_analyzer = HVACAnalyzer()
@@ -33,9 +35,9 @@ def main(page: ft.Page):
     # 3. 建立兩個分頁的 UI 元件實例 (注入依賴)
     prop_tab_content = PropertyTab(
         unit_converter=unit_converter,
-        state_calculator=state_calculator,
         formatter=formatter,
-        page=page
+        page=page,
+        query_service=property_query_service
     )
 
     # --- 將 "服務" 注入到 AnalysisTab ---
@@ -45,25 +47,32 @@ def main(page: ft.Page):
         analyzer=hvac_analyzer,         # <-- 注入 HVAC 分析器
         psy_calculator=psy_calculator,  # <-- 注入 濕空氣 分析器
         state_calculator=state_calculator,
+        property_query_service=property_query_service,
     )
 
-    # 4. 建立分頁控制器 (Tabs)
-    main_tabs = ft.Tabs(
-        selected_index=0, 
-        animation_duration=300, 
+    # 4. 建立 Flet 1.0 分頁控制器。
+    tab_bar = ft.TabBar(
         tabs=[
-            ft.Tab(
-                text="熱力性質查詢", 
-                icon=ft.Icons.BOOK_ONLINE, 
-                content=prop_tab_content
-            ),
-            ft.Tab(
-                text="冷凍空調分析", 
-                icon=ft.Icons.AC_UNIT, 
-                content=analysis_tab_content
-            ),
+            ft.Tab(label="熱力性質查詢", icon=ft.Icons.BOOK_ONLINE),
+            ft.Tab(label="冷凍空調分析", icon=ft.Icons.AC_UNIT),
         ],
-        expand=1, 
+    )
+    tab_view = ft.TabBarView(
+        controls=[
+            ft.Container(content=prop_tab_content, expand=True),
+            ft.Container(content=analysis_tab_content, expand=True),
+        ],
+        expand=True,
+    )
+    main_tabs = ft.Tabs(
+        content=ft.Column(
+            controls=[tab_bar, tab_view],
+            expand=True,
+        ),
+        length=2,
+        selected_index=0,
+        animation_duration=300,
+        expand=1,
     )
 
     # 5. 將分頁控制器加入頁面
@@ -72,4 +81,4 @@ def main(page: ft.Page):
 
 
 if __name__ == "__main__":
-    ft.app(target=main)
+    ft.run(main)

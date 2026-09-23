@@ -12,7 +12,10 @@ from .handlers.property_handler import prop_conv_handler
 from .handlers.analysis_handler import analysis_conv_handler
 
 def create_application() -> Application:
-    """建立並回傳一個設定好的 Telegram Application 物件。"""
+    """建立並回傳一個設定好的 Telegram Application 物件。
+
+回傳：
+    Application：函數計算或處理後的結果。"""
     
     # 安全檢查：確保 Bot Token 不是預設值
     if 'YOUR' in Config.TELEGRAM_BOT_TOKEN:
@@ -38,9 +41,10 @@ def create_application() -> Application:
     return application
 
 def start_bot():
-    """
-    啟動 Telegram Bot 應用程式的主函式。
-    """
+    """啟動 Telegram Bot 應用程式的主函式。
+
+回傳：
+    無。"""
     # 建立應用程式實例
     application = create_application()
     

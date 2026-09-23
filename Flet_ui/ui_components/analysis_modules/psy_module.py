@@ -31,31 +31,44 @@ class PsyModule(BaseAnalysisModule):
         )
 
     def get_analysis_definitions(self) -> dict:
-        """回報此模組提供的 *兩種* 濕空氣計算模式"""
+        """回報此模組提供的 *兩種* 濕空氣計算模式
+
+回傳：
+    dict：函數計算或處理後的結果。"""
         return {
             "濕空氣性質 (已知乾濕球)": {
+                "analysis_id": "psychrometrics.tdb_twb",
                 "ui": self.ui_container,
-                "calc_func": self.calculate_psy
+                "calc_func": self.calculate_psy,
+                "calculation_mode": "psychrometric"
             },
             "濕空氣性質 (已知乾球與相對濕度)": {
+                "analysis_id": "psychrometrics.tdb_rh",
                 "ui": self.ui_container,
-                "calc_func": self.calculate_psy
+                "calc_func": self.calculate_psy,
+                "calculation_mode": "psychrometric"
             }
         }
         
     def _build_ui_components(self):
-        """僅建立元件"""
+        """僅建立元件
+
+回傳：
+    無。"""
         self.create_input_row("psy_alt", "高度 (Altitude)", "0", "L", "m")
         self.create_input_row("psy_tdb", "乾球溫度 (Dry-Bulb)", "25", "T", "°C")
         self.create_input_row("psy_twb", "濕球溫度 (Wet-Bulb)", "20", "T", "°C")
         self.create_input_row("psy_rh", "相對濕度 (Rel. Humidity)", "50", "RH", "%")
 
     def _setup_unit_sync(self):
-        """設定單位同步"""
+        """設定單位同步
+
+回傳：
+    無。"""
         psy_t_sync_group = ["psy_tdb", "psy_twb"]
-        self.all_entries["psy_tdb"]["unit"].on_change = self._create_unit_sync_handler("T", psy_t_sync_group)
-        self.all_entries["psy_twb"]["unit"].on_change = self._create_unit_sync_handler("T", psy_t_sync_group)
-        self.all_entries["psy_alt"]["unit"].on_change = self._create_unit_sync_handler("L", ["psy_alt"])
+        self.all_entries["psy_tdb"]["unit"].on_select = self._create_unit_sync_handler("T", psy_t_sync_group)
+        self.all_entries["psy_twb"]["unit"].on_select = self._create_unit_sync_handler("T", psy_t_sync_group)
+        self.all_entries["psy_alt"]["unit"].on_select = self._create_unit_sync_handler("L", ["psy_alt"])
 
     def configure_ui_for_mode(self, mode_name: str):
         """
@@ -69,7 +82,13 @@ class PsyModule(BaseAnalysisModule):
             self.all_entries["psy_twb"]["ui_row"].visible = False
             self.all_entries["psy_rh"]["ui_row"].visible = True
         
-        if self.ui_container.page:
+        # Flet 在 ``page`` 尚未附加時讀取它會引發 RuntimeError；
+        # 建構期間的測試與 headless 呼叫端確實可能走到這條路徑。
+        try:
+            attached_page = self.ui_container.page
+        except RuntimeError:
+            attached_page = None
+        if attached_page:
             self.ui_container.update()
 
     def calculate_psy(self, use_imperial: bool, mode_name: str) -> str:
@@ -147,6 +166,7 @@ class PsyModule(BaseAnalysisModule):
         pws_wd_si = si_results['Pws_wd']
         ws_si = si_results['Ws']
         wss_si = si_results['Wss']
+        rh_val = self.unit_converter.convert_from_si("RH", rh_si, "%")
 
         # 3. 將所有數值轉換為目標顯示單位 (省略... 如同您原始碼)
         alt_val = self.unit_converter.convert_from_si("L", alt_si, l_unit)
@@ -171,7 +191,7 @@ class PsyModule(BaseAnalysisModule):
         lines.append(f"{'乾球溫度 (Dry-Bulb Temperature)':<{title_width}}: {tdb_val:.2f} {t_unit}")
         lines.append(f"{'計算濕球溫度 (Calculated Wet-Bulb Temp)':<{title_width}}: {twb_val:.2f} {t_unit}")
         lines.append(f"{'露點溫度 (Dew Point Temperature)':<{title_width}}: {tdp_val:.2f} {t_unit}")
-        lines.append(f"{'相對濕度 (Relative Humidity)':<{title_width}}: {rh_si:.2f} %") 
+        lines.append(f"{'相對濕度 (Relative Humidity)':<{title_width}}: {rh_val:.2f} %")
         lines.append(f"{'濕度比 (Humidity Ratio)':<{title_width}}: {w_val:.6f} {w_unit}")
         lines.append(f"{'濕空氣之焓值 (Enthalpy)':<{title_width}}: {h_val:.4f} {h_unit}")
         lines.append(f"{'濕空氣之比容 (Specific Volume)':<{title_width}}: {v_val:.4f} {v_unit}")

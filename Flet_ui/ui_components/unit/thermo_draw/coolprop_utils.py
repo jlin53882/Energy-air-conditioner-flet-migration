@@ -4,12 +4,37 @@
 # ======================================================
 
 import matplotlib
-matplotlib.use("svg")
+# Flet Charts 會在此 helper 載入前安裝相容 WebAgg 的 backend。
+# 只有獨立／headless 圖表才使用 SVG，不能覆蓋 live Flet backend。
+if not str(matplotlib.get_backend()).startswith("module://flet_charts"):
+    matplotlib.use("svg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter, ScalarFormatter
 import CoolProp.CoolProp as CP
 import numpy as np
 from functools import lru_cache
+
+from domain.thermodynamics.fluid_policy import resolve_reference_state_policy
+from domain.thermodynamics.reference_state import ReferenceStatePolicy, ReferenceStateService
+
+_REFERENCE_STATE = ReferenceStateService()
+
+def _effective_reference_state(
+    fluid: str, ref_state: str
+) -> ReferenceStatePolicy | str:
+    """將圖表 UI reference-state 語意解析為共用 policy code。
+
+參數：
+    fluid (str): 函數輸入值。
+    ref_state (str): 函數輸入值。
+
+回傳：
+    ReferenceStatePolicy | str：函數計算或處理後的結果。"""
+    if ref_state == "Auto":
+        return resolve_reference_state_policy(fluid)
+    if ref_state in {"ASHRAE", "NBP", "IIR", "DEF"}:
+        return ref_state
+    raise ValueError(f"Unsupported chart reference-state policy: {ref_state}")
 
 
 # ======================================================
@@ -32,14 +57,19 @@ setup_chinese_font()
 # (新增) 冷媒驗證函式
 # ======================================================
 def check_coolprop_fluid(fluid_name):
-    """
-    檢查 CoolProp 中是否存在指定的流體名稱。
-    """
+    """檢查 CoolProp 中是否存在指定的流體名稱。
+
+參數：
+    fluid_name (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
     if not fluid_name:
         return False, "名稱不可為空"
     try:
         # 嘗試獲取一個基本屬性。
-        CP.PropsSI('Tcrit', fluid_name)
+        with _REFERENCE_STATE.calculation_scope(fluid_name):
+            CP.PropsSI('Tcrit', fluid_name)
         return True, "驗證成功"
     except ValueError as e:
         # CoolProp 通常會引發 ValueError (例如 "Unable to load fluid [...]")
@@ -53,26 +83,28 @@ def check_coolprop_fluid(fluid_name):
 # ======================================================
 @lru_cache(maxsize=10000)
 def safe_props(output, in1, in1_val, in2, in2_val, fluid, ref_state="Auto"):
-    """
-    安全的 CoolProp 屬性查詢 (帶快取)
-    ref_state: "Auto", "ASHRAE", "IAPWS", "NBP", "IIR"
-    """
+    """在 process-wide reference-state transaction 下查詢 CoolProp。
+
+參數：
+    output (未指定型別): 函數輸入值。
+    in1 (未指定型別): 函數輸入值。
+    in1_val (未指定型別): 函數輸入值。
+    in2 (未指定型別): 函數輸入值。
+    in2_val (未指定型別): 函數輸入值。
+    fluid (未指定型別): 函數輸入值。
+    ref_state (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
     try:
-        if ref_state == "Auto":
-            if fluid == "Water":
-                pass 
-            else:
-                CP.set_reference_state(fluid, "ASHRAE") 
-        elif ref_state in ["ASHRAE", "IAPWS", "NBP", "IIR"]:
-            CP.set_reference_state(fluid, ref_state)
-        
-        # (修改) 處理 P-v 輸入時，v=0 的情況
-        if (in1 == "V" and in1_val == 0) or (in2 == "V" and in2_val == 0):
-            return np.nan # 密度無限大，返回 NaN
-        if (in1 == "D" and in1_val == 0) or (in2 == "D" and in2_val == 0):
-             return np.nan
-             
-        return CP.PropsSI(output, in1, in1_val, in2, in2_val, fluid)
+        with _REFERENCE_STATE.calculation_scope(
+            fluid, _effective_reference_state(fluid, ref_state)
+        ):
+            if (in1 == "V" and in1_val == 0) or (in2 == "V" and in2_val == 0):
+                return np.nan
+            if (in1 == "D" and in1_val == 0) or (in2 == "D" and in2_val == 0):
+                return np.nan
+            return CP.PropsSI(output, in1, in1_val, in2, in2_val, fluid)
     except Exception:
         return np.nan
 
@@ -80,18 +112,33 @@ def safe_props(output, in1, in1_val, in2, in2_val, fluid, ref_state="Auto"):
 # 通用飽和線生成函式 (接受 ref_state)
 # ======================================================
 def get_saturation_curve(fluid, ref_state, mode="T", num_points=400):
-    """
-    生成指定流體的飽和線（液線與氣線）。
-    """
+    """在共用 CoolProp lock 下產生飽和曲線。
+
+參數：
+    fluid (未指定型別): 函數輸入值。
+    ref_state (未指定型別): 函數輸入值。
+    mode (未指定型別): 函數輸入值。
+    num_points (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
+    with _REFERENCE_STATE.calculation_scope(
+        fluid, _effective_reference_state(fluid, ref_state)
+    ):
+        return _get_saturation_curve_unlocked(fluid, ref_state, mode, num_points)
+
+def _get_saturation_curve_unlocked(fluid, ref_state, mode="T", num_points=400):
+    """生成指定流體的飽和線（液線與氣線）。
+
+參數：
+    fluid (未指定型別): 函數輸入值。
+    ref_state (未指定型別): 函數輸入值。
+    mode (未指定型別): 函數輸入值。
+    num_points (未指定型別): 函數輸入值。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
     try:
-        if ref_state == "Auto":
-            if fluid == "Water":
-                pass
-            else:
-                CP.set_reference_state(fluid, "ASHRAE")
-        elif ref_state in ["ASHRAE", "IAPWS", "NBP", "IIR"]:
-            CP.set_reference_state(fluid, ref_state)
-            
         T_crit = CP.PropsSI("Tcrit", fluid)
         T_trip = CP.PropsSI("Ttriple", fluid)
         P_crit = CP.PropsSI("pcrit", fluid)
@@ -147,26 +194,63 @@ def get_saturation_curve(fluid, ref_state, mode="T", num_points=400):
 # ======================================================
 # 主繪圖函式：供 ThermoDiagramModule 調用 (修改：接受 target_P_unit)
 # ======================================================
-def generate_thermo_diagram(fluid, diagram, state_points_si, unit_converter, 
-                          connect_points=False, input_mode=None, ref_state="Auto", 
+def generate_thermo_diagram(fluid, diagram, state_points_si, unit_converter,
+                          connect_points=False, input_mode=None, ref_state="Auto",
                           target_P_unit="MPa", # 接受Y軸壓力單位
-                          result_text=None):
-    """
-    建立熱力圖（P-h、T-s、P-v、T-v）
-    """
-    plt.close('all')
+                          result_text=None, figure=None):
+    """持有共用 CoolProp transaction lock 時建立圖表。
 
-    # 初始化冷媒
+參數：
+    fluid (未指定型別): 函數輸入值。
+    diagram (未指定型別): 函數輸入值。
+    state_points_si (未指定型別): 函數輸入值。
+    unit_converter (未指定型別): 函數輸入值。
+    connect_points (未指定型別): 函數輸入值。
+    input_mode (未指定型別): 函數輸入值。
+    ref_state (未指定型別): 函數輸入值。
+    target_P_unit (未指定型別): 函數輸入值。
+    result_text (未指定型別): 函數輸入值。
+    figure (未指定型別): 可選的既有 Flet Charts figure；提供時會原地刷新。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
+    with _REFERENCE_STATE.calculation_scope(
+        fluid, _effective_reference_state(fluid, ref_state)
+    ):
+        return _generate_thermo_diagram_unlocked(
+            fluid, diagram, state_points_si, unit_converter, connect_points,
+            input_mode, ref_state, target_P_unit, result_text, figure
+        )
+
+def _generate_thermo_diagram_unlocked(fluid, diagram, state_points_si, unit_converter,
+                          connect_points=False, input_mode=None, ref_state="Auto",
+                          target_P_unit="MPa", result_text=None, figure=None):
+    """建立熱力圖（P-h、T-s、P-v、T-v）
+
+參數：
+    fluid (未指定型別): 函數輸入值。
+    diagram (未指定型別): 函數輸入值。
+    state_points_si (未指定型別): 函數輸入值。
+    unit_converter (未指定型別): 函數輸入值。
+    connect_points (未指定型別): 函數輸入值。
+    input_mode (未指定型別): 函數輸入值。
+    ref_state (未指定型別): 函數輸入值。
+    target_P_unit (未指定型別): 函數輸入值。
+    result_text (未指定型別): 函數輸入值。
+    figure (未指定型別): 可選的既有 Flet Charts figure；提供時會原地刷新。
+
+回傳：
+    未指定型別：函數計算或處理後的結果。"""
+    if figure is None:
+        plt.close('all')
+
+    # CoolProp reference-state 設定由 public wrapper 擁有。
     try:
-        if ref_state == "Auto":
-            if fluid == "Water":
-                pass
-            else:
-                CP.set_reference_state(fluid, "ASHRAE")
-        elif ref_state in ["ASHRAE", "IAPWS", "NBP", "IIR"]:
-            CP.set_reference_state(fluid, ref_state)
+        CP.PropsSI("Tcrit", fluid)
     except Exception:
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig = figure or plt.figure(figsize=(8, 6))
+        fig.clear()
+        ax = fig.add_subplot(111)
         # (修改) 更新錯誤訊息
         ax.text(0.5, 0.5, f"CoolProp 無法初始化流體 '{fluid}'\n(或參考狀態 '{ref_state}' 不適用)", 
                 ha='center', va='center', color='red', wrap=True)
@@ -184,7 +268,9 @@ def generate_thermo_diagram(fluid, diagram, state_points_si, unit_converter,
     # 定義通用格式 (小數優先)
     log_fmt = FuncFormatter(lambda x, pos: f"{x:g}")
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig = figure or plt.figure(figsize=(8, 6))
+    fig.clear()
+    ax = fig.add_subplot(111)
     x_label = "" 
     y_label = "" 
 
@@ -401,7 +487,7 @@ def generate_thermo_diagram(fluid, diagram, state_points_si, unit_converter,
         if diagram in ["T-s", "T-v"]:
             current_ymin, current_ymax = ax.get_ylim()
             display_T_max = unit_converter.convert_from_si("T", T_max_K, target_T_unit)
-            ax.set_ylim(bottom=None, top=max(current_ymax, display_T_max * 1.05)) .count
+            ax.set_ylim(bottom=None, top=max(current_ymax, display_T_max * 1.05))
         
         # ---- 修正版：T-s 圖手動繪製等壓線 ----
         if diagram == "T-s" and connect_points and input_mode == "Compressor":

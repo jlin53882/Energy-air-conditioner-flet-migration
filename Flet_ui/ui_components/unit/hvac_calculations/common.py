@@ -14,7 +14,7 @@ def calculate_steady_flow_variable(
 
     質量流率的關係式為：rho1 * A1 * V1 = rho2 * A2 * V2
 
-    參數 (Parameters):
+    參數:
     - rho1 (float): 截面 1 的密度 (Density)
     - A1 (float): 截面 1 的截面積 (Area)
     - V1 (float): 截面 1 的流速 (Velocity)
@@ -24,7 +24,7 @@ def calculate_steady_flow_variable(
     - known_variable (str): 必須是 'rho1', 'A1', 'V1', 'rho2', 'A2', 'V2' 之一，
                             指定要計算的未知變數。
 
-    回傳 (Returns):
+    回傳:
     - float: 計算出的未知變數值。
     - ValueError: 如果輸入的參數不正確（例如缺少計算所需的值）。
     """
@@ -126,7 +126,7 @@ def calculate_volume_flow_rate_relationship(rho1=None, V_dot1=None, rho2=None, V
 
     質量流率的關係式為：rho1 * V_dot1 = rho2 * V_dot2
 
-    參數 (Parameters):
+    參數:
     - rho1 (float): 截面 1 的密度
     - V_dot1 (float): 截面 1 的體積流率
     - rho2 (float): 截面 2 的密度
@@ -187,8 +187,8 @@ def calculate_Sgen( s1, s2):
     公式: Δs = s2 - s1
     
     參數:
-    s1 (float): 初始比熵 (e.g., kJ/(kg.K))。
-    s2 (float): 最終比熵 (e.g., kJ/(kg.K))。
+    s1 (float): 初始比熵 (例如： kJ/(kg.K))。
+    s2 (float): 最終比熵 (例如： kJ/(kg.K))。
     
     回傳值:
     float: 比熵變化 Δs (與輸入單位一致)。

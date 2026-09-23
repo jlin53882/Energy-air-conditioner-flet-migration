@@ -31,7 +31,7 @@ def calculate_throttling_value_exerpy(x1, P1,P2,P0_dead, T0_dead, substance: str
     :param P2: 節流後實際工作壓力 (Pa)  <- 修正: 新增此參數
     :param P0_dead: 參考狀態壓力 (Pa)
     :param T0_dead: 參考狀態溫度 (K)
-    :param substance: 流體名稱 (e.g., 'R134a', 'Water')
+    :param substance: 流體名稱 (例如： 'R134a', 'Water')
     :param m_dot: 質量流率 (kg/s)
     :return: (Sgen_flow (W/K), Ex_destruction (W)) 
     """
@@ -65,14 +65,14 @@ def calculate_throttling_value_exerpy(x1, P1,P2,P0_dead, T0_dead, substance: str
     s2 = CP.PropsSI('S', 'P', P2, 'H', h2, substance) #kJ/(kg K)
     T2= CP.PropsSI('T', 'P', P2, 'H', h2, substance) 
 
-    #reference state: dead state
+    # 參考狀態：dead state
     # 計算dead狀態的焓值和熵值 h0_dead, s0_dead
     h0_dead= CP.PropsSI('H', 'P', P0_dead, 'T', T0_dead, substance)
     s0_dead= CP.PropsSI('S', 'P', P0_dead, 'T', T0_dead, substance)
     
     # 計算熵增
     Sgen_flow=calculate_Sgen_flow(m_dot,s1,s2)
-    #specific exerpy calculation  
+    # specific exergy 計算
 
     """
     state 1: throttling state
