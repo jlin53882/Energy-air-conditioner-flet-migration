@@ -66,7 +66,7 @@ class DesignTokens:
     body: int = 14
     caption: int = 12
     overline: int = 11
-    metric: int = 24
+    metric: int = 22
     metric_large: int = 30
 
 
@@ -189,7 +189,7 @@ def chip_button_style(selected: bool, accent: str = TOKENS.primary) -> ft.Button
         bgcolor=accent if selected else TOKENS.surface,
         side=ft.BorderSide(1, accent if selected else TOKENS.border_strong),
         shape=ft.RoundedRectangleBorder(radius=TOKENS.radius_pill),
-        padding=ft.Padding.symmetric(horizontal=16, vertical=10),
+        padding=ft.Padding.symmetric(horizontal=12, vertical=8),
     )
 
 

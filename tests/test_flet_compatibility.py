@@ -57,6 +57,25 @@ class DummyPage:
     無。"""
 
 
+def _control_tree_contains(root: object, target: object) -> bool:
+    """深度搜尋 Flet 控制項樹，判斷目標控制項是否位於 root 之下。
+
+參數：
+    root: 搜尋起點控制項。
+    target: 要尋找的控制項實例。
+
+回傳：
+    target 為 root 本身或其子孫控制項時回傳 True。"""
+    if root is target:
+        return True
+    children = []
+    content = getattr(root, "content", None)
+    if content is not None and not isinstance(content, str):
+        children.append(content)
+    children.extend(getattr(root, "controls", None) or [])
+    return any(_control_tree_contains(child, target) for child in children)
+
+
 def test_flet_1_api_surface_is_available() -> None:
     """確認已遷移 APIs 存在，且已移除 APIs 未被引用。
 
@@ -1693,8 +1712,9 @@ def test_property_raw_output_is_not_the_same_control_as_result_summary(
 
     assert tab.raw_output is not tab.result_text
     assert not hasattr(tab.result_panel, "raw_output")
-    result_card_content = tab.controls[0].controls[-1].content.controls[-1]
-    assert tab.result_text in result_card_content.controls
+    assert _control_tree_contains(tab.results_card, tab.result_text)
+    assert _control_tree_contains(tab.controls[0], tab.results_card)
+    assert not _control_tree_contains(tab.result_panel, tab.result_text)
     assert tab.raw_output.visible is False
     assert tab.result_text.visible is True
     assert tab.raw_output.value == tab._last_formatted_output

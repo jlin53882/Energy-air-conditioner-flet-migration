@@ -66,29 +66,27 @@ class MetricTile(ft.Container):
                 max_lines=2,
             )
         )
-        value_row: list[ft.Control] = [
+        value_controls: list[ft.Control] = [
             ft.Text(
                 number,
                 size=TOKENS.metric_large if emphasis else TOKENS.metric,
                 weight=ft.FontWeight.W_700,
                 color=TOKENS.text_primary,
                 selectable=True,
+                max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS,
+                tooltip=value,
             )
         ]
         if unit:
-            value_row.append(
-                ft.Text(unit, size=TOKENS.body, color=TOKENS.text_muted, weight=ft.FontWeight.W_500)
+            value_controls.append(
+                ft.Text(unit, size=TOKENS.caption, color=TOKENS.text_muted, weight=ft.FontWeight.W_500)
             )
         super().__init__(
             content=ft.Column(
                 [
                     ft.Row(label_row, spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                    ft.Row(
-                        value_row,
-                        spacing=6,
-                        wrap=True,
-                        vertical_alignment=ft.CrossAxisAlignment.END,
-                    ),
+                    ft.Column(value_controls, spacing=0, tight=True),
                 ],
                 spacing=TOKENS.spacing_xs + 2,
             ),

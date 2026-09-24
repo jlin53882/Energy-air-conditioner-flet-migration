@@ -130,6 +130,7 @@ class ResultPanel(ft.Container):
                     value,
                     icon=icon,
                     accent=TOKENS.primary if index < 2 else TOKENS.accent,
+                    col={"xs": 12, "sm": 6},
                 )
             )
         self._body.controls.append(
