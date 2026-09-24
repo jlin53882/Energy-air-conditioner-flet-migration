@@ -30,7 +30,7 @@ ROUTES = (
     ),
     WorkspaceRoute(
         "compressor", "壓縮機", "冷凍系統", "COMPRESS_OUTLINED",
-        description="壓縮比、壓縮功、等熵／容積效率、可逆功與㶲分析。",
+        description="壓縮比、壓縮功、等熵／容積效率、可逆功與 Exergy 分析。",
     ),
     WorkspaceRoute(
         "evaporator", "蒸發器", "冷凍系統", "AC_UNIT",

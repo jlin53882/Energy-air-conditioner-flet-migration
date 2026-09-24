@@ -84,8 +84,20 @@ def main(page: ft.Page) -> None:
     psychrometrics_view = PsychrometricsView(psy_module, workspace_state=workspace_state)
     diagram_view = ThermoDiagramView(diagram_module)
 
+    analysis_views = {
+        "compressor": compressor_view,
+        "evaporator": evaporator_view,
+        "condenser": condenser_view,
+        "psychrometrics": psychrometrics_view,
+    }
+    # 首頁統計只使用各 dedicated view 實際註冊的分析定義數量。
+    analysis_counts = {key: len(view.adapter.definitions) for key, view in analysis_views.items()}
     shell_ref: dict[str, AppShell] = {}
-    home_view = HomeView(lambda route_key: shell_ref["shell"].navigate(route_key))
+    home_view = HomeView(
+        lambda route_key: shell_ref["shell"].navigate(route_key),
+        analysis_counts=analysis_counts,
+        total_analyses=sum(analysis_counts.values()),
+    )
     views = {
         "home": home_view,
         "thermo_properties": property_view,
@@ -106,7 +118,7 @@ def main(page: ft.Page) -> None:
 回傳：
     無。"""
         property_view.set_output_unit_system(unit_system)
-        for view in (compressor_view, evaporator_view, condenser_view, psychrometrics_view):
+        for view in analysis_views.values():
             view.set_output_unit_system(unit_system)
 
     def choose_fluid(fluid: str) -> None:
