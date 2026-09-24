@@ -6,6 +6,21 @@ from ..unit.PsychrometricCalculator import PsychrometricCalculator
 from ..unit.UnitConverter import UnitConverter
 
 class PsyModule(BaseAnalysisModule):
+    # 穩定的分析模式 key，routing / dispatch 一律使用這兩個常數；
+    # 顯示文字（見 get_analysis_definitions 的 dict key）只用於 UI 呈現，
+    # 可自由改文案或翻譯而不影響下面的計算/UI 切換邏輯。
+    MODE_TDB_TWB = "psychrometrics.tdb_twb"
+    MODE_TDB_RH = "psychrometrics.tdb_rh"
+
+    # Legacy AnalysisTab（以及既有直接呼叫 configure_ui_for_mode /
+    # calculate_psy 的測試）仍可能傳入顯示 label 而非穩定 key；
+    # _resolve_mode_key() 用這張表把 label 正規化為 key，dispatch 本身
+    # 只比對正規化後的 key。
+    _LEGACY_LABEL_TO_KEY = {
+        "濕空氣性質 (已知乾濕球)": MODE_TDB_TWB,
+        "濕空氣性質 (已知乾球與相對濕度)": MODE_TDB_RH,
+    }
+
     def __init__(self, unit_converter: UnitConverter, page: ft.Page, psy_calculator: PsychrometricCalculator):
         super().__init__(unit_converter, page, psy_calculator=psy_calculator)
         
@@ -37,13 +52,13 @@ class PsyModule(BaseAnalysisModule):
     dict：函數計算或處理後的結果。"""
         return {
             "濕空氣性質 (已知乾濕球)": {
-                "analysis_id": "psychrometrics.tdb_twb",
+                "analysis_id": self.MODE_TDB_TWB,
                 "ui": self.ui_container,
                 "calc_func": self.calculate_psy,
                 "calculation_mode": "psychrometric"
             },
             "濕空氣性質 (已知乾球與相對濕度)": {
-                "analysis_id": "psychrometrics.tdb_rh",
+                "analysis_id": self.MODE_TDB_RH,
                 "ui": self.ui_container,
                 "calc_func": self.calculate_psy,
                 "calculation_mode": "psychrometric"
@@ -70,15 +85,38 @@ class PsyModule(BaseAnalysisModule):
         self.all_entries["psy_twb"]["unit"].on_select = self._create_unit_sync_handler("T", psy_t_sync_group)
         self.all_entries["psy_alt"]["unit"].on_select = self._create_unit_sync_handler("L", ["psy_alt"])
 
-    def configure_ui_for_mode(self, mode_name: str):
+    def _resolve_mode_key(self, mode: str) -> str:
+        """將呼叫端傳入值正規化為穩定的 mode key。
+
+        新的 dedicated view / adapter（見 ``PsychrometricsView`` /
+        ``AnalysisModuleAdapter``）一律傳入穩定 key（``self.MODE_TDB_TWB`` /
+        ``self.MODE_TDB_RH``）；為了不破壞仍直接傳入舊版顯示文字的呼叫端
+        （legacy ``AnalysisTab`` 與既有直接呼叫此方法的測試），保留 label
+        → key 的相容對照表。實際的模式判斷（見下方 if/elif）只比對正規化
+        後的 key，不比對 label 字串本身。
+
+        參數：
+            mode: 穩定 key 或舊版顯示 label。
+
+        回傳：
+            str：正規化後的穩定 mode key；無法辨識時原樣傳回，交由呼叫端
+            的既有錯誤處理路徑判斷。
         """
-        由 AnalysisTab 呼叫，配置 UI 顯示模式。
+        if mode in (self.MODE_TDB_TWB, self.MODE_TDB_RH):
+            return mode
+        return self._LEGACY_LABEL_TO_KEY.get(mode, mode)
+
+    def configure_ui_for_mode(self, mode: str):
+        """
+        由 PsychrometricsView（傳入穩定 key）或 legacy AnalysisTab（傳入
+        label，經 ``_resolve_mode_key`` 正規化）呼叫，配置 UI 顯示模式。
         這是一個 *特定* 方法，僅供 PsyModule 使用。
         """
-        if mode_name == "濕空氣性質 (已知乾濕球)":
+        mode_key = self._resolve_mode_key(mode)
+        if mode_key == self.MODE_TDB_TWB:
             self.all_entries["psy_twb"]["ui_row"].visible = True
             self.all_entries["psy_rh"]["ui_row"].visible = False
-        elif mode_name == "濕空氣性質 (已知乾球與相對濕度)":
+        elif mode_key == self.MODE_TDB_RH:
             self.all_entries["psy_twb"]["ui_row"].visible = False
             self.all_entries["psy_rh"]["ui_row"].visible = True
         
@@ -91,11 +129,21 @@ class PsyModule(BaseAnalysisModule):
         if attached_page:
             self.ui_container.update()
 
-    def calculate_psy(self, use_imperial: bool, mode_name: str) -> str:
+    def calculate_psy(self, use_imperial: bool, mode_key: str) -> str:
         """
         實作濕空氣計算。
-        注意：此函式需要額外的 'mode_name' 參數。
+
+        參數：
+            use_imperial: 是否以 Imperial 單位呈現結果。
+            mode_key: 穩定的計算模式 key（``self.MODE_TDB_TWB`` /
+                ``self.MODE_TDB_RH``）；為相容仍可傳入舊版顯示 label，
+                會經 :meth:`_resolve_mode_key` 正規化為 key 後才用於
+                dispatch，label 本身永遠不直接參與判斷。
+
+        回傳：
+            str：格式化後的計算結果文字。
         """
+        mode_key = self._resolve_mode_key(mode_key)
         # 1. 讀取通用值和單位
         alt_val = float(self.all_entries["psy_alt"]["val"].value)
         alt_unit = self.all_entries["psy_alt"]["unit"].value
@@ -108,14 +156,14 @@ class PsyModule(BaseAnalysisModule):
 
         psy_results = {}
         
-        # 3. 根據傳入的 mode_name 決定計算路徑
-        if mode_name == "濕空氣性質 (已知乾濕球)":
+        # 3. 根據正規化後的 mode_key 決定計算路徑；label 不參與判斷。
+        if mode_key == self.MODE_TDB_TWB:
             twb_val = float(self.all_entries["psy_twb"]["val"].value)
             twb_unit = self.all_entries["psy_twb"]["unit"].value
             twb_k = self.unit_converter.convert_to_si("T", twb_val, twb_unit)
             psy_results = self.psy_calculator.calculate_from_tdb_twb(tdb_k, twb_k, alt_m)
 
-        elif mode_name == "濕空氣性質 (已知乾球與相對濕度)":
+        elif mode_key == self.MODE_TDB_RH:
             rh_val = float(self.all_entries["psy_rh"]["val"].value)
             rh_si = self.unit_converter.convert_to_si("RH", rh_val, "%") 
             psy_results = self.psy_calculator.calculate_from_tdb_rh(tdb_k, rh_si, alt_m)

@@ -350,9 +350,10 @@ class AnalysisTab(ft.Column):
             # 3. 獲取輸出單位
             use_imperial = ("Imperial" in self.output_unit_toggle.selected)
             
-            # 4. 呼叫宣告的計算模式；標籤永遠不控制 dispatch。
+            # 4. 呼叫宣告的計算模式；標籤永遠不控制 dispatch（calculate_psy 內部會
+            #    將 legacy label 正規化為穩定的 mode key 後才判斷）。
             if current_definition["calculation_mode"] == "psychrometric":
-                result_string = calc_func(use_imperial, mode_name=selected_name)
+                result_string = calc_func(use_imperial, mode_key=selected_name)
             else:
                 result_string = calc_func(use_imperial)
             

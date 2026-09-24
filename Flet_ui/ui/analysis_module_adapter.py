@@ -97,18 +97,19 @@ class AnalysisModuleAdapter:
         既有模組目前只能可靠提供 formatted text（而非結構化 metrics）；
         依 PR #4 規格，此處只呈現 status + primary text，不假造 metric。
 
+        ``AnalysisDefinition.calculate`` 一律是統一的
+        ``Callable[[bool], str]``；任何模組專屬的呼叫慣例（例如 PsyModule
+        需要的 mode_key）都已在 :func:`definitions_from_module` 建構
+        definition 時綁定完成，這裡完全不需要知道 psychrometric 或任何
+        特定分類的存在。
+
         回傳：
             無。
         """
         definition = self.active_definition
         use_imperial = self.output_unit_system == "Imperial"
         try:
-            if definition.calculation_mode == "psychrometric":
-                # PsyModule 既有 calc_func 仍以顯示文字判斷模式；
-                # adapter 保留原始呼叫慣例以避免改動 domain 行為。
-                result_string = definition.calculate(use_imperial, mode_name=definition.label)
-            else:
-                result_string = definition.calculate(use_imperial)
+            result_string = definition.calculate(use_imperial)
             self.result_panel.set_status("success", "計算完成", result_string)
             self._has_calculated_result = True
         except ValueError as ve:

@@ -3,6 +3,12 @@
 PR #4 (Analysis Workspace Migration) 引入這個型別，讓 routing / dispatch
 只依賴穩定的 ``key``（即既有 module 的 ``analysis_id``），而顯示用的
 ``label`` 只用於 UI 呈現。翻譯或文案調整永遠不應該影響 routing 行為。
+
+``calculate`` 一律綁定為統一的 ``Callable[[bool], str]`` 簽章：既有模組若
+需要額外參數（例如 PsyModule.calculate_psy 的 ``mode_key``），在建構
+definition 當下就以 closure 綁定完成，讓下游的
+:class:`~Flet_ui.ui.analysis_module_adapter.AnalysisModuleAdapter` 完全不
+需要知道任何特定模組的計算模式或呼叫慣例。
 """
 
 from __future__ import annotations
@@ -22,26 +28,28 @@ class AnalysisDefinition:
             dispatch 一律使用這個欄位，不得使用 ``label``。
         label: 顯示於 ToolSelector 的文字，可隨時調整文案而不影響行為。
         input_view: 此分析對應的輸入 Flet 控制項。
-        calculate: 執行計算的既有函式，簽章與呼叫慣例維持既有模組的定義。
-        calculation_mode: 既有的 dispatch 模式（standard / psychrometric）。
+        calculate: 統一簽章 ``Callable[[bool], str]``（輸入 use_imperial，
+            回傳格式化結果文字）；任何模組專屬參數（例如 PsyModule 的
+            mode_key）都已在 :func:`definitions_from_module` 建構當下以
+            closure 綁定完成。
         show_execute_button: 是否顯示共用的「執行分析」按鈕。
-        show_result_panel: 是否顯示共用的 ResultPanel。
     """
 
     key: str
     label: str
     input_view: ft.Control
-    calculate: Callable[..., str]
-    calculation_mode: str = "standard"
+    calculate: Callable[[bool], str]
     show_execute_button: bool = True
-    show_result_panel: bool = True
 
 
 def definitions_from_module(module: object) -> list[AnalysisDefinition]:
     """將既有 ``BaseAnalysisModule.get_analysis_definitions()`` 的 legacy dict 轉為型別化定義。
 
     這個轉換不改變任何計算邏輯；它只是把既有 module 自我註冊的 magic dict
-    重新包裝為 :class:`AnalysisDefinition`，讓 View 層只依賴穩定 key。
+    重新包裝為 :class:`AnalysisDefinition`，讓 View / Adapter 層只依賴穩定
+    key 與統一的 ``Callable[[bool], str]`` calculate 簽章。模組專屬的呼叫
+    慣例（目前僅 PsyModule 需要額外的 ``mode_key`` 參數）在這裡以 closure
+    完成綁定，不外洩到 adapter。
 
     參數：
         module: 已實作 ``get_analysis_definitions()`` 的既有分析模組實例。
@@ -61,15 +69,24 @@ def definitions_from_module(module: object) -> list[AnalysisDefinition]:
         if analysis_id in seen_ids:
             raise ValueError(f"Duplicate analysis_id: {analysis_id}")
         seen_ids.add(analysis_id)
+
+        raw_calc_func = raw["calc_func"]
+        if raw.get("calculation_mode") == "psychrometric":
+            # PsyModule.calculate_psy 需要額外的 mode_key 參數；在建構當下
+            # 以穩定 key（而非 label）綁定成 closure，adapter 之後只需呼叫
+            # 統一的 calculate(use_imperial)。
+            def calculate(use_imperial: bool, _func=raw_calc_func, _key=analysis_id) -> str:
+                return _func(use_imperial, mode_key=_key)
+        else:
+            calculate = raw_calc_func
+
         definitions.append(
             AnalysisDefinition(
                 key=analysis_id,
                 label=label,
                 input_view=raw["ui"],
-                calculate=raw["calc_func"],
-                calculation_mode=raw.get("calculation_mode", "standard"),
+                calculate=calculate,
                 show_execute_button=raw.get("show_execute_button", True),
-                show_result_panel=raw.get("show_result_panel", True),
             )
         )
     return definitions

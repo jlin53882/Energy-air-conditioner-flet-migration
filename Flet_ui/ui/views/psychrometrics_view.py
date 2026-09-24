@@ -46,4 +46,4 @@ class PsychrometricsView(DedicatedAnalysisView):
             無。
         """
         definition = self.adapter.active_definition
-        self.psy_module.configure_ui_for_mode(definition.label)
+        self.psy_module.configure_ui_for_mode(definition.key)

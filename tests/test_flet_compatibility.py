@@ -1,6 +1,7 @@
 """Flet 1.0 migration boundary 的 regression test。"""
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from subprocess import run
 from sys import executable
@@ -782,6 +783,52 @@ def test_global_output_unit_change_preserves_compressor_input_value_and_unit() -
     assert atm["val"].value == "99.5"
     assert atm["unit"].value == "kPa"
     assert compressor_view.adapter.output_unit_system == "SI"
+
+
+def test_psychrometric_dispatch_does_not_depend_on_display_label() -> None:
+    """確認濕空氣 UI 模式切換與計算 dispatch 只依賴穩定 key，不依賴顯示 label。
+
+    F3 regression：即使把 PsychrometricsView 目前選取的 definition.label
+    改成任意自訂文字（模擬未來改文案／翻譯），只要 definition.key 仍是
+    ``psychrometrics.tdb_rh``，RH 欄位的可見狀態與計算路徑都必須不變。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+    psychrometrics_view = shell.views["psychrometrics"]
+    adapter = psychrometrics_view.adapter
+
+    rh_key = PsyModule.MODE_TDB_RH
+    twb_key = PsyModule.MODE_TDB_TWB
+    assert {rh_key, twb_key} == {definition.key for definition in adapter.definitions}
+
+    # 惡意模擬：把 adapter 內部快取的 definition 換成 label 被改掉（但 key
+    # 不變）的版本，確認 dispatch 完全不受影響。
+    renamed = {
+        key: (
+            replace(definition, label="Renamed / Translated Label")
+            if key == rh_key
+            else definition
+        )
+        for key, definition in adapter._by_key.items()
+    }
+    adapter._by_key = renamed
+    adapter.definitions = list(renamed.values())
+
+    psychrometrics_view._handle_tool_change(rh_key)
+
+    assert adapter.active_key == rh_key
+    module = psychrometrics_view.psy_module
+    assert module.all_entries["psy_rh"]["ui_row"].visible is True
+    assert module.all_entries["psy_twb"]["ui_row"].visible is False
+
+    module.all_entries["psy_tdb"]["val"].value = "25"
+    module.all_entries["psy_rh"]["val"].value = "50"
+    psychrometrics_view.workspace.action_bar.content.on_click(SimpleNamespace())
+
+    assert adapter.result_panel.status == "success"
 
 
 def test_workspace_state_remembers_input_units_by_row_and_property() -> None:
