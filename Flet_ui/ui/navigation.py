@@ -16,17 +16,42 @@ class WorkspaceRoute:
     label: str
     section: str
     icon: str
+    description: str = ""
 
 
 ROUTES = (
-    WorkspaceRoute("home", "首頁", "工作區", "HOME_OUTLINED"),
-    WorkspaceRoute("thermo_properties", "狀態查詢", "熱力學", "SCIENCE_OUTLINED"),
-    WorkspaceRoute("compressor", "壓縮機", "冷凍系統", "COMPRESS_OUTLINED"),
-    WorkspaceRoute("evaporator", "蒸發器", "冷凍系統", "AC_UNIT"),
-    WorkspaceRoute("condenser", "冷凝器", "冷凍系統", "DEVICE_THERMOSTAT_OUTLINED"),
-    WorkspaceRoute("psychrometrics", "濕空氣性質", "空氣處理", "AIR_OUTLINED"),
-    WorkspaceRoute("ph_chart", "P-h 圖", "圖表", "SHOW_CHART_OUTLINED"),
-    WorkspaceRoute("ts_chart", "T-s 圖", "圖表", "SHOW_CHART"),
+    WorkspaceRoute(
+        "home", "首頁", "工作區", "SPACE_DASHBOARD_OUTLINED",
+        description="總覽所有已實作的熱力學與冷凍空調工具。",
+    ),
+    WorkspaceRoute(
+        "thermo_properties", "狀態查詢", "熱力學", "SCIENCE_OUTLINED",
+        description="以兩個獨立性質查詢冷媒或水的熱力狀態，並可計算廣延性質。",
+    ),
+    WorkspaceRoute(
+        "compressor", "壓縮機", "冷凍系統", "COMPRESS_OUTLINED",
+        description="壓縮比、壓縮功、等熵／容積效率、可逆功與㶲分析。",
+    ),
+    WorkspaceRoute(
+        "evaporator", "蒸發器", "冷凍系統", "AC_UNIT",
+        description="以進出口焓值與質量流率計算蒸發器熱交換率。",
+    ),
+    WorkspaceRoute(
+        "condenser", "冷凝器", "冷凍系統", "DEVICE_THERMOSTAT_OUTLINED",
+        description="以進出口焓值與質量流率計算冷凝器放熱率。",
+    ),
+    WorkspaceRoute(
+        "psychrometrics", "濕空氣性質", "空氣處理", "AIR_OUTLINED",
+        description="依海拔與乾濕球溫度或相對濕度計算濕空氣完整性質。",
+    ),
+    WorkspaceRoute(
+        "ph_chart", "P-h 圖", "圖表", "SHOW_CHART_OUTLINED",
+        description="繪製壓力－焓圖並標示狀態點或壓縮過程。",
+    ),
+    WorkspaceRoute(
+        "ts_chart", "T-s 圖", "圖表", "STACKED_LINE_CHART",
+        description="繪製溫度－熵圖並標示狀態點或壓縮過程。",
+    ),
 )
 
 ROUTE_BY_KEY = {route.key: route for route in ROUTES}

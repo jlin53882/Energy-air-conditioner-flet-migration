@@ -6,7 +6,13 @@ from collections.abc import Callable
 from .components.sidebar import Sidebar
 from .navigation import DEFAULT_ROUTE, ROUTE_BY_KEY
 from .state import WorkspaceState
-from .theme import TOKENS
+from .theme import TOKENS, card_shadow, section_colors
+
+FLUID_SHORTCUTS = ("R32", "R410A", "R134a", "R290", "R600a", "R22")
+OUTPUT_SYSTEM_DESCRIPTIONS = {
+    "SI": "結果以 SI 公制呈現，例如 kPa、°C、kJ/kg。",
+    "Imperial": "結果以英制呈現，例如 psia、°F、Btu/lbm。",
+}
 
 
 class AppShell(ft.Column):
@@ -14,20 +20,19 @@ class AppShell(ft.Column):
 
     REGIONS = frozenset({"sidebar", "top_bar", "workspace", "context_panel"})
 
-
     def __init__(self, page: ft.Page, views: dict[str, ft.Control], *,
                  on_route_change: Callable[[str], None] | None = None,
                  on_unit_system_change: Callable[[str], None] | None = None,
                  on_fluid_shortcut: Callable[[str], None] | None = None,
                  state: WorkspaceState | None = None) -> None:
-        """建立導覽與工作區版面，並保留 路由鍵 與顯示標籤的分離。
+        """建立導覽與工作區版面，並保留路由鍵與顯示標籤的分離。
 
 參數：
     page: Flet 頁面，用於讀取視窗尺寸與註冊事件。
     views: 由穩定路由鍵映射至 Flet 畫面的字典。
-    on_route_change: 選用的路由切換 回呼函式。
-    on_unit_system_change: 選用的輸出單位偏好 回呼函式。
-    on_fluid_shortcut: 選用的常用冷媒捷徑 回呼函式。
+    on_route_change: 選用的路由切換回呼函式。
+    on_unit_system_change: 選用的輸出單位偏好回呼函式。
+    on_fluid_shortcut: 選用的常用冷媒捷徑回呼函式。
     state: 選用的工作區狀態；未提供時建立新狀態。
 
 回傳：
@@ -43,34 +48,23 @@ class AppShell(ft.Column):
         self.on_unit_system_change = on_unit_system_change
         self.on_fluid_shortcut = on_fluid_shortcut
         self.state = state or WorkspaceState(route_key=DEFAULT_ROUTE)
-        self.route_header = ft.Column(spacing=TOKENS.spacing_xs)
-        self.workspace = ft.Container(expand=True, padding=TOKENS.spacing_lg)
-        self.context_panel = ft.Container(
-            width=TOKENS.context_panel_width,
-            padding=TOKENS.spacing_md,
-            bgcolor=TOKENS.surface,
-            content=ft.Column([
-                ft.Text("計算歷史", size=TOKENS.section_title, weight=ft.FontWeight.W_600),
-                ft.Text("計算歷史尚未啟用；本版本不會保存計算紀錄。", size=TOKENS.caption,
-                        color=ft.Colors.BLUE_GREY_600),
-                ft.Divider(height=1, color=TOKENS.border),
-                ft.Text("常用冷媒", size=TOKENS.section_title, weight=ft.FontWeight.W_600),
-                ft.Text("快捷選項，不代表 CoolProp 的完整支援清單。",
-                        size=TOKENS.caption, color=ft.Colors.BLUE_GREY_600),
-                ft.ResponsiveRow([
-                    ft.Container(
-                        ft.OutlinedButton(
-                            fluid,
-                            on_click=(lambda _event, value=fluid: self.on_fluid_shortcut(value))
-                            if self.on_fluid_shortcut else None,
-                        ),
-                        col={"xs": 6},
-                    )
-                    for fluid in ("R32", "R410A", "R134a", "R290", "R600a", "R22")
-                ], spacing=TOKENS.spacing_xs, run_spacing=TOKENS.spacing_xs),
-            ], spacing=TOKENS.spacing_md),
-            border=ft.Border.only(left=ft.BorderSide(1, TOKENS.border)),
+
+        self.route_header = ft.Column(spacing=2, tight=True, expand=True)
+        self.route_icon = ft.Icon(ft.Icons.HOME_OUTLINED, size=24)
+        self.route_icon_badge = ft.Container(
+            content=self.route_icon,
+            width=48,
+            height=48,
+            alignment=ft.Alignment.CENTER,
+            border_radius=ft.BorderRadius.all(TOKENS.radius_md),
         )
+        self.page_header = ft.Row(
+            [self.route_icon_badge, self.route_header],
+            spacing=TOKENS.spacing_md,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        self.workspace = ft.Container(expand=True, padding=TOKENS.spacing_lg)
+        self.context_panel = self._build_context_panel()
         self.sidebar = Sidebar(self.navigate, self.state.route_key)
         self.sidebar.left = 0
         self.sidebar.top = 0
@@ -84,24 +78,9 @@ class AppShell(ft.Column):
             selected=[self.state.output_unit_system],
             on_change=self._on_unit_change,
         )
-        self.top_bar = ft.Container(
-            content=ft.Row([
-                ft.IconButton(ft.Icons.MENU, tooltip="顯示或隱藏導覽", on_click=self._toggle_sidebar),
-                ft.Icon(ft.Icons.AC_UNIT, color=TOKENS.primary, size=26),
-                ft.Column([
-                    ft.Text("熱力學計算與冷凍空調分析工具", size=17, weight=ft.FontWeight.W_600),
-                    ft.Text("HVAC & Thermodynamics Analysis Workspace", size=TOKENS.caption,
-                            color=ft.Colors.BLUE_GREY_600),
-                ], spacing=0, expand=True),
-                ft.Text("輸出", size=TOKENS.caption, color=ft.Colors.BLUE_GREY_600),
-                self.unit_toggle,
-            ], spacing=TOKENS.spacing_sm, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            padding=ft.Padding.symmetric(horizontal=TOKENS.spacing_lg, vertical=TOKENS.spacing_sm),
-            bgcolor=TOKENS.surface,
-            border=ft.Border.only(bottom=ft.BorderSide(1, TOKENS.border)),
-        )
+        self.top_bar = self._build_top_bar()
         self.workspace.content = ft.Column(
-            [self.route_header, self.view_host],
+            [self.page_header, self.view_host],
             spacing=TOKENS.spacing_lg,
             expand=True,
         )
@@ -109,7 +88,9 @@ class AppShell(ft.Column):
             [self.workspace, self.context_panel], spacing=0, expand=True,
             vertical_alignment=ft.CrossAxisAlignment.STRETCH,
         )
-        self.workspace_region = ft.Container(content=self.workspace_row, expand=True)
+        self.workspace_region = ft.Container(
+            content=self.workspace_row, expand=True, bgcolor=TOKENS.background
+        )
         self.content_row = ft.Stack(
             [self.workspace_region, self.sidebar],
             expand=True,
@@ -124,6 +105,256 @@ class AppShell(ft.Column):
             pass
         self._on_resize(None)
 
+    def _build_top_bar(self) -> ft.Container:
+        """建立頂端列：左側品牌區延續深色導覽，右側為麵包屑與輸出單位偏好。
+
+回傳：
+    頂端列容器。"""
+        self.menu_button = ft.IconButton(
+            ft.Icons.MENU,
+            icon_color=ft.Colors.WHITE,
+            tooltip="顯示或隱藏導覽",
+            on_click=self._toggle_sidebar,
+            visible=False,
+        )
+        self.brand_title = ft.Text(
+            "熱力學與冷凍空調",
+            size=TOKENS.body + 1,
+            weight=ft.FontWeight.W_700,
+            color=ft.Colors.WHITE,
+            max_lines=1,
+            overflow=ft.TextOverflow.ELLIPSIS,
+        )
+        self.brand_subtitle = ft.Text(
+            "HVAC & Thermodynamics",
+            size=TOKENS.overline,
+            color=TOKENS.nav_text_muted,
+            max_lines=1,
+        )
+        self.brand_text = ft.Column(
+            [self.brand_title, self.brand_subtitle], spacing=0, tight=True, expand=True
+        )
+        self.brand_block = ft.Container(
+            content=ft.Row(
+                [
+                    self.menu_button,
+                    ft.Container(
+                        content=ft.Icon(ft.Icons.AC_UNIT, color=TOKENS.nav_background, size=20),
+                        width=34,
+                        height=34,
+                        alignment=ft.Alignment.CENTER,
+                        bgcolor=TOKENS.nav_accent,
+                        border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
+                    ),
+                    self.brand_text,
+                ],
+                spacing=TOKENS.spacing_sm + 2,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            width=TOKENS.sidebar_width,
+            padding=ft.Padding.symmetric(horizontal=TOKENS.spacing_md),
+            bgcolor=TOKENS.nav_background,
+        )
+        self.breadcrumb_section = ft.Text("", size=TOKENS.caption, color=TOKENS.text_muted)
+        self.breadcrumb_label = ft.Text(
+            "", size=TOKENS.body, weight=ft.FontWeight.W_600, color=TOKENS.text_primary
+        )
+        self.shortcut_hint = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(ft.Icons.KEYBOARD_OUTLINED, size=14, color=TOKENS.text_muted),
+                    ft.Text("Ctrl + Enter 執行計算", size=TOKENS.caption, color=TOKENS.text_muted),
+                ],
+                spacing=4,
+                tight=True,
+            ),
+            padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+            bgcolor=TOKENS.surface_variant,
+            border_radius=ft.BorderRadius.all(TOKENS.radius_pill),
+        )
+        self.breadcrumb_prefix = ft.Row(
+            [
+                self.breadcrumb_section,
+                ft.Icon(ft.Icons.CHEVRON_RIGHT, size=16, color=TOKENS.text_muted),
+            ],
+            spacing=4,
+            tight=True,
+        )
+        self.output_label = ft.Text("輸出單位", size=TOKENS.caption, color=TOKENS.text_secondary)
+        bar_content = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Row(
+                        [self.breadcrumb_prefix, self.breadcrumb_label],
+                        spacing=4,
+                        expand=True,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    self.shortcut_hint,
+                    self.output_label,
+                    self.unit_toggle,
+                ],
+                spacing=TOKENS.spacing_md,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding.symmetric(horizontal=TOKENS.spacing_lg),
+            expand=True,
+        )
+        return ft.Container(
+            content=ft.Row(
+                [self.brand_block, bar_content],
+                spacing=0,
+                vertical_alignment=ft.CrossAxisAlignment.STRETCH,
+            ),
+            height=TOKENS.top_bar_height,
+            bgcolor=TOKENS.surface,
+            border=ft.Border.only(bottom=ft.BorderSide(1, TOKENS.border)),
+        )
+
+    def _panel_section(self, title: str, icon: ft.IconData, content: ft.Control) -> ft.Container:
+        """建立情境面板中的一個小型分區卡片。
+
+參數：
+    title: 分區標題。
+    icon: 分區圖示。
+    content: 分區內容控制項。
+
+回傳：
+    情境面板分區容器。"""
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(icon, size=16, color=TOKENS.primary),
+                            ft.Text(title, size=TOKENS.body, weight=ft.FontWeight.W_600,
+                                    color=TOKENS.text_primary),
+                        ],
+                        spacing=TOKENS.spacing_sm,
+                    ),
+                    content,
+                ],
+                spacing=TOKENS.spacing_sm + 2,
+            ),
+            padding=TOKENS.spacing_md,
+            bgcolor=TOKENS.surface,
+            border=ft.Border.all(1, TOKENS.border),
+            border_radius=ft.BorderRadius.all(TOKENS.radius_md),
+        )
+
+    def _build_context_panel(self) -> ft.Container:
+        """建立情境面板：輸出設定、常用冷媒、快捷鍵與明確的歷史空狀態。
+
+回傳：
+    情境面板容器。"""
+        self.output_system_badge = ft.Text(
+            "", size=TOKENS.section_title, weight=ft.FontWeight.W_700, color=TOKENS.primary
+        )
+        self.output_system_hint = ft.Text("", size=TOKENS.caption, color=TOKENS.text_secondary)
+        self.fluid_shortcut_buttons = [
+            ft.Container(
+                content=ft.Text(fluid, size=TOKENS.caption + 1, weight=ft.FontWeight.W_600,
+                                color=TOKENS.primary, text_align=ft.TextAlign.CENTER),
+                alignment=ft.Alignment.CENTER,
+                padding=ft.Padding.symmetric(vertical=8),
+                bgcolor=TOKENS.primary_soft,
+                border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
+                on_click=(lambda _event, value=fluid: self.on_fluid_shortcut(value))
+                if self.on_fluid_shortcut else None,
+                tooltip=f"以 {fluid} 開啟狀態查詢",
+                ink=True,
+                col={"xs": 4},
+            )
+            for fluid in FLUID_SHORTCUTS
+        ]
+        shortcuts = ft.Column(
+            [
+                self._shortcut_row("Ctrl + Enter", "執行目前畫面的計算"),
+                self._shortcut_row("Esc", "關閉窄視窗導覽抽屜"),
+            ],
+            spacing=TOKENS.spacing_sm,
+        )
+        return ft.Container(
+            width=TOKENS.context_panel_width,
+            padding=TOKENS.spacing_md,
+            bgcolor=TOKENS.surface_variant,
+            border=ft.Border.only(left=ft.BorderSide(1, TOKENS.border)),
+            content=ft.Column(
+                [
+                    self._panel_section(
+                        "輸出設定",
+                        ft.Icons.TUNE,
+                        ft.Column([self.output_system_badge, self.output_system_hint], spacing=2),
+                    ),
+                    self._panel_section(
+                        "常用冷媒",
+                        ft.Icons.PROPANE_TANK_OUTLINED,
+                        ft.Column(
+                            [
+                                ft.Text("點選即以該流體開啟狀態查詢；不代表 CoolProp 的完整支援清單。",
+                                        size=TOKENS.caption, color=TOKENS.text_muted),
+                                ft.ResponsiveRow(
+                                    self.fluid_shortcut_buttons,
+                                    spacing=TOKENS.spacing_xs + 2,
+                                    run_spacing=TOKENS.spacing_xs + 2,
+                                ),
+                            ],
+                            spacing=TOKENS.spacing_sm,
+                        ),
+                    ),
+                    self._panel_section("鍵盤快捷鍵", ft.Icons.KEYBOARD_OUTLINED, shortcuts),
+                    self._panel_section(
+                        "計算歷史",
+                        ft.Icons.HISTORY,
+                        ft.Row(
+                            [
+                                ft.Icon(ft.Icons.INBOX_OUTLINED, size=18, color=TOKENS.text_muted),
+                                ft.Text("計算歷史尚未啟用；本版本不會保存計算紀錄。",
+                                        size=TOKENS.caption, color=TOKENS.text_muted, expand=True),
+                            ],
+                            spacing=TOKENS.spacing_sm,
+                        ),
+                    ),
+                ],
+                spacing=TOKENS.spacing_md,
+                scroll=ft.ScrollMode.AUTO,
+            ),
+        )
+
+    @staticmethod
+    def _shortcut_row(keys: str, description: str) -> ft.Row:
+        """建立快捷鍵說明列。
+
+參數：
+    keys: 按鍵組合文字。
+    description: 快捷鍵用途。
+
+回傳：
+    快捷鍵說明列控制項。"""
+        return ft.Row(
+            [
+                ft.Container(
+                    content=ft.Text(keys, size=TOKENS.overline, weight=ft.FontWeight.W_600,
+                                    color=TOKENS.text_secondary),
+                    padding=ft.Padding.symmetric(horizontal=8, vertical=3),
+                    bgcolor=TOKENS.surface_muted,
+                    border=ft.Border.all(1, TOKENS.border),
+                    border_radius=ft.BorderRadius.all(6),
+                ),
+                ft.Text(description, size=TOKENS.caption, color=TOKENS.text_secondary, expand=True),
+            ],
+            spacing=TOKENS.spacing_sm,
+        )
+
+    def _refresh_output_system_summary(self) -> None:
+        """同步情境面板中顯示的全域輸出單位偏好。
+
+回傳：
+    無。"""
+        system = self.state.output_unit_system
+        self.output_system_badge.value = "SI 公制" if system == "SI" else "Imperial 英制"
+        self.output_system_hint.value = OUTPUT_SYSTEM_DESCRIPTIONS.get(system, "")
+
     def navigate(self, route_key: str, *, notify: bool = True) -> None:
         """依穩定路由鍵選取畫面並更新頁面標題。
 
@@ -134,7 +365,7 @@ class AppShell(ft.Column):
 
 參數：
     route_key: 要切換至的工作區路由鍵。
-    notify: 是否通知路由 回呼函式；初始化時可設為 False。
+    notify: 是否通知路由回呼函式；初始化時可設為 False。
 
 回傳：
     無。
@@ -149,24 +380,26 @@ class AppShell(ft.Column):
         if notify and self.on_route_change:
             self.on_route_change(route_key)
         self.state.route_key = route_key
-        self.sidebar.selected_key = route_key
-        for key, item in self.sidebar.items.items():
-            selected = key == route_key
-            icon, label = item.content.controls
-            icon.color = TOKENS.primary if selected else ft.Colors.BLUE_GREY_600
-            label.weight = ft.FontWeight.W_600 if selected else ft.FontWeight.W_400
-            item.bgcolor = "#E7EFF8" if selected else None
+        self.sidebar.set_selected(route_key)
         active_view = self.views[route_key]
         for view in self._unique_views:
             view.visible = view is active_view
         activate_route = getattr(active_view, "activate_route", None)
         if callable(activate_route):
             activate_route(route_key)
+        accent, soft = section_colors(route.section)
+        self.route_icon.icon = getattr(ft.Icons, route.icon)
+        self.route_icon.color = accent
+        self.route_icon_badge.bgcolor = soft
         self.route_header.controls = [
-            ft.Text(route.label, size=TOKENS.title, weight=ft.FontWeight.W_700),
-            ft.Text("工程計算工作區 · 輸入單位可獨立選擇", size=TOKENS.body,
-                    color=ft.Colors.BLUE_GREY_600),
+            ft.Text(route.label, size=TOKENS.title, weight=ft.FontWeight.W_700,
+                    color=TOKENS.text_primary),
+            ft.Text(route.description or "工程計算工作區 · 輸入單位可獨立選擇",
+                    size=TOKENS.body, color=TOKENS.text_secondary),
         ]
+        self.breadcrumb_section.value = route.section
+        self.breadcrumb_label.value = route.label
+        self._refresh_output_system_summary()
         self._on_resize(None)
         try:
             self.update()
@@ -174,7 +407,7 @@ class AppShell(ft.Column):
             pass
 
     def set_output_unit_system(self, unit_system: str) -> None:
-        """更新全域輸出單位偏好，並通知目前的畫面 介接器。
+        """更新全域輸出單位偏好，並通知目前的畫面介接器。
 
 參數：
     unit_system: 要使用的輸出單位系統。
@@ -183,6 +416,7 @@ class AppShell(ft.Column):
     無。"""
         self.state.set_output_unit_system(unit_system)
         self.unit_toggle.selected = [unit_system]
+        self._refresh_output_system_summary()
         if self.on_unit_system_change:
             self.on_unit_system_change(unit_system)
         try:
@@ -254,20 +488,41 @@ class AppShell(ft.Column):
             self.sidebar.set_compact(False)
             self.sidebar.visible = False
             self.sidebar.width = TOKENS.sidebar_width
+            self.sidebar.shadow = card_shadow()
             self.workspace_region.padding = ft.Padding.only(left=0)
             self.context_panel.visible = False
-            self.workspace.padding = TOKENS.spacing_sm
+            self.workspace.padding = TOKENS.spacing_md
+            self.menu_button.visible = True
+            self.brand_block.width = None
+            self.brand_text.visible = False
+            self.shortcut_hint.visible = False
+            self.breadcrumb_prefix.visible = False
+            self.output_label.visible = False
         elif width < 1200:
             self.sidebar.set_compact(True)
             self.sidebar.visible = True
-            self.sidebar.width = 76
-            self.workspace_region.padding = ft.Padding.only(left=76)
+            self.sidebar.width = TOKENS.sidebar_compact_width
+            self.sidebar.shadow = None
+            self.workspace_region.padding = ft.Padding.only(left=TOKENS.sidebar_compact_width)
             self.context_panel.visible = False
             self.workspace.padding = TOKENS.spacing_md
+            self.menu_button.visible = False
+            self.brand_block.width = TOKENS.sidebar_compact_width
+            self.brand_text.visible = False
+            self.shortcut_hint.visible = False
+            self.breadcrumb_prefix.visible = True
+            self.output_label.visible = True
         else:
             self.sidebar.set_compact(False)
             self.sidebar.visible = True
             self.sidebar.width = TOKENS.sidebar_width
+            self.sidebar.shadow = None
             self.workspace_region.padding = ft.Padding.only(left=TOKENS.sidebar_width)
             self.context_panel.visible = True
             self.workspace.padding = TOKENS.spacing_lg
+            self.menu_button.visible = False
+            self.brand_block.width = TOKENS.sidebar_width
+            self.brand_text.visible = True
+            self.shortcut_hint.visible = True
+            self.breadcrumb_prefix.visible = True
+            self.output_label.visible = True
