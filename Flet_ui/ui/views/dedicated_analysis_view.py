@@ -46,7 +46,9 @@ class DedicatedAnalysisView(ft.Column):
         """
         super().__init__(expand=True, spacing=0)
         self.adapter = AnalysisModuleAdapter(modules)
-        self._workspace_state = workspace_state
+        # workspace_state 只在建構當下讀取一次目前的全域輸出單位；此 View
+        # 不持有對它的長期參照（沒有 ongoing ownership），避免造成「看似
+        # 訂閱了 WorkspaceState 但實際上沒有」的誤導。
         if workspace_state is not None:
             self.adapter.output_unit_system = workspace_state.output_unit_system
 

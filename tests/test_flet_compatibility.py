@@ -679,6 +679,54 @@ def test_psychrometrics_view_retains_state_across_route_navigation() -> None:
     assert tab.active_key == second_key
 
 
+def test_route_switching_retains_valid_result_and_invalidates_on_tool_switch() -> None:
+    """§26/§27 regression：route 切換保留各自畫面的合法結果；同畫面內切換 tool 才清空結果。
+
+    情境（依 final-hardening 規格 §26 Route State）：
+    1. Evaporator 計算出結果 A。
+    2. 導覽到 Condenser 並計算出結果 B（不同 view/adapter 的獨立狀態）。
+    3. 導覽回 Evaporator：結果 A 必須原封不動保留（route-retained valid
+       result），不會被 Condenser 的計算或路由切換清空。
+    4. 在同一個 Psychrometrics 畫面內切換 tool：stale 的舊 tool 結果不可
+       繼續顯示為新 tool 的結果（正確的 stale invalidation，對應 §27
+       Tool Switch Result Contract）。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+
+    shell.navigate("evaporator")
+    evaporator_view = shell.views["evaporator"]
+    evaporator_view.workspace.action_bar.content.on_click(SimpleNamespace())
+    assert evaporator_view.adapter.result_panel.status == "success"
+    evaporator_result_a = evaporator_view.adapter.result_panel._body.controls[1].value
+
+    shell.navigate("condenser")
+    condenser_view = shell.views["condenser"]
+    condenser_view.workspace.action_bar.content.on_click(SimpleNamespace())
+    assert condenser_view.adapter.result_panel.status == "success"
+
+    shell.navigate("evaporator")
+    assert evaporator_view.adapter.result_panel.status == "success"
+    assert evaporator_view.adapter.result_panel._body.controls[1].value == evaporator_result_a
+
+    # 切換 tool 必須清空目前畫面的舊結果（select() 已設 status="empty"）；
+    # evaporator 目前只有單一 tool，因此改用可切換的 psychrometrics 驗證。
+    shell.navigate("psychrometrics")
+    psychrometrics_view = shell.views["psychrometrics"]
+    psychrometrics_view.workspace.action_bar.content.on_click(SimpleNamespace())
+    assert psychrometrics_view.adapter.result_panel.status == "success"
+
+    tool_items = psychrometrics_view.adapter.tool_items()
+    other_key = next(key for key, _ in tool_items if key != psychrometrics_view.active_key)
+    psychrometrics_view.tool_selector._handle_select(other_key)
+
+    assert psychrometrics_view.active_key == other_key
+    assert psychrometrics_view.adapter.result_panel.status == "empty"
+
+
 def test_property_query_hides_unsupported_third_condition_and_aligns_controls() -> None:
     """確認未支援的第三條件入口隱藏，且性質與數值欄控制項等高對齊。
 
