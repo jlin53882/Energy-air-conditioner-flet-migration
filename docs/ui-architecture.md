@@ -17,11 +17,11 @@
 - **工作區**：頁首（依分類著色的路由圖示、路由標題與 `WorkspaceRoute.description`）及目前選取的畫面。
 - **情境面板**：桌面版選用區域，以堆疊小卡呈現目前輸出單位系統、常用冷媒捷徑、鍵盤快捷鍵及計算歷史。不得自行假造計算歷史；在歷史資料儲存介面尚未接通前，只能呈現明確的空狀態。
 
-外殼會將每個唯一畫面固定掛載於同一個 `Stack`，切換路由時只改變可見狀態。這可避免圖表等昂貴子控制項在導覽時被銷毀重建，並減少 Flet 控制項生命週期變動。PR #4（Analysis Workspace Migration）之後，每個分析路由對應各自獨立的 dedicated view 實例（`CompressorView` / `EvaporatorView` / `CondenserView` / `PsychrometricsView` / `ThermoDiagramView`），彼此互不共享父容器；`AppShell` 不需要知道任何 analysis category 的細節，只依 `route.key` 決定要顯示哪一個已掛載的 view。
+外殼會將每個唯一畫面固定掛載於同一個 `Stack`，切換路由時只改變可見狀態。這可避免圖表等昂貴子控制項在導覽時被銷毀重建，並減少 Flet 控制項生命週期變動。PR #4（Analysis Workspace Migration）之後，每個分析路由對應各自獨立的 dedicated view 實例（`CompressorView` / `EvaporatorView` / `CondenserView` / `RefrigerationCycleView` / `PsychrometricsView` / `AirProcessView` / `PsychrometricChartView` / `ThermoDiagramView`），彼此互不共享父容器；`AppShell` 不需要知道任何 analysis category 的細節，只依 `route.key` 決定要顯示哪一個已掛載的 view。
 
 ## 導覽契約
 
-`Flet_ui/ui/navigation.py` 定義語意路由識別碼與顯示文字。目前註冊的路由包括首頁、熱力狀態查詢、壓縮機、蒸發器、冷凝器、濕空氣性質、P-h 圖及 T-s 圖。每個分析路由都對應既有分析註冊表中的分類。新增路由必須代表已實作工具，或明確標示為不可使用；規劃中的項目不得呈現得像可執行功能。
+`Flet_ui/ui/navigation.py` 定義語意路由識別碼與顯示文字。目前註冊的路由包括首頁、熱力狀態查詢、壓縮機、蒸發器、冷凝器、冷凍循環、濕空氣性質、空氣處理程序、P-h 圖、T-s 圖、濕空氣線圖及單位換算。每個分析路由都對應一個 dedicated view 及其註冊的分析定義。新增路由必須代表已實作工具，或明確標示為不可使用；規劃中的項目不得呈現得像可執行功能。
 
 路由身分是資料（`route.key`），與顯示文字彼此獨立。導覽狀態由 `WorkspaceState` 保存，不得依賴標籤文字或 Flet 選取索引。`WorkspaceRoute.description` 只供頁首與首頁卡片顯示，不參與路由判斷。
 
@@ -50,6 +50,12 @@
 - 首頁以橫幅、工具卡片格與建議工作流程呈現已實作工具。卡片上的分析數量與總數只來自各 dedicated view 的 `AnalysisModuleAdapter.definitions`，不得寫死或推估。
 - 性質查詢工作區將既有的模式、流體、參考狀態及性質控制項組合成全寬計算設定卡，下方左欄為已知條件與選用廣延性質、右欄為結果；窄視窗時依序堆疊。水模式的理想氣體選項必須實際出現在計算設定卡中。常用組合以膠囊按鈕呈現，並標示與前兩列性質相符的組合。
 - 分析工作區（壓縮機、蒸發器、冷凝器、濕空氣）由 `AnalysisWorkspace` 組成：分析項目卡（`ToolSelector` 膠囊按鈕，只有一項分析的畫面會隱藏）、輸入卡（說明、公式提示、模組輸入及執行按鈕）與結果卡（`AnalysisResultView`：狀態、分組指標、原始文字與複製）。頁面標題與說明由 AppShell 頁首呈現，`AnalysisWorkspace.header` 預設隱藏。`AnalysisModuleAdapter` 保存模組回傳的原始 `result_text`；以「計算錯誤」或「計算失敗」開頭的文字以錯誤狀態呈現，不投影指標。
+- 分析定義可選擇提供 `result_chart`（通常為 `FigurePanel`），由 `definitions_from_module()` 帶入 `AnalysisDefinition.result_chart`；成功計算後由 `AnalysisResultView` 顯示於結果卡片，重設、切換工具或錯誤時隱藏，且不得沿用前一個分析的圖表。`result_chart_first` 為真時圖表放在指標之前（以圖表為主要產出的分析）。`FigurePanel` 持有長期存在的 Matplotlib figure，繪圖程式必須清除並重畫同一個 figure，再呼叫 `refresh()`。
+- 空氣處理程序路由（`AirProcessView` + `PsyProcessModule`）：氣流混合、顯熱加熱／冷卻、冷卻除濕盤管與送風量估算，計算委派給 `AirProcessService`，過程標示在濕空氣線圖上。濕空氣性質路由（`PsychrometricsView`）維持原本的兩種模式。
+- 冷凍循環路由（`RefrigerationCycleView` + `RefrigerationCycleModule`）提供蒸氣壓縮循環（P-h 圖沿用 `generate_thermo_diagram`，與求解使用相同的 Auto reference-state policy）及過熱度／過冷度判讀（錶壓力需加上輸入的大氣壓力）。
+- 濕空氣線圖路由（`PsychrometricChartView` + `PsychrometricChartModule`）以逗號分隔的乾球溫度與 RH 標示最多 8 點。線圖曲線來自無頭的 `chart.psychrometric`，Matplotlib 呈現位於 `thermo_draw/psychrometric_plot.py`。
+- 單位換算路由（`UnitConverterView`）不是分析模組；換算完全委派給 `UnitConverter`，常用換算數值在執行時計算。
+- 新分析模組應使用 `BaseAnalysisModule.read_si`／`read_si_list`／`read_text` 讀取輸入（無效值以欄名提示）、`bind_independent_unit_sync`／`bind_multi_value_unit_sync` 綁定單位換算，並以 `ResultFormatter` 輸出「名稱: 數值 單位」文字（SI 風量用 m³/h、英制用 ft³/min）。溫差使用 `DeltaT` 量，不得以溫度換算。新分析應以新的 `DedicatedAnalysisView` 子類別接上，不得加入 legacy `AnalysisTab`。
 - 熱力圖路由由 `ThermoDiagramView` 直接呈現熱力圖模組自有的設定卡（工作流體、圖表、狀態點）與圖表卡，不套用共用結果卡。
 - 通用狀態查詢求解器接受兩個獨立性質。在求解器支援第三條件限制前，必須隱藏第三列輸入及新增入口；支援的性質選單和值／單位控制項應排列於對齊的響應式欄位。
 - HVAC 分析計算仍由既有 `analysis_modules` 註冊，改由各自 dedicated view 內的 `AnalysisModuleAdapter` 派送計算與結果呈現；adapter 只認得 `AnalysisDefinition`（`key` + `label` + `input_view` + `calculate` 契約），完全不知道特定分類的存在，因此新增一種既有分析工具不需修改 adapter，只需提供新的 `AnalysisDefinition` 清單。`AnalysisDefinition.calculate` 一律是統一簽章 `Callable[[bool], str]`；任何模組專屬的呼叫慣例（例如 `PsyModule` 需要的 `mode_key`）完全由該模組自己在 `get_analysis_definitions()` 回傳的 `calc_func` 建構時吸收完成（見 `PsyModule._calculate_tdb_twb` / `_calculate_tdb_rh`），`Flet_ui/ui/analysis_definition.py` 的 `definitions_from_module()` 這個 generic factory 本身不判斷、不 import、也不知道任何特定模組的計算模式或呼叫慣例——新增一種分析類別不需要修改這個 factory 或 adapter。`AnalysisModuleAdapter.__init__()` 會在彙整多個模組的定義時做全域 key 驗證：若不同模組間出現重複的 `analysis_id`，立即拋出 `ValueError`（fail fast），不允許 silent overwrite。畫面組成本身由共用的 `AnalysisWorkspace` presentation 殼負責（Header + ToolSelector + Input/Result 並排 + ActionBar），dedicated view 只負責把既有模組接上這個殼。已選取的工具必須有明顯的視覺狀態（`ToolSelector`）。
@@ -105,4 +111,4 @@ Flet `ResponsiveRow` 的斷點依頁面寬度判斷，而不是依父容器寬�
 
 ## 目前擴充點與路線圖
 
-路由註冊表支援後續新增熱力學、冷凍空調、空氣處理、圖表、工具、資料及設定區域。未來歷史紀錄應依賴 `HistoryRepository` 介面並保存應用程式資料，而不是控制項；JSON／SQLite 持久化方式尚未決定。狀態點／循環工作區及過熱度／過冷度／飽和工具，除非既有領域服務已支援，否則都屬於獨立功能工作。
+路由註冊表支援後續新增熱力學、冷凍空調、空氣處理、圖表、工具、資料及設定區域。未來歷史紀錄應依賴 `HistoryRepository` 介面並保存應用程式資料，而不是控制項；JSON／SQLite 持久化方式尚未決定。冷凍循環與過熱度／過冷度工具已由 `domain/refrigeration/` 支援；多級壓縮、經濟器或熱交換器設計等延伸屬於獨立功能工作，應先在 domain 建立並測試再接到 UI。

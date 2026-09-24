@@ -33,9 +33,11 @@ channel adapters / entrypoints
 
 負責規範性的物理量、單位定義、熱力學計算、HVAC 方程式、濕空氣中立結果模型，以及程序全域的參考狀態政策。它不知道 Flet 控制項、Telegram 更新或顯示格式。
 
+`domain/refrigeration/` 負責蒸氣壓縮循環與過熱度／過冷度判讀，透過 `ThermodynamicStateProvider` 協定取得 canonical SI 狀態；`domain/psychrometrics/processes.py` 負責空氣處理過程的質量／能量平衡。
+
 ### `application/`
 
-負責請求模型與 `PropertyQueryService` 等協調工作。它驗證請求形狀並協調領域服務。不負責呈現控制項或訊息。
+負責請求模型與 `PropertyQueryService`、`AirProcessService`（空氣處理過程）、`RefrigerationService`（冷凍循環、過熱度判讀與其 reference-state policy）等協調工作。它驗證請求形狀並協調領域服務。不負責呈現控制項或訊息。
 
 ### `infrastructure/`
 
@@ -52,6 +54,8 @@ channel adapters / entrypoints
 ### `chart/`
 
 負責無頭圖表狀態模型與解析。現有的圖表呈現與取樣仍屬於通道／基礎設施職責。
+
+`chart/psychrometric.py` 以 `PsychrometricService` 取樣濕空氣線圖的飽和線、等相對濕度線與等焓線，只產生曲線資料。
 
 ### 進入點
 
