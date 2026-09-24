@@ -49,3 +49,46 @@ class LegacyPsychrometricModelAdapter:
 回傳：
     float：函數計算或處理後的結果。"""
         return legacy_model.cal_Tdp_from_Pw(vapor_pressure)
+
+    def cal_Pws(self, dry_bulb_c: float) -> float:
+        """將飽和水蒸氣分壓（kPa）計算委派給排除的 model。
+
+參數：
+    dry_bulb_c: 乾球溫度（°C）。
+
+回傳：
+    飽和水蒸氣分壓（kPa）。"""
+        return legacy_model.cal_Pws(dry_bulb_c)
+
+    def cal_Ws(self, total_pressure_kpa: float, vapor_pressure_kpa: float) -> float:
+        """將由分壓計算濕度比的公式委派給排除的 model。
+
+參數：
+    total_pressure_kpa: 大氣壓力（kPa）。
+    vapor_pressure_kpa: 水蒸氣分壓（kPa）。
+
+回傳：
+    濕度比（kg/kg）。"""
+        return legacy_model.cal_Ws(total_pressure_kpa, vapor_pressure_kpa)
+
+    def cal_Pw(self, total_pressure_kpa: float, humidity_ratio: float) -> float:
+        """將由濕度比計算水蒸氣分壓的公式委派給排除的 model。
+
+參數：
+    total_pressure_kpa: 大氣壓力（kPa）。
+    humidity_ratio: 濕度比（kg/kg）。
+
+回傳：
+    水蒸氣分壓（kPa）。"""
+        return legacy_model.cal_Pw(total_pressure_kpa, humidity_ratio)
+
+    def cal_h(self, dry_bulb_c: float, humidity_ratio: float) -> float:
+        """將濕空氣比焓（kJ/kg）計算委派給排除的 model。
+
+參數：
+    dry_bulb_c: 乾球溫度（°C）。
+    humidity_ratio: 濕度比（kg/kg）。
+
+回傳：
+    比焓（kJ/kg 乾空氣）。"""
+        return legacy_model.cal_h(dry_bulb_c, humidity_ratio)

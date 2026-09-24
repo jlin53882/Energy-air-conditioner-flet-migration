@@ -75,6 +75,10 @@ Flet 與 Telegram 負責 label、display unit、string 以及 message/control re
 
 排除的 legacy model 透過 infrastructure adapter 存取；domain service 不得 import Flet-owned implementation。
 
+`PsychrometricService` 另提供 `calculate_from_tdb_w`、`humidity_ratio_from_rh`、`relative_humidity_from_w`、`enthalpy_at` 與 `dry_bulb_from_enthalpy`。這些方法只使用注入 model 的 primitive（`cal_p`、`cal_Pws`、`cal_Ws`、`cal_Pw`、`cal_h`）進行正規化、驗證與反解，不得另寫第二套濕空氣公式。超過飽和的 `(Tdb, W)` 狀態必須明確失敗，不得回傳 RH 大於 1 的結果。
+
+`domain/psychrometrics/processes.py` 提供絕熱混合、顯熱加熱／冷卻、冷卻除濕與依顯熱負荷估算送風量。所有流量以乾空氣質量流率（kg/s）表示，熱量以 W 表示；過程只做質量／能量平衡，狀態一律由 `PsychrometricService` 取得。冷卻除濕以「入口乾球、出口濕度比」的中間點分解顯熱與潛熱，並忽略冷凝水焓。
+
 ## 9. Error contract
 
 Invalid request shape、known property 不足、invalid fluid/policy 與 unknown canonical unit 都必須明確失敗。Compatibility facade 可以增加 channel-specific error presentation，但不得吞掉 canonical contract error，也不得默默替換成另一種 physical meaning。
