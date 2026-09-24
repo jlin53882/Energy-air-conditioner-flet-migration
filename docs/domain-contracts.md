@@ -79,6 +79,15 @@ Flet 與 Telegram 負責 label、display unit、string 以及 message/control re
 
 `domain/psychrometrics/processes.py` 提供絕熱混合、顯熱加熱／冷卻、冷卻除濕與依顯熱負荷估算送風量。所有流量以乾空氣質量流率（kg/s）表示，熱量以 W 表示；過程只做質量／能量平衡，狀態一律由 `PsychrometricService` 取得。冷卻除濕以「入口乾球、出口濕度比」的中間點分解顯熱與潛熱，並忽略冷凝水焓。
 
-## 9. Error contract
+## 9. Refrigeration cycle contract
+
+`domain/refrigeration/` 透過 `ThermodynamicStateProvider` 協定（由 `ThermodynamicStateService.calculate_state_si` 實作）取得 canonical SI 狀態，不直接呼叫 CoolProp，也不自行修改 reference state。
+
+- `solve_vapor_compression_cycle`：單級蒸氣壓縮循環。蒸發壓力取蒸發溫度的露點（Q = 1），冷凝壓力取冷凝溫度的泡點（Q = 0）；壓縮以等熵效率修正，節流為等焓。只有提供冷凍能力時才回傳質量流率、功率與吸入體積流量，不推估未提供的系統量。
+- `evaluate_superheat_subcooling`：以量測絕對壓力與管溫判斷過熱蒸氣、過冷液體或兩相，過熱度以露點、過冷度以泡點為基準，並回報非共沸冷媒的溫度滑移。
+
+狀態服務無法計算的狀態（例如高於臨界壓力）必須轉為明確的 `ValueError`，不得回傳部分結果。
+
+## 10. Error contract
 
 Invalid request shape、known property 不足、invalid fluid/policy 與 unknown canonical unit 都必須明確失敗。Compatibility facade 可以增加 channel-specific error presentation，但不得吞掉 canonical contract error，也不得默默替換成另一種 physical meaning。

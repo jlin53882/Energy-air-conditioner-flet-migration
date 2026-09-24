@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Iterable, Sequence
 
 import CoolProp.CoolProp as CP
 
@@ -108,6 +108,36 @@ class ThermodynamicStateService:
             if is_ideal_gas:
                 return self._calculate_ideal_gas(fluid, dict(known_si))
             return self._calculate_coolprop(fluid, known_si, reference_state)
+        except Exception as exc:
+            raise RuntimeError(f"在計算 '{fluid}' 的性質時發生錯誤: {exc}") from exc
+
+    def calculate_state_si(
+        self,
+        fluid: str,
+        known_si: Sequence[tuple[str, float]],
+        reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
+    ) -> dict[str, float | str]:
+        """以 canonical SI 已知性質直接計算 CoolProp 狀態，不經顯示單位轉換。
+
+供 domain 內部的循環／飽和計算使用；每次呼叫都在共用的 reference-state
+transaction 中完成。
+
+參數：
+    fluid: CoolProp 流體名稱。
+    known_si: 至少兩組 (CoolProp 性質代碼, SI 數值)，例如 ("P", Pa)、("Q", 1.0)。
+    reference_state: 本次查詢要求的 reference-state policy。
+
+回傳：
+    canonical SI 性質與 ``phase`` 的 dict。
+
+引發：
+    ValueError：已知性質少於兩組時。
+    RuntimeError：CoolProp 無法計算此狀態時。"""
+        known = list(known_si)
+        if len(known) < 2:
+            raise ValueError("請至少提供兩組已知的性質。")
+        try:
+            return self._calculate_coolprop(fluid.strip(), known[:2], reference_state)
         except Exception as exc:
             raise RuntimeError(f"在計算 '{fluid}' 的性質時發生錯誤: {exc}") from exc
 
