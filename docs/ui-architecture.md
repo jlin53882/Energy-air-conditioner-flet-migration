@@ -17,7 +17,7 @@
 - **工作區**：目前選取的畫面及其路由標題。
 - **情境面板**：桌面版選用區域。不得自行假造計算歷史；在歷史資料儲存介面尚未接通前，只能呈現明確的空狀態及冷媒捷徑。
 
-外殼會將每個唯一畫面固定掛載於同一個 `Stack`，切換路由時只改變可見狀態。這可避免圖表等昂貴子控制項在導覽時被銷毀重建，並減少 Flet 控制項生命週期變動。多個路由鍵值可以刻意共用同一個舊分析轉接器；此時由轉接器切換分類，不得重複掛載或重新設定父容器。
+外殼會將每個唯一畫面固定掛載於同一個 `Stack`，切換路由時只改變可見狀態。這可避免圖表等昂貴子控制項在導覽時被銷毀重建，並減少 Flet 控制項生命週期變動。PR #4（Analysis Workspace Migration）之後，每個分析路由對應各自獨立的 dedicated view 實例（`CompressorView` / `EvaporatorView` / `CondenserView` / `PsychrometricsView` / `ThermoDiagramView`），彼此互不共享父容器；`AppShell` 不需要知道任何 analysis category 的細節，只依 `route.key` 決定要顯示哪一個已掛載的 view。
 
 ## 導覽契約
 
@@ -44,11 +44,12 @@
 
 - 性質查詢工作區將既有的模式、流體、參考狀態及性質控制項組合成計算設定、已知條件、選用廣延性質、結果與操作區域。
 - 通用狀態查詢求解器接受兩個獨立性質。在求解器支援第三條件限制前，必須隱藏第三列輸入及新增入口；支援的性質選單和值／單位控制項應排列於對齊的響應式欄位。
-- HVAC 分析計算仍由既有 `analysis_modules` 註冊，並由 `AnalysisTab` 派送。外殼選擇路由分類，且只呈現該分類實際註冊的操作。已選取的模式必須有明顯的視覺狀態；濕空氣模式亦須以文字標明目前模式。
-- 濕空氣計算與圖表產生仍留在既有轉接器／模組。
-- 未來可逐步將 `ThermoPropertiesView`、壓縮機／蒸發器／冷凝器畫面、圖表轉接器及狀態點轉接器從舊容器中抽離。遷移期間不得複製既有計算行為。
-
-目前程式仍使用舊版 `PropertyTab`，並由共用 `AnalysisTab` 轉接多個路由。這是遷移界線，不代表可以把新的領域計算加入畫面控制項。
+- HVAC 分析計算仍由既有 `analysis_modules` 註冊，改由各自 dedicated view 內的 `AnalysisModuleAdapter` 派送計算與結果呈現；adapter 只認得 `AnalysisDefinition`（`key` + `label` + `input_view` + `calculate` 契約），完全不知道特定分類的存在，因此新增一種既有分析工具不需修改 adapter，只需提供新的 `AnalysisDefinition` 清單。`AnalysisDefinition.calculate` 一律是統一簽章 `Callable[[bool], str]`；任何模組專屬的呼叫慣例（例如 `PsyModule` 需要的 `mode_key`）完全由該模組自己在 `get_analysis_definitions()` 回傳的 `calc_func` 建構時吸收完成（見 `PsyModule._calculate_tdb_twb` / `_calculate_tdb_rh`），`Flet_ui/ui/analysis_definition.py` 的 `definitions_from_module()` 這個 generic factory 本身不判斷、不 import、也不知道任何特定模組的計算模式或呼叫慣例——新增一種分析類別不需要修改這個 factory 或 adapter。`AnalysisModuleAdapter.__init__()` 會在彙整多個模組的定義時做全域 key 驗證：若不同模組間出現重複的 `analysis_id`，立即拋出 `ValueError`（fail fast），不允許 silent overwrite。畫面組成本身由共用的 `AnalysisWorkspace` presentation 殼負責（Header + ToolSelector + Input/Result 並排 + ActionBar），dedicated view 只負責把既有模組接上這個殼。已選取的工具必須有明顯的視覺狀態（`ToolSelector`）。
+- 濕空氣計算的雙模式（乾濕球 / 乾球+RH）仍共用 `PsyModule` 同一組輸入容器並以 `configure_ui_for_mode` 切換欄位可見性；dispatch 只依賴穩定的 mode key（`PsyModule.MODE_TDB_TWB` / `MODE_TDB_RH`，對應 `AnalysisDefinition.key`），不依賴顯示 label —— 翻譯或改文案不會影響計算路徑或 UI 模式切換。`PsychrometricsView` 傳給 `configure_ui_for_mode` 的一律是 `definition.key`；legacy `AnalysisTab` 仍可能傳入顯示 label，`PsyModule._resolve_mode_key()` 會將其正規化為穩定 key 後才判斷，只是相容層，不影響新架構的 key/label 分離。這個特例被限制在 `PsychrometricsView` / `PsyModule` 內部，不會外洩到共用的 `DedicatedAnalysisView` 基底或 `AnalysisModuleAdapter`。
+- P-h／T-s 圖表路由（`ph_chart` / `ts_chart`）共用同一個 `ThermoDiagramView` 實例與底層 `ThermoDiagramModule`。`AppShell.navigate()` 提供 generic 的 route-activation 協定：若目標畫面實作了 `activate_route(route_key)`，導覽完成後會呼叫它，讓畫面自行處理 route-local 的啟用邏輯；`ThermoDiagramView.activate_route()` 內部持有自己的 `route → mode` 對照表並呼叫既有的 `set_mode("ph"|"ts")`。`flet_app.py`（組合根）及 `AppShell` 完全不知道 `ph_chart`/`ts_chart` 對應 `P-h`/`T-s`，也不會直接呼叫 `set_diagram_type()` 或 `set_mode()`。熱力圖使用專屬的「繪圖」按鈕（非共用 `AnalysisWorkspace` 的執行按鈕），因此其 view 不掛載 `AnalysisWorkspace`。
+- 濕空氣計算與圖表產生仍留在既有轉接器／模組；dedicated view 一律透過既有模組實例呼叫，不得複製計算邏輯。
+- `Flet_ui/ui_components/analysis_tab.py` 內的舊版 `AnalysisTab` 已標示為 LEGACY／COMPATIBILITY，production route 不再使用它；僅因既有 characterization tests 仍直接建構並驗證其行為而保留，待這些測試遷移完成後計畫一併移除。
+- `ThermoDiagramModule` 提供 public `perform_plot(event=None)` 作為唯一的繪圖執行入口；plot button 的 `on_click`（`_on_plot_click`）與 `ThermoDiagramView.perform_calculation()`（供 AppShell Ctrl+Enter 捷徑使用）都轉交給這個 public method，確保兩條觸發路徑最終走同一段邏輯。`_on_plot_click` 保留僅為與既有 Flet button 事件簽章相容，內部直接委派給 `perform_plot`，dedicated view 不再直接依賴 private API。
 
 ## 狀態歸屬
 
@@ -58,7 +59,7 @@
 
 - **呈現狀態**：控制項的選取／可見狀態及欄位驗證。
 - **導覽狀態**：穩定的路由鍵值。
-- **單位狀態**：每個輸入列各自選取的單位，以及獨立的全域輸出偏好。
+- **單位狀態**：每個輸入列各自選取的單位，以及獨立的全域輸出偏好。全域輸出單位（SI / Imperial）只影響「結果如何呈現」，絕不覆寫任何 input 欄位既有的 value 或 unit；`AnalysisModuleAdapter.set_output_unit_system()` 只更新 `output_unit_system` 並在已有成功結果時以新偏好重新計算/呈現，不會呼叫任何會改寫 input 欄位的 hook。
 - **熱力狀態**：以標準單位保存的計算結果。
 - **分析狀態**：由個別分析模組持有的輸入及結果。
 

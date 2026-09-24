@@ -157,7 +157,7 @@ def test_psychrometric_relative_humidity_renders_percentage() -> None:
     module.configure_ui_for_mode(mode)
     module.all_entries["psy_rh"]["val"].value = "88"
 
-    output = module.calculate_psy(use_imperial=False, mode_name=mode)
+    output = module.calculate_psy(use_imperial=False, mode_key=mode)
 
     assert "88.00 %" in output
     assert "0.88 %" not in output
@@ -174,7 +174,7 @@ def test_psychrometric_ui_matches_trusted_model_contract() -> None:
     module.all_entries["psy_tdb"]["val"].value = "15.5"
     module.all_entries["psy_rh"]["val"].value = "88"
 
-    output = module.calculate_psy(use_imperial=False, mode_name=mode)
+    output = module.calculate_psy(use_imperial=False, mode_key=mode)
 
     assert "大氣壓力 (Atmospheric Pressure)" in output
     assert "101325.0000 Pa" in output

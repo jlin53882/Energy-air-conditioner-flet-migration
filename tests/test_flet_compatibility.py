@@ -1,6 +1,8 @@
 """Flet 1.0 migration boundary 的 regression test。"""
 
 import asyncio
+import ast
+from dataclasses import replace
 from pathlib import Path
 from subprocess import run
 from sys import executable
@@ -16,7 +18,9 @@ from Flet_ui.ui_components.analysis_modules.psy_module import PsyModule
 from Flet_ui.ui_components.analysis_modules import thermo_diagram_module
 from Flet_ui.ui_components.analysis_modules.thermo_diagram_module import ThermoDiagramModule
 from Flet_ui.ui_components.analysis_tab import AnalysisTab
+from Flet_ui.ui.analysis_module_adapter import AnalysisModuleAdapter
 from Flet_ui.ui.state import WorkspaceState
+from Flet_ui.ui.views.thermo_diagram_view import ThermoDiagramView
 from Flet_ui.ui_components.property_tab import PropertyTab
 from Flet_ui.ui_components.unit.HVACAnalyzer import HVACAnalyzer
 from Flet_ui.ui_components.unit.PropertyFormatter import PropertyFormatter
@@ -432,8 +436,8 @@ def test_analysis_hides_generic_execute_button_for_thermodiagram() -> None:
     assert analysis_tab.calc_button_container.visible is True
 
 
-def test_chart_routes_hide_the_legacy_analysis_result_panel() -> None:
-    """確認 P-h 與 T-s 圖頁隱藏舊共用結果面板，其他分析仍保留面板。
+def test_chart_routes_use_dedicated_diagram_view_without_shared_execute_button() -> None:
+    """確認 P-h 與 T-s 圖頁使用專屬 ThermoDiagramView，且分析頁保留共用執行按鈕與結果卡。
 
 回傳：
     無。
@@ -444,14 +448,85 @@ def test_chart_routes_hide_the_legacy_analysis_result_panel() -> None:
 
     for route_key in ("ph_chart", "ts_chart"):
         shell.navigate(route_key)
-        analysis_tab = shell.views[route_key]
-        assert analysis_tab.result_container.visible is False
-        assert analysis_tab.controls[-2].visible is False
+        diagram_view = shell.views[route_key]
+        assert isinstance(diagram_view, ThermoDiagramView)
+        # 熱力圖使用專屬繪圖按鈕，不應該再有共用的 AnalysisWorkspace 執行按鈕。
+        assert not hasattr(diagram_view, "workspace")
 
     shell.navigate("compressor")
-    analysis_tab = shell.views["compressor"]
-    assert analysis_tab.result_container.visible is True
-    assert analysis_tab.controls[-2].visible is True
+    compressor_view = shell.views["compressor"]
+    assert compressor_view.workspace.action_bar.visible is True
+    assert compressor_view.workspace.result_card.visible is True
+
+
+def test_diagram_route_activation_is_owned_by_diagram_view() -> None:
+    """F4 regression：flet_app.py 不再特判 ph_chart/ts_chart，改由 View 自行處理。
+
+    確認：
+    1. AppShell 的 generic route-activation 協定（``activate_route``）
+       確實驅動了 ph_chart -> P-h、ts_chart -> T-s 的模式切換。
+    2. flet_app.py 原始碼中不再出現 diagram-specific route dispatch
+       （``route_key == "ph_chart"`` / ``ts_chart``，或 dict 形式的
+       ``route_to_mode`` 對照表），確保 Composition Root 不知道 diagram
+       internals；同時排除掉 ``ThermoDiagramView`` 內部合法持有這張表
+       的情形（該檔案 import 路徑不同，不會被這裡掃到）。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+
+    shell.navigate("ph_chart")
+    diagram_view = shell.views["ph_chart"]
+    assert diagram_view.mode == "ph"
+    assert diagram_view.module.diagram_dd.value == "P-h"
+
+    shell.navigate("ts_chart")
+    assert diagram_view.mode == "ts"
+    assert diagram_view.module.diagram_dd.value == "T-s"
+
+    flet_app_source = (
+        Path(__file__).resolve().parent.parent / "Flet_ui" / "flet_app.py"
+    ).read_text(encoding="utf-8")
+    # 允許 views dict 內合法出現 "ph_chart"/"ts_chart" 作為 route -> view
+    # 註冊 key；要排除的是曾經存在的 diagram-mode 特判／dispatch 邏輯。
+    assert 'route_key == "ph_chart"' not in flet_app_source
+    assert 'route_key == "ts_chart"' not in flet_app_source
+    assert "route_to_mode" not in flet_app_source
+    assert "set_diagram_type(" not in flet_app_source
+    assert ".set_mode(" not in flet_app_source
+    assert "on_route_change" not in flet_app_source
+
+
+def test_analysis_module_adapter_rejects_duplicate_keys_across_modules() -> None:
+    """F5 regression：不同模組間出現重複 analysis_id 必須 fail fast，不得 silent overwrite。
+
+回傳：
+    無。"""
+
+    class _FakeModuleA:
+        def get_analysis_definitions(self) -> dict:
+            return {
+                "Fake A": {
+                    "analysis_id": "fake.shared_key",
+                    "ui": ft.Container(),
+                    "calc_func": lambda use_imperial: "A",
+                }
+            }
+
+    class _FakeModuleB:
+        def get_analysis_definitions(self) -> dict:
+            return {
+                "Fake B": {
+                    "analysis_id": "fake.shared_key",
+                    "ui": ft.Container(),
+                    "calc_func": lambda use_imperial: "B",
+                }
+            }
+
+    with pytest.raises(ValueError, match="Duplicate AnalysisDefinition key"):
+        AnalysisModuleAdapter([_FakeModuleA(), _FakeModuleB()])
 
 
 def test_chart_route_change_clears_previous_plot_contents() -> None:
@@ -463,10 +538,8 @@ def test_chart_route_change_clears_previous_plot_contents() -> None:
     page = DummyPage()
     flet_main(page)
     shell = page.controls[0]
-    module = next(
-        item for item in shell.views["ph_chart"].modules_to_load
-        if isinstance(item, ThermoDiagramModule)
-    )
+    diagram_view = shell.views["ph_chart"]
+    module = diagram_view.module
 
     for source_route, target_route, target_diagram in (
         ("ph_chart", "ts_chart", "T-s"),
@@ -530,8 +603,8 @@ def test_app_shell_replaces_top_level_tabs_and_exposes_implemented_routes() -> N
     assert shell.route_header.controls[0].value == "狀態查詢"
 
 
-def test_navigation_routes_update_analysis_category_and_chart_choice() -> None:
-    """確認路由切換選取既有分析分類與圖表，而非依顯示文字建立假功能。
+def test_navigation_routes_expose_dedicated_views_and_chart_choice() -> None:
+    """確認路由切換命中各自的 dedicated view，而非共用單一 AnalysisTab。
 
 回傳：
     無。"""
@@ -541,26 +614,43 @@ def test_navigation_routes_update_analysis_category_and_chart_choice() -> None:
 
     workspace_content = shell.workspace.content
     shell.navigate("compressor")
-    assert shell.views["compressor"].active_category == "compressor"
-    assert shell.views["compressor"].analysis_dd.value in shell.views["compressor"]._active_analysis_names
+    compressor_view = shell.views["compressor"]
+    assert compressor_view.active_key in {key for key, _ in compressor_view.adapter.tool_items()}
     assert shell.workspace.content is workspace_content
     assert shell.views["thermo_properties"].visible is False
-    assert shell.views["compressor"].visible is True
-    assert shell.views["compressor"].module_nav.controls
+    assert compressor_view.visible is True
+    assert compressor_view.tool_selector.controls
 
     shell.navigate("ph_chart")
-    chart_module = next(
-        module for module in shell.views["ph_chart"].modules_to_load
-        if isinstance(module, ThermoDiagramModule)
-    )
-    assert chart_module.diagram_dd.value == "P-h"
+    chart_view = shell.views["ph_chart"]
+    assert chart_view.module.diagram_dd.value == "P-h"
 
     shell.navigate("ts_chart")
-    assert chart_module.diagram_dd.value == "T-s"
+    assert chart_view.module.diagram_dd.value == "T-s"
 
 
-def test_analysis_navigation_deduplicates_panels_and_identifies_selected_mode() -> None:
-    """確認跨頁後分析容器不重複，並清楚顯示濕空氣模式選取狀態。
+def test_dedicated_analysis_views_are_distinct_instances() -> None:
+    """禁止所有 analysis routes 又指向同一個 generic view。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+
+    compressor_view = shell.views["compressor"]
+    evaporator_view = shell.views["evaporator"]
+    condenser_view = shell.views["condenser"]
+    psychrometrics_view = shell.views["psychrometrics"]
+
+    assert compressor_view is not evaporator_view
+    assert compressor_view is not condenser_view
+    assert compressor_view is not psychrometrics_view
+    assert evaporator_view is not condenser_view
+
+
+def test_psychrometrics_view_retains_state_across_route_navigation() -> None:
+    """確認跨頁後濕空氣分析容器不重複，且切換模式狀態於路由間保留。
 
     回傳：
         無。
@@ -572,23 +662,70 @@ def test_analysis_navigation_deduplicates_panels_and_identifies_selected_mode() 
 
     for route in ("compressor", "psychrometrics", "evaporator", "condenser", "psychrometrics"):
         shell.navigate(route)
-        controls = tab.controls_stack.controls
+        controls = tab.input_stack.controls
         assert len(controls) == len({id(control) for control in controls})
-        assert sum(bool(control.visible) for control in controls) == 1
 
-    first_mode = tab._active_analysis_names[0]
-    second_mode = tab._active_analysis_names[1]
-    assert tab.analysis_mode_status.visible is True
-    assert first_mode in tab.analysis_mode_status.value
-    buttons = tab.module_nav.controls
-    assert buttons[0].style.bgcolor != buttons[1].style.bgcolor
+    tool_items = tab.adapter.tool_items()
+    first_key, _first_label = tool_items[0]
+    second_key, second_label = tool_items[1]
+    assert tab.active_key == first_key
 
-    tab.module_nav.controls[1].on_click(SimpleNamespace())
-    assert second_mode in tab.analysis_mode_status.value
-    assert tab.module_nav.controls[0].style.bgcolor != tab.module_nav.controls[1].style.bgcolor
+    tab.tool_selector._handle_select(second_key)
+    assert tab.active_key == second_key
+    assert tab.psy_module.all_entries["psy_rh"]["ui_row"].visible is (
+        "已知乾球與相對濕度" in second_label
+    )
 
     shell.navigate("compressor")
-    assert tab.analysis_mode_status.visible is False
+    assert tab.active_key == second_key
+
+
+def test_route_switching_retains_valid_result_and_invalidates_on_tool_switch() -> None:
+    """§26/§27 regression：route 切換保留各自畫面的合法結果；同畫面內切換 tool 才清空結果。
+
+    情境（依 final-hardening 規格 §26 Route State）：
+    1. Evaporator 計算出結果 A。
+    2. 導覽到 Condenser 並計算出結果 B（不同 view/adapter 的獨立狀態）。
+    3. 導覽回 Evaporator：結果 A 必須原封不動保留（route-retained valid
+       result），不會被 Condenser 的計算或路由切換清空。
+    4. 在同一個 Psychrometrics 畫面內切換 tool：stale 的舊 tool 結果不可
+       繼續顯示為新 tool 的結果（正確的 stale invalidation，對應 §27
+       Tool Switch Result Contract）。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+
+    shell.navigate("evaporator")
+    evaporator_view = shell.views["evaporator"]
+    evaporator_view.workspace.action_bar.content.on_click(SimpleNamespace())
+    assert evaporator_view.adapter.result_panel.status == "success"
+    evaporator_result_a = evaporator_view.adapter.result_panel._body.controls[1].value
+
+    shell.navigate("condenser")
+    condenser_view = shell.views["condenser"]
+    condenser_view.workspace.action_bar.content.on_click(SimpleNamespace())
+    assert condenser_view.adapter.result_panel.status == "success"
+
+    shell.navigate("evaporator")
+    assert evaporator_view.adapter.result_panel.status == "success"
+    assert evaporator_view.adapter.result_panel._body.controls[1].value == evaporator_result_a
+
+    # 切換 tool 必須清空目前畫面的舊結果（select() 已設 status="empty"）；
+    # evaporator 目前只有單一 tool，因此改用可切換的 psychrometrics 驗證。
+    shell.navigate("psychrometrics")
+    psychrometrics_view = shell.views["psychrometrics"]
+    psychrometrics_view.workspace.action_bar.content.on_click(SimpleNamespace())
+    assert psychrometrics_view.adapter.result_panel.status == "success"
+
+    tool_items = psychrometrics_view.adapter.tool_items()
+    other_key = next(key for key, _ in tool_items if key != psychrometrics_view.active_key)
+    psychrometrics_view.tool_selector._handle_select(other_key)
+
+    assert psychrometrics_view.active_key == other_key
+    assert psychrometrics_view.adapter.result_panel.status == "empty"
 
 
 def test_property_query_hides_unsupported_third_condition_and_aligns_controls() -> None:
@@ -712,8 +849,12 @@ def test_global_output_unit_switch_renders_new_metrics_without_mutating_inputs(m
     assert property_tab.result_panel.status == "error"
 
 
-def test_analysis_local_unit_toggle_updates_the_global_preference() -> None:
-    """確認分析頁沿用的單位切換會同步更新全域偏好。
+def test_global_unit_toggle_propagates_to_dedicated_analysis_views() -> None:
+    """確認全域單位切換會同步套用至各 dedicated analysis view 的 adapter。
+
+    PR #4 之後 dedicated view 不再擁有各自的 output_unit_toggle；
+    ``WorkspaceState.output_unit_system`` 是唯一的 source of truth，
+    透過 AppShell 頂部共用的 ``unit_toggle`` 切換。
 
 回傳：
     無。"""
@@ -721,14 +862,209 @@ def test_analysis_local_unit_toggle_updates_the_global_preference() -> None:
     flet_main(page)
     shell = page.controls[0]
     analysis_view = shell.views["compressor"]
-    analysis_view.output_unit_toggle.selected = ["Imperial"]
-    analysis_view.output_unit_toggle.on_change(
-        SimpleNamespace(control=analysis_view.output_unit_toggle)
-    )
+
+    shell.unit_toggle.selected = ["Imperial"]
+    shell.unit_toggle.on_change(SimpleNamespace(control=shell.unit_toggle))
 
     assert shell.state.output_unit_system == "Imperial"
     assert shell.unit_toggle.selected == ["Imperial"]
     assert shell.views["thermo_properties"].output_unit_system == "Imperial"
+    assert analysis_view.adapter.output_unit_system == "Imperial"
+
+
+def test_global_output_unit_change_preserves_compressor_input_value_and_unit() -> None:
+    """確認全域輸出單位切換不會竄改壓縮機大氣壓力等 input 的 value / unit。
+
+    Global SI/Imperial 只是「結果呈現」偏好，不是 force input units；
+    使用者輸入的數值與所選單位必須維持不變，除非使用者自己修改 input unit。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+    compressor_view = shell.views["compressor"]
+    module = compressor_view.adapter.modules[0]
+
+    atm = module.all_entries["cr_atm_p"]
+    atm["val"].value = "99.5"
+    atm["unit"].value = "kPa"
+
+    shell.unit_toggle.selected = ["Imperial"]
+    shell.unit_toggle.on_change(SimpleNamespace(control=shell.unit_toggle))
+
+    assert atm["val"].value == "99.5"
+    assert atm["unit"].value == "kPa"
+    assert compressor_view.adapter.output_unit_system == "Imperial"
+
+    shell.unit_toggle.selected = ["SI"]
+    shell.unit_toggle.on_change(SimpleNamespace(control=shell.unit_toggle))
+
+    assert atm["val"].value == "99.5"
+    assert atm["unit"].value == "kPa"
+    assert compressor_view.adapter.output_unit_system == "SI"
+
+
+def test_psychrometric_dispatch_does_not_depend_on_display_label() -> None:
+    """確認濕空氣 UI 模式切換與計算 dispatch 只依賴穩定 key，不依賴顯示 label。
+
+    F3 regression：即使把 PsychrometricsView 目前選取的 definition.label
+    改成任意自訂文字（模擬未來改文案／翻譯），只要 definition.key 仍是
+    ``psychrometrics.tdb_rh``，RH 欄位的可見狀態與計算路徑都必須不變。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+    psychrometrics_view = shell.views["psychrometrics"]
+    adapter = psychrometrics_view.adapter
+
+    rh_key = PsyModule.MODE_TDB_RH
+    twb_key = PsyModule.MODE_TDB_TWB
+    assert {rh_key, twb_key} == {definition.key for definition in adapter.definitions}
+
+    # 惡意模擬：把 adapter 內部快取的 definition 換成 label 被改掉（但 key
+    # 不變）的版本，確認 dispatch 完全不受影響。
+    renamed = {
+        key: (
+            replace(definition, label="Renamed / Translated Label")
+            if key == rh_key
+            else definition
+        )
+        for key, definition in adapter._by_key.items()
+    }
+    adapter._by_key = renamed
+    adapter.definitions = list(renamed.values())
+
+    psychrometrics_view._handle_tool_change(rh_key)
+
+    assert adapter.active_key == rh_key
+    module = psychrometrics_view.psy_module
+    assert module.all_entries["psy_rh"]["ui_row"].visible is True
+    assert module.all_entries["psy_twb"]["ui_row"].visible is False
+
+    module.all_entries["psy_tdb"]["val"].value = "25"
+    module.all_entries["psy_rh"]["val"].value = "50"
+    psychrometrics_view.workspace.action_bar.content.on_click(SimpleNamespace())
+
+    assert adapter.result_panel.status == "success"
+
+
+def test_psychrometric_definitions_expose_uniform_calculate_callable() -> None:
+    """F6 regression：generic factory 不需要知道 psychrometric/mode_key。
+
+    直接對 ``definition.calculate`` 呼叫 ``calculate(False)``，不透過
+    adapter 或 ``definitions_from_module()`` 做任何額外綁定，證明
+    ``PsyModule`` 已經自行把 ``mode_key`` 這個 module-specific 參數吸收
+    完畢，暴露出來的就是統一的 ``Callable[[bool], str]``。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+    psychrometrics_view = shell.views["psychrometrics"]
+    adapter = psychrometrics_view.adapter
+
+    rh_definition = adapter._by_key[PsyModule.MODE_TDB_RH]
+    twb_definition = adapter._by_key[PsyModule.MODE_TDB_TWB]
+
+    module = psychrometrics_view.psy_module
+    module.all_entries["psy_tdb"]["val"].value = "25"
+    module.all_entries["psy_twb"]["val"].value = "20"
+    module.all_entries["psy_rh"]["val"].value = "88"
+
+    # RH definition 必須真的以 RH 模式計算（忽略 TWB 欄位），TWB definition
+    # 必須真的以 TWB 模式計算（忽略 RH 欄位）——確認兩個 closure 真的各自
+    # 綁定到不同的 mode key，不是碰巧都能算出結果就通過。
+    rh_output = rh_definition.calculate(False)
+    twb_output = twb_definition.calculate(False)
+    assert isinstance(rh_output, str)
+    assert isinstance(twb_output, str)
+    assert "大氣壓力" in rh_output
+    assert "大氣壓力" in twb_output
+    assert rh_output != twb_output
+
+    direct_rh = module.calculate_psy(False, mode_key=PsyModule.MODE_TDB_RH)
+    direct_twb = module.calculate_psy(False, mode_key=PsyModule.MODE_TDB_TWB)
+    assert rh_output == direct_rh
+    assert twb_output == direct_twb
+
+
+def test_analysis_definition_factory_does_not_reference_calculation_mode() -> None:
+    """F6 regression：generic factory *程式碼*（非 docstring）不得判斷 calculation_mode。
+
+    依 final-hardening 規格 §21：docstring 內為了說明背景而提及
+    ``PsyModule``/``mode_key`` 是允許的相容性說明，但 *production
+    generic behavior* 不得依賴這些概念。這裡用 ``ast`` 剝除所有
+    docstring/字串常數只保留可執行的程式碼結構後，確認
+    ``calculation_mode``、``mode_key``、``psychrometric``、
+    ``PsyModule``、``isinstance`` 都不會以任何識別字或字串字面值的形式
+    出現在實際執行邏輯裡。
+
+回傳：
+    無。"""
+    source_path = (
+        Path(__file__).parents[1] / "Flet_ui" / "ui" / "analysis_definition.py"
+    )
+    source = source_path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    forbidden_tokens = {"calculation_mode", "mode_key", "psychrometric", "PsyModule"}
+
+    docstring_node_ids: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            docstring = ast.get_docstring(node, clean=False)
+            if docstring is not None:
+                first_stmt = node.body[0] if node.body else None
+                if (
+                    isinstance(first_stmt, ast.Expr)
+                    and isinstance(first_stmt.value, ast.Constant)
+                ):
+                    docstring_node_ids.add(id(first_stmt.value))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in forbidden_tokens:
+            raise AssertionError(f"生產程式碼中發現禁止識別字：{node.id}")
+        if isinstance(node, ast.Attribute) and node.attr in forbidden_tokens:
+            raise AssertionError(f"生產程式碼中發現禁止屬性存取：{node.attr}")
+        if isinstance(node, ast.keyword) and node.arg in forbidden_tokens:
+            raise AssertionError(f"生產程式碼中發現禁止關鍵字參數：{node.arg}")
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) in docstring_node_ids:
+                continue
+            lowered = node.value.lower()
+            if any(token.lower() in lowered for token in forbidden_tokens):
+                raise AssertionError(f"生產程式碼中發現禁止字串字面值：{node.value!r}")
+
+
+def test_generic_adapter_only_requires_uniform_calculate_callable() -> None:
+    """F6 regression：adapter 對任意假模組只要求統一 calculate 簽章。
+
+    用一個完全與 psychrometric 無關的 fake module 建立
+    ``AnalysisModuleAdapter``，確認不提供 ``calculation_mode`` 也能正常
+    完成 tool-selection 與 calculate dispatch，證明 generic adapter
+    contract 真的只要求 ``Callable[[bool], str]``。
+
+回傳：
+    無。"""
+
+    class _FakeModule:
+        def get_analysis_definitions(self) -> dict:
+            return {
+                "Fake Tool": {
+                    "analysis_id": "fake.generic_tool",
+                    "ui": ft.Container(),
+                    "calc_func": lambda use_imperial: "fake-ok",
+                }
+            }
+
+    adapter = AnalysisModuleAdapter([_FakeModule()])
+    assert adapter.active_key == "fake.generic_tool"
+    adapter.calculate()
+    assert adapter.result_panel.status == "success"
 
 
 def test_workspace_state_remembers_input_units_by_row_and_property() -> None:

@@ -22,6 +22,19 @@ from .analysis_modules.thermo_diagram_module import ThermoDiagramModule
 # from .analysis_modules.hvac_expansion_valve_module import ExpansionValveModule
 
 class AnalysisTab(ft.Column):
+    """[LEGACY / COMPATIBILITY] 已被 PR #4 dedicated analysis views 取代的舊共用容器。
+
+    PR #4（Analysis Workspace Migration）之後，production route（見
+    ``Flet_ui/flet_app.py``）不再使用這個類別；`compressor` / `evaporator` /
+    `condenser` / `psychrometrics` / `ph_chart` / `ts_chart` 皆改為使用
+    ``Flet_ui/ui/views/*_view.py`` 提供的 dedicated view。
+
+    保留此類別僅因既有 characterization tests（例如
+    ``tests/test_flet_compatibility.py``、``tests/characterization/
+    test_phase6c_analysis_registry.py``）仍直接建構並驗證它的行為；
+    不接受新功能，未來計畫隨這些測試遷移完成後一併移除。
+    """
+
     def __init__(self, unit_converter: UnitConverter, page: ft.Page, 
                  analyzer: HVACAnalyzer, psy_calculator: PsychrometricCalculator,
                  state_calculator: ThermoStateCalculator,
@@ -330,19 +343,20 @@ class AnalysisTab(ft.Column):
             # 1. 找到當前選中的功能定義
             selected_name = self.analysis_dd.value
             current_definition = self.analysis_map[selected_name]
-            
+
             # 2. 獲取要呼叫的特定計算函式
             calc_func = current_definition["calc_func"]
-            
+
             # 3. 獲取輸出單位
             use_imperial = ("Imperial" in self.output_unit_toggle.selected)
-            
-            # 4. 呼叫宣告的計算模式；標籤永遠不控制 dispatch。
-            if current_definition["calculation_mode"] == "psychrometric":
-                result_string = calc_func(use_imperial, mode_name=selected_name)
-            else:
-                result_string = calc_func(use_imperial)
-            
+
+            # 4. 呼叫統一簽章 calc_func(use_imperial) -> str。每個模組的
+            #    calc_func 都已在該模組自己的 get_analysis_definitions()
+            #    完成任何模組專屬參數的綁定（例如 PsyModule 的
+            #    mode_key），AnalysisTab 不需要知道也不判斷
+            #    calculation_mode 或任何特定模組的呼叫慣例。
+            result_string = calc_func(use_imperial)
+
             # 5. 顯示結果
             self.result_text.value = result_string
             self.result_text.color = ft.Colors.BLACK
