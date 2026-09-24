@@ -5,6 +5,27 @@ from collections.abc import Mapping
 import flet as ft
 
 from ..theme import TOKENS
+from .metric_tile import MetricTile
+from .status_badge import status_style
+
+# 指標鍵值維持計算轉接器使用的英文識別字；此表只決定畫面標籤與圖示。
+METRIC_PRESENTATION: dict[str, tuple[str, ft.IconData]] = {
+    "Temperature": ("溫度 T", ft.Icons.THERMOSTAT_OUTLINED),
+    "Pressure": ("壓力 P", ft.Icons.SPEED_OUTLINED),
+    "Enthalpy": ("比焓 h", ft.Icons.LOCAL_FIRE_DEPARTMENT_OUTLINED),
+    "Entropy": ("比熵 s", ft.Icons.SCATTER_PLOT_OUTLINED),
+    "Density": ("密度 ρ", ft.Icons.GRAIN_OUTLINED),
+    "Specific Volume": ("比容 v", ft.Icons.VIEW_IN_AR_OUTLINED),
+    "Quality": ("乾度 x", ft.Icons.WATER_DROP_OUTLINED),
+}
+
+METADATA_LABELS: dict[str, str] = {
+    "Fluid": "物質",
+    "Engine": "引擎",
+    "Reference": "參考狀態",
+    "Input units": "輸入單位",
+    "Output": "輸出",
+}
 
 
 class ResultPanel(ft.Container):
@@ -18,16 +39,12 @@ class ResultPanel(ft.Container):
 回傳：
     無。"""
         self.status = "empty"
+        self.title = ""
+        self.message = ""
         self.metrics: dict[str, str] = {}
         self.metadata: dict[str, str] = {}
         self._body = ft.Column(spacing=TOKENS.spacing_md)
-        super().__init__(
-            content=self._body,
-            padding=TOKENS.spacing_lg,
-            bgcolor=TOKENS.surface,
-            border=ft.Border.all(1, TOKENS.border),
-            border_radius=ft.BorderRadius.all(TOKENS.radius_md),
-        )
+        super().__init__(content=self._body)
         self.set_status("empty", "尚未計算", "輸入條件後執行計算。")
 
     def set_status(self, status: str, title: str, message: str = "") -> None:
@@ -43,16 +60,46 @@ class ResultPanel(ft.Container):
         if status not in self.SUPPORTED_STATES:
             raise ValueError(f"Unsupported result state: {status}")
         self.status = status
-        icon, color = {
-            "empty": (ft.Icons.INFO_OUTLINE, TOKENS.info),
-            "loading": (ft.Icons.HOURGLASS_TOP, TOKENS.info),
-            "success": (ft.Icons.CHECK_CIRCLE_OUTLINE, TOKENS.success),
-            "warning": (ft.Icons.WARNING_AMBER_OUTLINED, TOKENS.warning),
-            "error": (ft.Icons.ERROR_OUTLINE, TOKENS.error),
-        }[status]
+        self.title = title
+        self.message = message
+        icon, color, soft, _label = status_style(status)
+        indicator: ft.Control
+        if status == "loading":
+            indicator = ft.ProgressRing(width=18, height=18, stroke_width=2.5, color=color)
+        else:
+            indicator = ft.Icon(icon, color=color, size=20)
         self._body.controls = [
-            ft.Row([ft.Icon(icon, color=color), ft.Text(title, size=TOKENS.section_title, weight=ft.FontWeight.W_600)]),
-            ft.Text(message, size=TOKENS.body, color=ft.Colors.BLUE_GREY_700) if message else ft.Container(),
+            ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Container(
+                            content=indicator,
+                            width=36,
+                            height=36,
+                            alignment=ft.Alignment.CENTER,
+                            bgcolor=ft.Colors.WHITE,
+                            border_radius=ft.BorderRadius.all(TOKENS.radius_pill),
+                        ),
+                        ft.Column(
+                            [
+                                ft.Text(title, size=TOKENS.body + 1, weight=ft.FontWeight.W_600,
+                                        color=TOKENS.text_primary),
+                                ft.Text(message, size=TOKENS.caption, color=TOKENS.text_secondary,
+                                        visible=bool(message)),
+                            ],
+                            spacing=2,
+                            tight=True,
+                            expand=True,
+                        ),
+                    ],
+                    spacing=TOKENS.spacing_sm + 4,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                padding=ft.Padding.symmetric(horizontal=14, vertical=12),
+                bgcolor=soft,
+                border=ft.Border.all(1, ft.Colors.with_opacity(0.25, color)),
+                border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
+            )
         ]
 
     def set_metrics(
@@ -62,7 +109,7 @@ class ResultPanel(ft.Container):
         *,
         status_detail: str | None = None,
     ) -> None:
-        """只呈現計算結果 介接器 實際提供的指標與中繼資料。
+        """只呈現計算結果轉接器實際提供的指標與中繼資料。
 
 參數：
     metrics: 指標名稱與格式化值的對應。
@@ -74,25 +121,40 @@ class ResultPanel(ft.Container):
         self.metrics = dict(metrics)
         self.metadata = dict(metadata or {})
         self.set_status("success", "計算完成", status_detail or "結果由目前計算服務提供。")
-        cards = [
-            ft.Container(
-                content=ft.Column(
-                    [ft.Text(label, size=TOKENS.caption, color=ft.Colors.BLUE_GREY_600),
-                     ft.Text(value, size=TOKENS.metric, weight=ft.FontWeight.W_600, color=TOKENS.primary)],
-                    spacing=TOKENS.spacing_xs,
-                ),
-                padding=TOKENS.spacing_md,
-                bgcolor=TOKENS.surface_variant,
-                border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
-                col={"xs": 12, "sm": 6, "lg": 4},
+        tiles = []
+        for index, (key, value) in enumerate(self.metrics.items()):
+            label, icon = METRIC_PRESENTATION.get(key, (key, ft.Icons.DATA_USAGE))
+            tiles.append(
+                MetricTile(
+                    label,
+                    value,
+                    icon=icon,
+                    accent=TOKENS.primary if index < 2 else TOKENS.accent,
+                )
             )
-            for label, value in self.metrics.items()
-        ]
-        self._body.controls.append(ft.ResponsiveRow(cards, spacing=TOKENS.spacing_sm, run_spacing=TOKENS.spacing_sm))
+        self._body.controls.append(
+            ft.ResponsiveRow(tiles, spacing=TOKENS.spacing_sm, run_spacing=TOKENS.spacing_sm)
+        )
         if self.metadata:
             self._body.controls.append(
-                ft.Text("　·　".join(f"{key}: {value}" for key, value in self.metadata.items()),
-                        size=TOKENS.caption, color=ft.Colors.BLUE_GREY_600)
+                ft.Row(
+                    [
+                        ft.Container(
+                            content=ft.Text(
+                                f"{METADATA_LABELS.get(key, key)}：{value}",
+                                size=TOKENS.caption,
+                                color=TOKENS.text_secondary,
+                            ),
+                            padding=ft.Padding.symmetric(horizontal=10, vertical=4),
+                            bgcolor=TOKENS.surface_muted,
+                            border_radius=ft.BorderRadius.all(TOKENS.radius_pill),
+                        )
+                        for key, value in self.metadata.items()
+                    ],
+                    spacing=TOKENS.spacing_xs + 2,
+                    run_spacing=TOKENS.spacing_xs + 2,
+                    wrap=True,
+                )
             )
 
     def set_error(self, summary: str) -> None:
