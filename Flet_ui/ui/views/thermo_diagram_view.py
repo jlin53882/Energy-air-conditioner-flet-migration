@@ -79,4 +79,4 @@ class ThermoDiagramView(ft.Column):
         回傳：
             無。
         """
-        self.module._on_plot_click(event)
+        self.module.perform_plot(event)

@@ -316,17 +316,22 @@ class ThermoDiagramModule(BaseAnalysisModule):
         if self.parent: self.page.update()
 
     # ======================================================
-    # 2️⃣ 繪圖邏輯：事件觸發 (無變更)
+    # 2️⃣ 繪圖邏輯：事件觸發
     # ======================================================
-    def _on_plot_click(self, e):
-        """使用者按下 [繪圖] 按鈕時
+    def perform_plot(self, event=None) -> None:
+        """執行完整的繪圖流程：更新狀態文字、呼叫計算、處理例外並回復按鈕狀態。
 
-參數：
-    e (未指定型別): 函數輸入值。
+        供 UI 按鈕（``_on_plot_click``）與 dedicated view（見
+        ``ThermoDiagramView.perform_calculation``，供 AppShell 的
+        Ctrl+Enter 捷徑使用）共用的 *public* 執行入口，兩者最終都走這
+        同一條路徑，確保 plot button 與 Ctrl+Enter 行為一致。
 
-回傳：
-    無。"""
-        
+        參數：
+            event: Flet 事件；此處不需讀取事件內容。
+
+        回傳：
+            無。
+        """
         self.result_text.value = "繪製中..."
         self.result_text.color = "blue"
         self.plot_btn.disabled = True
@@ -338,14 +343,24 @@ class ThermoDiagramModule(BaseAnalysisModule):
             self.result_text.color = "green" if "成功" in result_str else "red"
 
         except Exception as ex:
-            print(f"Error in _on_plot_click: {ex}")
+            print(f"Error in perform_plot: {ex}")
             traceback.print_exc()
             self.result_text.value = f"計算時發生未預期的錯誤: {ex}"
             self.result_text.color = "red"
-        
+
         finally:
             self.plot_btn.disabled = False
             if self.parent: self.page.update()
+
+    def _on_plot_click(self, e):
+        """使用者按下 [繪圖] 按鈕時的既有事件簽章；轉交給 public perform_plot()。
+
+參數：
+    e (未指定型別): 函數輸入值。
+
+回傳：
+    無。"""
+        self.perform_plot(e)
 
     # ======================================================
     # 3️⃣ 核心邏輯：計算並繪製圖形 (無變更)
