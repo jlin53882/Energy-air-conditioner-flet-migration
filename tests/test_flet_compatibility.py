@@ -751,6 +751,39 @@ def test_global_unit_toggle_propagates_to_dedicated_analysis_views() -> None:
     assert analysis_view.adapter.output_unit_system == "Imperial"
 
 
+def test_global_output_unit_change_preserves_compressor_input_value_and_unit() -> None:
+    """確認全域輸出單位切換不會竄改壓縮機大氣壓力等 input 的 value / unit。
+
+    Global SI/Imperial 只是「結果呈現」偏好，不是 force input units；
+    使用者輸入的數值與所選單位必須維持不變，除非使用者自己修改 input unit。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+    compressor_view = shell.views["compressor"]
+    module = compressor_view.adapter.modules[0]
+
+    atm = module.all_entries["cr_atm_p"]
+    atm["val"].value = "99.5"
+    atm["unit"].value = "kPa"
+
+    shell.unit_toggle.selected = ["Imperial"]
+    shell.unit_toggle.on_change(SimpleNamespace(control=shell.unit_toggle))
+
+    assert atm["val"].value == "99.5"
+    assert atm["unit"].value == "kPa"
+    assert compressor_view.adapter.output_unit_system == "Imperial"
+
+    shell.unit_toggle.selected = ["SI"]
+    shell.unit_toggle.on_change(SimpleNamespace(control=shell.unit_toggle))
+
+    assert atm["val"].value == "99.5"
+    assert atm["unit"].value == "kPa"
+    assert compressor_view.adapter.output_unit_system == "SI"
+
+
 def test_workspace_state_remembers_input_units_by_row_and_property() -> None:
     """確認工作區依輸入列與性質分別保存單位，不與輸出偏好混用。
 

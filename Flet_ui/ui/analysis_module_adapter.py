@@ -120,7 +120,12 @@ class AnalysisModuleAdapter:
             self._has_calculated_result = False
 
     def set_output_unit_system(self, unit_system: str) -> None:
-        """更新輸出單位偏好，通知模組更新其大氣壓力預設值，並視需要重算。
+        """更新輸出單位偏好，並視需要以新單位重新格式化既有結果。
+
+        這個偏好只影響「結果如何呈現」，不得覆寫任何 input 欄位的值或單位。
+        壓縮機等模組的大氣壓力等輸入，一律沿用使用者目前輸入的 value +
+        selected input unit；domain/unit converter 會在計算時自行處理換算，
+        不需要（也不應該）因為切換輸出單位而竄改 input 預設值。
 
         參數：
             unit_system: 要套用的輸出單位系統（"SI" 或 "Imperial"）。
@@ -129,11 +134,6 @@ class AnalysisModuleAdapter:
             無。
         """
         self.output_unit_system = unit_system
-        use_imperial = unit_system == "Imperial"
-        for module in self.modules:
-            hook = getattr(module, "update_atm_pressure_default", None)
-            if callable(hook):
-                hook(use_imperial)
         if self._has_calculated_result:
             self.calculate()
 
