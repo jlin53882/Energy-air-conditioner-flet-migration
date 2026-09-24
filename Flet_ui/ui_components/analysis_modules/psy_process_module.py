@@ -275,8 +275,6 @@ class PsyProcessModule(BaseAnalysisModule):
         formatter.section("送風量")
         formatter.add("所需送風量", "VolumeFlow", result.supply_volume_flow_m3_s, 1)
         formatter.add("乾空氣質量流率", "MassFlow", result.dry_air_mass_flow_kg_s, 4)
-        delta_unit = "°F" if use_imperial else "K"
-        delta = result.temperature_difference_k * (9 / 5 if use_imperial else 1)
-        formatter.add_text("送風溫差 ΔT", f"{delta:.1f} {delta_unit}")
+        formatter.add("送風溫差 ΔT", "DeltaT", result.temperature_difference_k, 1)
         formatter.section("送風狀態").add_air_state(result.supply)
         return formatter.text()

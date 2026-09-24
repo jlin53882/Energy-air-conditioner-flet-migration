@@ -62,6 +62,20 @@ def test_result_formatter_uses_practical_units() -> None:
     assert imperial.text() == "風量: 2119 ft³/min"
 
 
+def test_unit_converter_supports_hvac_units() -> None:
+    """溫差不做零點偏移，冷凍噸與 kcal/h 以標準換算係數往返。
+
+回傳：
+    無。"""
+    converter = UnitConverter()
+
+    assert converter.convert_to_si("DeltaT", 5.0, "°C") == pytest.approx(5.0)
+    assert converter.convert_to_si("DeltaT", 9.0, "°F") == pytest.approx(5.0)
+    assert converter.convert_to_si("Power", 1.0, "RT") == pytest.approx(3516.853)
+    assert converter.convert_from_si("Power", 1163.0, "kcal/h") == pytest.approx(1000.0)
+    assert ResultFormatter(converter, True).quantity("DeltaT", 10.0, 1) == "18.0 °F"
+
+
 @pytest.mark.parametrize(
     ("analysis_key", "expected_label"),
     [

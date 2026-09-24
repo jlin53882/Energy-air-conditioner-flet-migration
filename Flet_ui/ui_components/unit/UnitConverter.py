@@ -33,6 +33,7 @@ class UnitConverter:
             "VolumeFlow": "m³/s",
             "EntropyFlow": "kW/K",
             "Eff": "%",
+            "DeltaT": "K",
             
         }
         self.imperial_units = {
@@ -46,6 +47,7 @@ class UnitConverter:
             "VolumeFlow": "m³/s",
             "EntropyFlow": "kW/K",
             "Eff": "%",
+            "DeltaT": "°F",
         }
         
         # 定義從 SI 基礎單位 (Pa, K, J/kg...) 的轉換
@@ -104,7 +106,8 @@ class UnitConverter:
             "L": ["m", "ft"],
             "Mass": ["kg", "lbm"],
             "MassFlow": ["kg/s", "lbm/s"],
-            "Power": ["W", "kW", "Btu/h"],
+            "Power": ["W", "kW", "Btu/h", "RT", "kcal/h"],
+            "DeltaT": ["K", "°C", "°F"],
             "E": ["J", "kJ", "Btu"],
             "W": ["kg/kg", "g/kg", "lbm/lbm", "gr/lbm"],
             "RH": ["%"],
@@ -138,6 +141,7 @@ class UnitConverter:
             "VolumeFlow": "m³/s",
             "EntropyFlow": "W/K",
             "Eff": "%",
+            "DeltaT": "K",
         }
 
         # 收集所有屬性代碼
@@ -273,6 +277,18 @@ class UnitConverter:
         # SI: 小數 (例如 0.8) -> 顯示: % (例如 80)
         cmap["RH"]["from_si"]["%"] = lambda x: x * 100.0
         
+        # 冷凍噸 (US RT) 與 kcal/h 為冷凍空調實務常用的能力單位。SI: W
+        cmap["Power"]["to_si"]["RT"] = lambda x: x * 3516.853
+        cmap["Power"]["from_si"]["RT"] = lambda x: x / 3516.853
+        cmap["Power"]["to_si"]["kcal/h"] = lambda x: x * 1.163
+        cmap["Power"]["from_si"]["kcal/h"] = lambda x: x / 1.163
+
+        # 溫差 (DeltaT), SI: K。溫差沒有零點偏移，°C 差值等於 K，°F 差值乘以 5/9。
+        cmap["DeltaT"]["to_si"]["°C"] = lambda x: x
+        cmap["DeltaT"]["from_si"]["°C"] = lambda x: x
+        cmap["DeltaT"]["to_si"]["°F"] = lambda x: x * 5.0 / 9.0
+        cmap["DeltaT"]["from_si"]["°F"] = lambda x: x * 9.0 / 5.0
+
         return cmap
 
     def convert_to_si(self, prop_code, value, unit_code):
