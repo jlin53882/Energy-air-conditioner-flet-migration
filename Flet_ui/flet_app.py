@@ -21,6 +21,7 @@ from .ui.views.psychrometrics_view import PsychrometricsView
 from .ui.views.air_process_view import AirProcessView
 from .ui.views.psychrometric_chart_view import PsychrometricChartView
 from .ui.views.thermo_diagram_view import ThermoDiagramView
+from .ui.views.unit_converter_view import UnitConverterView
 from .ui_components.analysis_modules.hvac_compressor_module import CompressorModule
 from .ui_components.analysis_modules.hvac_condenser_module import CondenserModule
 from .ui_components.analysis_modules.hvac_evaporator_module import EvaporatorModule
@@ -139,6 +140,7 @@ def main(page: ft.Page) -> None:
         "ph_chart": diagram_view,
         "ts_chart": diagram_view,
         "psychrometric_chart": psychrometric_chart_view,
+        "unit_converter": UnitConverterView(unit_converter),
     }
 
     def on_unit_system_change(unit_system: str) -> None:

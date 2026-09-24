@@ -79,6 +79,7 @@ SECTION_COLORS: dict[str, tuple[str, str]] = {
     "冷凍系統": ("#0F7EA8", "#E3F3FA"),
     "空氣處理": ("#0F9D9A", "#E3F6F5"),
     "圖表": ("#C2620F", "#FCF0E3"),
+    "工具": ("#4A5B6E", "#EDF1F6"),
 }
 
 

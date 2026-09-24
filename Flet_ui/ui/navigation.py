@@ -64,6 +64,10 @@ ROUTES = (
         "psychrometric_chart", "濕空氣線圖", "圖表", "BUBBLE_CHART_OUTLINED",
         description="依海拔繪製濕空氣線圖，標示多個狀態點並列出完整性質。",
     ),
+    WorkspaceRoute(
+        "unit_converter", "單位換算", "工具", "SWAP_HORIZ",
+        description="壓力、溫度、溫差、冷凍能力（RT、kcal/h）、風量等常用單位即時換算。",
+    ),
 )
 
 ROUTE_BY_KEY = {route.key: route for route in ROUTES}

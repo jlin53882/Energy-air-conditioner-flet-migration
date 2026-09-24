@@ -268,3 +268,33 @@ def test_psychrometric_chart_validates_point_counts_and_converts_lists(shell) ->
         tdb_entry["unit"].value = "°C"
         tdb_entry["unit"].on_select(None)
     assert tdb_entry["val"].value == original_tdb
+
+
+def test_unit_converter_view_lists_every_unit(shell) -> None:
+    """單位換算頁列出所選物理量的所有單位，並拒絕無效或低於絕對零度的輸入。
+
+回傳：
+    無。"""
+    shell.navigate("unit_converter")
+    view = shell.views["unit_converter"]
+    view.quantity_dd.value = "Power"
+    view._on_quantity_change(None)
+    view.value_tf.value = "1"
+    view.unit_dd.value = "RT"
+    view.convert()
+
+    values = {tile.label: tile.value for tile in view.results.controls}
+    assert set(values) == set(UnitConverter().get_available_units("Power"))
+    assert values["kW"] == "3.51685 kW"
+
+    view.value_tf.value = "abc"
+    view.convert()
+    assert view.value_tf.error_text and view.results.controls == []
+
+    view.quantity_dd.value = "T"
+    view._on_quantity_change(None)
+    view.value_tf.value = "-300"
+    view.convert()
+    assert "絕對零度" in view.value_tf.error_text
+    view.value_tf.value = "1"
+    view.convert()
