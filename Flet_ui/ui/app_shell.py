@@ -127,6 +127,11 @@ class AppShell(ft.Column):
     def navigate(self, route_key: str, *, notify: bool = True) -> None:
         """依穩定路由鍵選取畫面並更新頁面標題。
 
+        若目標畫面實作了 generic 的 ``activate_route(route_key)`` 協定
+        （例如 ``ThermoDiagramView``），會在切換為可見後呼叫它，讓畫面
+        自行處理 route-local 的啟用邏輯（如圖表模式）。AppShell 本身完全
+        不知道任何特定 route 或 view class 的語意，只依協定呼叫。
+
 參數：
     route_key: 要切換至的工作區路由鍵。
     notify: 是否通知路由 回呼函式；初始化時可設為 False。
@@ -154,6 +159,9 @@ class AppShell(ft.Column):
         active_view = self.views[route_key]
         for view in self._unique_views:
             view.visible = view is active_view
+        activate_route = getattr(active_view, "activate_route", None)
+        if callable(activate_route):
+            activate_route(route_key)
         self.route_header.controls = [
             ft.Text(route.label, size=TOKENS.title, weight=ft.FontWeight.W_700),
             ft.Text("工程計算工作區 · 輸入單位可獨立選擇", size=TOKENS.body,

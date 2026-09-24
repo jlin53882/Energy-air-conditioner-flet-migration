@@ -1,9 +1,11 @@
 # flet_app_re.py (主程式 - 負責依賴注入)
 #
 # PR #4（Analysis Workspace Migration）之後，此檔案不再依賴共用的
-# ``AnalysisTab.set_category(...)`` 做 route switching，也不再對圖表路由
-# 特別判斷 ``P-h`` / ``T-s`` —— 每個 route 直接映射到各自的 dedicated view，
-# diagram type 由 ``ThermoDiagramView`` 自己管理。
+# ``AnalysisTab.set_category(...)`` 做 route switching，也不知道
+# ``ph_chart`` / ``ts_chart`` 與 ``P-h`` / ``T-s`` 的對應關係 —— 每個
+# route 直接映射到各自的 dedicated view；圖表 route 的啟用邏輯由
+# ``ThermoDiagramView.activate_route()``（AppShell 的 generic route
+# activation 協定）自行處理。
 
 import flet as ft
 
@@ -95,19 +97,6 @@ def main(page: ft.Page) -> None:
         "ts_chart": diagram_view,
     }
 
-    def on_route_change(route_key: str) -> None:
-        """讓熱力圖畫面依路由切換自己的 view-local mode，不再由 App root 判斷。
-
-參數：
-    route_key: 工作區內部使用的路由識別碼。
-
-回傳：
-    無。"""
-        if route_key == "ph_chart":
-            diagram_view.set_mode("ph")
-        elif route_key == "ts_chart":
-            diagram_view.set_mode("ts")
-
     def on_unit_system_change(unit_system: str) -> None:
         """更新全域輸出偏好並重新呈現各 dedicated view，不改寫輸入欄位單位。
 
@@ -135,7 +124,6 @@ def main(page: ft.Page) -> None:
     shell = AppShell(
         page,
         views,
-        on_route_change=on_route_change,
         on_unit_system_change=on_unit_system_change,
         on_fluid_shortcut=choose_fluid,
         state=workspace_state,

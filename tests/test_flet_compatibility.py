@@ -457,6 +457,46 @@ def test_chart_routes_use_dedicated_diagram_view_without_shared_execute_button()
     assert compressor_view.workspace.result_card.visible is True
 
 
+def test_diagram_route_activation_is_owned_by_diagram_view() -> None:
+    """F4 regression：flet_app.py 不再特判 ph_chart/ts_chart，改由 View 自行處理。
+
+    確認：
+    1. AppShell 的 generic route-activation 協定（``activate_route``）
+       確實驅動了 ph_chart -> P-h、ts_chart -> T-s 的模式切換。
+    2. flet_app.py 原始碼中不再出現 diagram-specific route dispatch
+       （``route_key == "ph_chart"`` / ``ts_chart``，或 dict 形式的
+       ``route_to_mode`` 對照表），確保 Composition Root 不知道 diagram
+       internals；同時排除掉 ``ThermoDiagramView`` 內部合法持有這張表
+       的情形（該檔案 import 路徑不同，不會被這裡掃到）。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+
+    shell.navigate("ph_chart")
+    diagram_view = shell.views["ph_chart"]
+    assert diagram_view.mode == "ph"
+    assert diagram_view.module.diagram_dd.value == "P-h"
+
+    shell.navigate("ts_chart")
+    assert diagram_view.mode == "ts"
+    assert diagram_view.module.diagram_dd.value == "T-s"
+
+    flet_app_source = (
+        Path(__file__).resolve().parent.parent / "Flet_ui" / "flet_app.py"
+    ).read_text(encoding="utf-8")
+    # 允許 views dict 內合法出現 "ph_chart"/"ts_chart" 作為 route -> view
+    # 註冊 key；要排除的是曾經存在的 diagram-mode 特判／dispatch 邏輯。
+    assert 'route_key == "ph_chart"' not in flet_app_source
+    assert 'route_key == "ts_chart"' not in flet_app_source
+    assert "route_to_mode" not in flet_app_source
+    assert "set_diagram_type(" not in flet_app_source
+    assert ".set_mode(" not in flet_app_source
+    assert "on_route_change" not in flet_app_source
+
+
 def test_chart_route_change_clears_previous_plot_contents() -> None:
     """確認 P-h 與 T-s 路由切換會清除舊圖表、狀態點及殘留表格。
 

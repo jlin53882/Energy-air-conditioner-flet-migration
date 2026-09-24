@@ -13,6 +13,7 @@ import flet as ft
 from ...ui_components.analysis_modules.thermo_diagram_module import ThermoDiagramModule
 
 _MODE_TO_DIAGRAM = {"ph": "P-h", "ts": "T-s"}
+_ROUTE_TO_MODE = {"ph_chart": "ph", "ts_chart": "ts"}
 
 
 class ThermoDiagramView(ft.Column):
@@ -50,6 +51,24 @@ class ThermoDiagramView(ft.Column):
             raise ValueError(f"不支援的熱力圖模式：{mode}")
         self.mode = mode
         self.module.set_diagram_type(_MODE_TO_DIAGRAM[mode])
+
+    def activate_route(self, route_key: str) -> None:
+        """generic route-activation 協定：由 ``AppShell.navigate`` 呼叫。
+
+        route -> diagram mode 的對照表只存在於這個 View 內部；
+        ``flet_app.py`` 不需要知道 ``ph_chart`` / ``ts_chart`` 對應
+        ``P-h`` / ``T-s`` 的 mapping。未知的 route_key 會被忽略（維持
+        目前 mode 不變），避免此協定被其他 route 誤觸發時炸掉。
+
+        參數：
+            route_key: AppShell 目前導覽到的路由鍵。
+
+        回傳：
+            無。
+        """
+        mode = _ROUTE_TO_MODE.get(route_key)
+        if mode is not None:
+            self.set_mode(mode)
 
     def perform_calculation(self, event: ft.ControlEvent | None) -> None:
         """讓 AppShell 的 Ctrl+Enter 捷徑也能觸發熱力圖的專屬繪圖流程。
