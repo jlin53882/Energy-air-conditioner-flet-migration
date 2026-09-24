@@ -3,6 +3,13 @@ import flet as ft
 import flet_charts as fch
 import matplotlib.pyplot as plt
 from .base_analysis_module import BaseAnalysisModule
+from ...ui.theme import (
+    TOKENS,
+    card_shadow,
+    primary_button_style,
+    style_dropdown,
+    style_text_field,
+)
 from ..unit.thermo_draw.coolprop_utils import generate_thermo_diagram, safe_props, check_coolprop_fluid 
 from chart.state_point_parser import StatePointParser
 import traceback # 用於印出詳細錯誤
@@ -91,82 +98,86 @@ class ThermoDiagramModule(BaseAnalysisModule):
 
 
         # --- 冷媒 TextField + 驗證按鈕 ---
-        self.fluid_tf = ft.TextField(
-            label="冷媒 (例如 R134a, Water, Air)", 
-            value="R134a", 
-            width=200
-        )
+        self.fluid_tf = style_text_field(ft.TextField(
+            value="R134a",
+            hint_text="例如 R134a, Water, Air",
+            prefix_icon=ft.Icons.PROPANE_TANK_OUTLINED,
+            expand=True,
+            height=TOKENS.input_height,
+        ))
         self.check_fluid_btn = ft.IconButton(
-            icon=ft.Icons.CHECK_CIRCLE_OUTLINE, 
-            on_click=self._on_check_fluid, 
-            tooltip="檢查冷媒名稱"
+            icon=ft.Icons.FACT_CHECK_OUTLINED,
+            on_click=self._on_check_fluid,
+            tooltip="檢查冷媒名稱是否存在於 CoolProp",
+            icon_color=TOKENS.primary,
+            style=ft.ButtonStyle(
+                bgcolor=TOKENS.primary_soft,
+                shape=ft.RoundedRectangleBorder(radius=TOKENS.radius_sm),
+            ),
         )
-        self.fluid_check_result = ft.Text(value="", size=11, color="grey", offset=ft.Offset(0.1, 0))
+        self.fluid_check_result = ft.Text(value="", size=TOKENS.caption, color="grey")
 
-
-        self.diagram_dd = ft.Dropdown(
-            label="圖表類型",
+        self.diagram_dd = style_dropdown(ft.Dropdown(
             options=[ft.dropdown.Option(x) for x in ["P-h", "T-s", "P-v", "T-v"]],
             value="P-h",
-            width=160,
+            expand=True,
             on_select=lambda event: self.set_diagram_type(event.control.value),
-        )
-        
+        ))
+
         # --- 參考狀態選項 ---
-        self.ref_state_dd = ft.Dropdown(
-            label="參考狀態 (Reference State)",
+        self.ref_state_dd = style_dropdown(ft.Dropdown(
             options=[
                 ft.dropdown.Option("Auto", "自動 (冷媒:ASHRAE, 水:Default)"),
                 ft.dropdown.Option("ASHRAE", "ASHRAE (冷媒常用)"),
                 ft.dropdown.Option("NBP", "NBP (常壓沸點為 0)"),
                 ft.dropdown.Option("IIR", "IIR (0°C 飽和液體為基準)"),
             ],
-            value="Auto", 
-            width=250 
-        )
-        
+            value="Auto",
+            expand=True,
+        ))
+
         # --- 壓力軸單位選項 ---
-        self.pressure_unit_dd = ft.Dropdown(
-            label="壓力軸單位 (P-h/P-v)",
+        self.pressure_unit_dd = style_dropdown(ft.Dropdown(
             options=[
                 ft.dropdown.Option("MPa"),
                 ft.dropdown.Option("kPa"),
             ],
             value="MPa",
-            width=190, 
-        )
-
+            expand=True,
+        ))
 
         # --- 輸入組合選項 ---
-        self.input_pair_dd = ft.Dropdown(
-            label="輸入模式",
+        self.input_pair_dd = style_dropdown(ft.Dropdown(
             options=[
-                ft.dropdown.Option("Compressor", "壓縮機分析 (T1,P1 ; T2,P2)"), 
+                ft.dropdown.Option("Compressor", "壓縮機分析 (T1,P1 ; T2,P2)"),
                 ft.dropdown.Option("T-P", "溫度 (T) - 壓力 (P)"),
                 ft.dropdown.Option("P-h", "壓力 (P) - 焓 (h)"),
                 ft.dropdown.Option("T-s", "溫度 (T) - 熵 (s)"),
                 ft.dropdown.Option("P-s", "壓力 (P) - 熵 (s)"),
                 ft.dropdown.Option("P-v", "壓力 (P) - 比容 (v)"),
             ],
-            value="Compressor", 
-            width=390, 
+            value="Compressor",
+            expand=True,
             on_select=self._on_input_mode_change
-        )
+        ))
 
         # --- 建立所有輸入欄 ---
-        # (修改) 確保 label 包含單位，以便稍後解析
+        # 欄名包含單位，單位切換時由同步處理器解析並更新括號內的單位。
         self.create_input_row("td_T", f"溫度 T ({temp_unit})", "10, 50", "T", temp_unit)
         self.create_input_row("td_P", f"壓力 P ({press_unit})", "0.16, 0.7", "P", press_unit)
         self.create_input_row("td_H", f"焓 H ({enthalpy_unit})", "", "H", enthalpy_unit)
         self.create_input_row("td_S", f"熵 S ({entropy_unit})", "", "S", entropy_unit)
         self.create_input_row("td_V", f"比容 V ({volume_unit})", "", "V", volume_unit)
-        
+        for key in ("td_T", "td_P", "td_H", "td_S", "td_V"):
+            self.all_entries[key]["val"].hint_text = "以逗號分隔多筆，例如 10, 50"
+            self.all_entries[key]["val"].keyboard_type = ft.KeyboardType.TEXT
+
         self.all_entries["td_H"]["ui_row"].visible = False
         self.all_entries["td_S"]["ui_row"].visible = False
         self.all_entries["td_V"]["ui_row"].visible = False
 
         # --- 結果輸出與按鈕 ---
-        self.result_text = ft.Text("請輸入參數並點擊繪圖。", selectable=True)
+        self.result_text = ft.Text("請輸入參數並點擊繪圖。", selectable=True, size=TOKENS.caption + 1)
 
         # --- 初始空圖 ---
         fig, ax = plt.subplots(figsize=(8, 5.5))
@@ -175,73 +186,188 @@ class ThermoDiagramModule(BaseAnalysisModule):
         self.chart_container = ft.Container(
             content=self.chart,
             expand=True,
-            height=520,
+            height=560,
+            bgcolor=ft.Colors.WHITE,
+            border=ft.Border.all(1, TOKENS.border),
+            border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
+            clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
         )
 
         # --- 版面配置：左側設定、右側結果圖表 ---
         self.info_text = ft.Text(
             "格式：T1,T2 與 P1,P2，各輸入兩筆；範例：10, 50 與 0.16, 0.70 MPa。",
-            size=12,
-            color=ft.Colors.BLUE_GREY_700,
+            size=TOKENS.caption,
+            color=TOKENS.text_secondary,
         )
         self.plot_btn = ft.Button(
-            "繪圖",
+            "繪製熱力圖",
             icon=ft.Icons.AUTO_GRAPH,
             on_click=self._on_plot_click,
-            bgcolor=ft.Colors.BLUE_700,
-            color=ft.Colors.WHITE,
             tooltip="依目前設定繪製熱力圖",
+            style=primary_button_style(),
+            expand=True,
         )
-        self.connect_points_cb = ft.Checkbox(label="連接狀態點", value=True)
+        self.connect_points_cb = ft.Checkbox(label="以線段連接狀態點", value=True,
+                                             active_color=TOKENS.primary)
+
+        def field(label: str, control: ft.Control) -> ft.Column:
+            """以框外欄名包裝設定控制項，與其他工作區表單一致。
+
+參數：
+    label: 欄位名稱。
+    control: 要包裝的 Flet 控制項。
+
+回傳：
+    欄名與控制項組成的直欄。"""
+            return ft.Column(
+                [ft.Text(label, size=TOKENS.body, weight=ft.FontWeight.W_500,
+                         color=TOKENS.text_primary), control],
+                spacing=6,
+                expand=True,
+            )
+
+        def section(title: str, icon: ft.IconData, controls: list[ft.Control]) -> ft.Column:
+            """建立設定面板中的分區標題與內容。
+
+參數：
+    title: 分區標題。
+    icon: 分區圖示。
+    controls: 分區內的控制項。
+
+回傳：
+    分區直欄。"""
+            return ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(icon, size=16, color=TOKENS.text_muted),
+                            ft.Text(title, size=TOKENS.caption, weight=ft.FontWeight.W_600,
+                                    color=TOKENS.text_muted),
+                        ],
+                        spacing=6,
+                    ),
+                    *controls,
+                ],
+                spacing=TOKENS.spacing_sm + 2,
+            )
+
+        self.result_status_box = ft.Container(
+            content=ft.Row(
+                [ft.Icon(ft.Icons.INFO_OUTLINE, size=16, color=TOKENS.text_muted),
+                 ft.Container(content=self.result_text, expand=True)],
+                spacing=TOKENS.spacing_sm,
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            ),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10),
+            bgcolor=TOKENS.surface_variant,
+            border=ft.Border.all(1, TOKENS.border),
+            border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
+        )
 
         settings_card = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("繪圖設定", theme_style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_600),
-                    ft.Row([self.fluid_tf, self.check_fluid_btn], spacing=8),
-                    self.fluid_check_result,
-                    self.diagram_dd,
-                    self.ref_state_dd,
-                    self.pressure_unit_dd,
-                    self.input_pair_dd,
-                    self.all_entries["td_T"]["ui_row"],
-                    self.all_entries["td_P"]["ui_row"],
-                    self.all_entries["td_H"]["ui_row"],
-                    self.all_entries["td_S"]["ui_row"],
-                    self.all_entries["td_V"]["ui_row"],
-                    self.info_text,
-                    ft.Row([self.plot_btn, self.connect_points_cb], spacing=12),
-                    self.result_text,
+                    ft.Row(
+                        [
+                            ft.Container(
+                                content=ft.Icon(ft.Icons.TUNE, size=18, color=TOKENS.primary),
+                                width=34, height=34, alignment=ft.Alignment.CENTER,
+                                bgcolor=TOKENS.primary_soft,
+                                border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
+                            ),
+                            ft.Text("繪圖設定", size=TOKENS.section_title, weight=ft.FontWeight.W_600,
+                                    color=TOKENS.text_primary),
+                        ],
+                        spacing=TOKENS.spacing_sm + 4,
+                    ),
+                    section("工作流體", ft.Icons.PROPANE_TANK_OUTLINED, [
+                        ft.Row([self.fluid_tf, self.check_fluid_btn], spacing=TOKENS.spacing_sm,
+                               vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        self.fluid_check_result,
+                    ]),
+                    ft.Divider(height=1, color=TOKENS.border),
+                    section("圖表", ft.Icons.INSERT_CHART_OUTLINED, [
+                        ft.Row([field("圖表類型", self.diagram_dd),
+                                field("壓力軸單位", self.pressure_unit_dd)],
+                               spacing=TOKENS.spacing_sm + 2),
+                        field("參考狀態 (Reference State)", self.ref_state_dd),
+                    ]),
+                    ft.Divider(height=1, color=TOKENS.border),
+                    section("狀態點", ft.Icons.SCATTER_PLOT_OUTLINED, [
+                        field("輸入模式", self.input_pair_dd),
+                        self.all_entries["td_T"]["ui_row"],
+                        self.all_entries["td_P"]["ui_row"],
+                        self.all_entries["td_H"]["ui_row"],
+                        self.all_entries["td_S"]["ui_row"],
+                        self.all_entries["td_V"]["ui_row"],
+                        ft.Container(
+                            content=ft.Row(
+                                [ft.Icon(ft.Icons.LIGHTBULB_OUTLINE, size=14, color=TOKENS.warning),
+                                 ft.Container(content=self.info_text, expand=True)],
+                                spacing=6,
+                                vertical_alignment=ft.CrossAxisAlignment.START,
+                            ),
+                            padding=ft.Padding.symmetric(horizontal=10, vertical=8),
+                            bgcolor=TOKENS.warning_soft,
+                            border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
+                        ),
+                        self.connect_points_cb,
+                    ]),
+                    ft.Row([self.plot_btn]),
+                    self.result_status_box,
                 ],
-                spacing=12,
+                spacing=TOKENS.spacing_md,
             ),
-            padding=20,
-            bgcolor=ft.Colors.GREY_50,
-            border=ft.Border.all(1, ft.Colors.BLUE_GREY_100),
-            border_radius=ft.BorderRadius.all(10),
-            col={"sm": 12, "md": 5, "lg": 4},
+            padding=TOKENS.spacing_lg,
+            bgcolor=TOKENS.surface,
+            border=ft.Border.all(1, TOKENS.border),
+            border_radius=ft.BorderRadius.all(TOKENS.radius_md),
+            shadow=card_shadow(),
+            col={"xs": 12, "md": 5},
         )
         chart_card = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("熱力圖結果", theme_style=ft.TextThemeStyle.TITLE_MEDIUM, weight=ft.FontWeight.W_600),
-                    ft.Text("繪圖完成後，P-h／T-s 等圖表會顯示在這裡。", size=12, color=ft.Colors.BLUE_GREY_700),
+                    ft.Row(
+                        [
+                            ft.Container(
+                                content=ft.Icon(ft.Icons.SHOW_CHART, size=18, color=TOKENS.warning),
+                                width=34, height=34, alignment=ft.Alignment.CENTER,
+                                bgcolor=TOKENS.warning_soft,
+                                border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
+                            ),
+                            ft.Column(
+                                [
+                                    ft.Text("熱力圖", size=TOKENS.section_title,
+                                            weight=ft.FontWeight.W_600, color=TOKENS.text_primary),
+                                    ft.Text("繪圖完成後，飽和曲線、等值線與狀態點會顯示在這裡。",
+                                            size=TOKENS.caption, color=TOKENS.text_muted),
+                                ],
+                                spacing=2,
+                                tight=True,
+                                expand=True,
+                            ),
+                        ],
+                        spacing=TOKENS.spacing_sm + 4,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
                     self.chart_container,
                 ],
-                spacing=8,
+                spacing=TOKENS.spacing_md,
                 expand=True,
             ),
-            padding=16,
-            bgcolor=ft.Colors.WHITE,
-            border=ft.Border.all(1, ft.Colors.BLUE_GREY_100),
-            border_radius=ft.BorderRadius.all(10),
-            col={"sm": 12, "md": 7, "lg": 8},
-            height=600,
+            padding=TOKENS.spacing_lg,
+            bgcolor=TOKENS.surface,
+            border=ft.Border.all(1, TOKENS.border),
+            border_radius=ft.BorderRadius.all(TOKENS.radius_md),
+            shadow=card_shadow(),
+            col={"xs": 12, "md": 7},
         )
         layout = ft.ResponsiveRow(
             controls=[settings_card, chart_card],
-            spacing=16,
-            run_spacing=16,
+            spacing=TOKENS.spacing_md,
+            run_spacing=TOKENS.spacing_md,
+            vertical_alignment=ft.CrossAxisAlignment.START,
         )
 
         self.thermo_diagram_ui_container = ft.Container(layout, expand=True)
