@@ -17,6 +17,7 @@ from Flet_ui.ui_components.analysis_modules.psy_module import PsyModule
 from Flet_ui.ui_components.analysis_modules import thermo_diagram_module
 from Flet_ui.ui_components.analysis_modules.thermo_diagram_module import ThermoDiagramModule
 from Flet_ui.ui_components.analysis_tab import AnalysisTab
+from Flet_ui.ui.analysis_module_adapter import AnalysisModuleAdapter
 from Flet_ui.ui.state import WorkspaceState
 from Flet_ui.ui.views.thermo_diagram_view import ThermoDiagramView
 from Flet_ui.ui_components.property_tab import PropertyTab
@@ -495,6 +496,36 @@ def test_diagram_route_activation_is_owned_by_diagram_view() -> None:
     assert "set_diagram_type(" not in flet_app_source
     assert ".set_mode(" not in flet_app_source
     assert "on_route_change" not in flet_app_source
+
+
+def test_analysis_module_adapter_rejects_duplicate_keys_across_modules() -> None:
+    """F5 regression：不同模組間出現重複 analysis_id 必須 fail fast，不得 silent overwrite。
+
+回傳：
+    無。"""
+
+    class _FakeModuleA:
+        def get_analysis_definitions(self) -> dict:
+            return {
+                "Fake A": {
+                    "analysis_id": "fake.shared_key",
+                    "ui": ft.Container(),
+                    "calc_func": lambda use_imperial: "A",
+                }
+            }
+
+    class _FakeModuleB:
+        def get_analysis_definitions(self) -> dict:
+            return {
+                "Fake B": {
+                    "analysis_id": "fake.shared_key",
+                    "ui": ft.Container(),
+                    "calc_func": lambda use_imperial: "B",
+                }
+            }
+
+    with pytest.raises(ValueError, match="Duplicate AnalysisDefinition key"):
+        AnalysisModuleAdapter([_FakeModuleA(), _FakeModuleB()])
 
 
 def test_chart_route_change_clears_previous_plot_contents() -> None:

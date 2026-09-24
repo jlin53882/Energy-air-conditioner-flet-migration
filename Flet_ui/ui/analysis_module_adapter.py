@@ -35,12 +35,23 @@ class AnalysisModuleAdapter:
             無。
 
         引發：
-            ValueError: 傳入的模組沒有提供任何 analysis definition。
+            ValueError: 傳入的模組沒有提供任何 analysis definition，或多個
+                模組之間出現重複的 analysis key（不允許 silent overwrite，
+                必須 fail fast）。
         """
         self.modules = list(modules)
         self.definitions: list[AnalysisDefinition] = []
+        seen_keys: set[str] = set()
         for module in self.modules:
-            self.definitions.extend(definitions_from_module(module))
+            for definition in definitions_from_module(module):
+                if definition.key in seen_keys:
+                    raise ValueError(
+                        "Duplicate AnalysisDefinition key across modules: "
+                        f"key={definition.key!r} module={type(module).__name__!r} "
+                        f"label={definition.label!r}"
+                    )
+                seen_keys.add(definition.key)
+                self.definitions.append(definition)
         if not self.definitions:
             raise ValueError("AnalysisModuleAdapter requires at least one AnalysisDefinition")
         self._by_key = {definition.key: definition for definition in self.definitions}
