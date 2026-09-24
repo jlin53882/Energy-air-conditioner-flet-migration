@@ -46,7 +46,17 @@ class PsyModule(BaseAnalysisModule):
         )
 
     def get_analysis_definitions(self) -> dict:
-        """回報此模組提供的 *兩種* 濕空氣計算模式
+        """回報此模組提供的 *兩種* 濕空氣計算模式。
+
+        ``calc_func`` 一律指向本模組已綁定對應 mode 的統一簽章方法
+        （``Callable[[bool], str]``），呼叫端（新架構的
+        :func:`~Flet_ui.ui.analysis_definition.definitions_from_module`
+        與 legacy ``AnalysisTab``）都不需要知道 ``mode_key`` 這個參數的
+        存在——module-specific 的呼叫慣例完全由 ``PsyModule`` 自己吸收。
+
+        ``calculation_mode`` 這個 key 只保留給 legacy ``AnalysisTab``
+        （狀態文字顯示 / 既有 characterization test）使用；新架構的
+        generic factory 不讀取也不依賴這個欄位。
 
 回傳：
     dict：函數計算或處理後的結果。"""
@@ -54,16 +64,38 @@ class PsyModule(BaseAnalysisModule):
             "濕空氣性質 (已知乾濕球)": {
                 "analysis_id": self.MODE_TDB_TWB,
                 "ui": self.ui_container,
-                "calc_func": self.calculate_psy,
+                "calc_func": self._calculate_tdb_twb,
                 "calculation_mode": "psychrometric"
             },
             "濕空氣性質 (已知乾球與相對濕度)": {
                 "analysis_id": self.MODE_TDB_RH,
                 "ui": self.ui_container,
-                "calc_func": self.calculate_psy,
+                "calc_func": self._calculate_tdb_rh,
                 "calculation_mode": "psychrometric"
             }
         }
+
+    def _calculate_tdb_twb(self, use_imperial: bool) -> str:
+        """已綁定「已知乾濕球」模式的統一簽章計算入口。
+
+        參數：
+            use_imperial: 是否以 Imperial 單位呈現結果。
+
+        回傳：
+            str：格式化後的計算結果文字。
+        """
+        return self.calculate_psy(use_imperial, mode_key=self.MODE_TDB_TWB)
+
+    def _calculate_tdb_rh(self, use_imperial: bool) -> str:
+        """已綁定「已知乾球與相對濕度」模式的統一簽章計算入口。
+
+        參數：
+            use_imperial: 是否以 Imperial 單位呈現結果。
+
+        回傳：
+            str：格式化後的計算結果文字。
+        """
+        return self.calculate_psy(use_imperial, mode_key=self.MODE_TDB_RH)
         
     def _build_ui_components(self):
         """僅建立元件

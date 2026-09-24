@@ -343,20 +343,20 @@ class AnalysisTab(ft.Column):
             # 1. 找到當前選中的功能定義
             selected_name = self.analysis_dd.value
             current_definition = self.analysis_map[selected_name]
-            
+
             # 2. 獲取要呼叫的特定計算函式
             calc_func = current_definition["calc_func"]
-            
+
             # 3. 獲取輸出單位
             use_imperial = ("Imperial" in self.output_unit_toggle.selected)
-            
-            # 4. 呼叫宣告的計算模式；標籤永遠不控制 dispatch（calculate_psy 內部會
-            #    將 legacy label 正規化為穩定的 mode key 後才判斷）。
-            if current_definition["calculation_mode"] == "psychrometric":
-                result_string = calc_func(use_imperial, mode_key=selected_name)
-            else:
-                result_string = calc_func(use_imperial)
-            
+
+            # 4. 呼叫統一簽章 calc_func(use_imperial) -> str。每個模組的
+            #    calc_func 都已在該模組自己的 get_analysis_definitions()
+            #    完成任何模組專屬參數的綁定（例如 PsyModule 的
+            #    mode_key），AnalysisTab 不需要知道也不判斷
+            #    calculation_mode 或任何特定模組的呼叫慣例。
+            result_string = calc_func(use_imperial)
+
             # 5. 顯示結果
             self.result_text.value = result_string
             self.result_text.color = ft.Colors.BLACK

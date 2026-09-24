@@ -1,6 +1,7 @@
 """Flet 1.0 migration boundary 的 regression test。"""
 
 import asyncio
+import ast
 from dataclasses import replace
 from pathlib import Path
 from subprocess import run
@@ -947,6 +948,113 @@ def test_psychrometric_dispatch_does_not_depend_on_display_label() -> None:
     module.all_entries["psy_rh"]["val"].value = "50"
     psychrometrics_view.workspace.action_bar.content.on_click(SimpleNamespace())
 
+    assert adapter.result_panel.status == "success"
+
+
+def test_psychrometric_definitions_expose_uniform_calculate_callable() -> None:
+    """F6 regression：generic factory 不需要知道 psychrometric/mode_key。
+
+    直接對 ``definition.calculate`` 呼叫 ``calculate(False)``，不透過
+    adapter 或 ``definitions_from_module()`` 做任何額外綁定，證明
+    ``PsyModule`` 已經自行把 ``mode_key`` 這個 module-specific 參數吸收
+    完畢，暴露出來的就是統一的 ``Callable[[bool], str]``。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+    psychrometrics_view = shell.views["psychrometrics"]
+    adapter = psychrometrics_view.adapter
+
+    rh_definition = adapter._by_key[PsyModule.MODE_TDB_RH]
+    twb_definition = adapter._by_key[PsyModule.MODE_TDB_TWB]
+
+    module = psychrometrics_view.psy_module
+    module.all_entries["psy_tdb"]["val"].value = "25"
+    module.all_entries["psy_rh"]["val"].value = "50"
+    rh_output = rh_definition.calculate(False)
+    assert isinstance(rh_output, str)
+    assert "大氣壓力" in rh_output
+
+    module.all_entries["psy_twb"]["val"].value = "20"
+    twb_output = twb_definition.calculate(False)
+    assert isinstance(twb_output, str)
+    assert "大氣壓力" in twb_output
+
+
+def test_analysis_definition_factory_does_not_reference_calculation_mode() -> None:
+    """F6 regression：generic factory *程式碼*（非 docstring）不得判斷 calculation_mode。
+
+    依 final-hardening 規格 §21：docstring 內為了說明背景而提及
+    ``PsyModule``/``mode_key`` 是允許的相容性說明，但 *production
+    generic behavior* 不得依賴這些概念。這裡用 ``ast`` 剝除所有
+    docstring/字串常數只保留可執行的程式碼結構後，確認
+    ``calculation_mode``、``mode_key``、``psychrometric``、
+    ``PsyModule``、``isinstance`` 都不會以任何識別字或字串字面值的形式
+    出現在實際執行邏輯裡。
+
+回傳：
+    無。"""
+    source_path = (
+        Path(__file__).parents[1] / "Flet_ui" / "ui" / "analysis_definition.py"
+    )
+    source = source_path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    forbidden_tokens = {"calculation_mode", "mode_key", "psychrometric", "PsyModule"}
+
+    docstring_node_ids: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            docstring = ast.get_docstring(node, clean=False)
+            if docstring is not None:
+                first_stmt = node.body[0] if node.body else None
+                if (
+                    isinstance(first_stmt, ast.Expr)
+                    and isinstance(first_stmt.value, ast.Constant)
+                ):
+                    docstring_node_ids.add(id(first_stmt.value))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in forbidden_tokens:
+            raise AssertionError(f"生產程式碼中發現禁止識別字：{node.id}")
+        if isinstance(node, ast.Attribute) and node.attr in forbidden_tokens:
+            raise AssertionError(f"生產程式碼中發現禁止屬性存取：{node.attr}")
+        if isinstance(node, ast.keyword) and node.arg in forbidden_tokens:
+            raise AssertionError(f"生產程式碼中發現禁止關鍵字參數：{node.arg}")
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) in docstring_node_ids:
+                continue
+            lowered = node.value.lower()
+            if any(token.lower() in lowered for token in forbidden_tokens):
+                raise AssertionError(f"生產程式碼中發現禁止字串字面值：{node.value!r}")
+
+
+def test_generic_adapter_only_requires_uniform_calculate_callable() -> None:
+    """F6 regression：adapter 對任意假模組只要求統一 calculate 簽章。
+
+    用一個完全與 psychrometric 無關的 fake module 建立
+    ``AnalysisModuleAdapter``，確認不提供 ``calculation_mode`` 也能正常
+    完成 tool-selection 與 calculate dispatch，證明 generic adapter
+    contract 真的只要求 ``Callable[[bool], str]``。
+
+回傳：
+    無。"""
+
+    class _FakeModule:
+        def get_analysis_definitions(self) -> dict:
+            return {
+                "Fake Tool": {
+                    "analysis_id": "fake.generic_tool",
+                    "ui": ft.Container(),
+                    "calc_func": lambda use_imperial: "fake-ok",
+                }
+            }
+
+    adapter = AnalysisModuleAdapter([_FakeModule()])
+    assert adapter.active_key == "fake.generic_tool"
+    adapter.calculate()
     assert adapter.result_panel.status == "success"
 
 
