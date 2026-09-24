@@ -972,15 +972,24 @@ def test_psychrometric_definitions_expose_uniform_calculate_callable() -> None:
 
     module = psychrometrics_view.psy_module
     module.all_entries["psy_tdb"]["val"].value = "25"
-    module.all_entries["psy_rh"]["val"].value = "50"
-    rh_output = rh_definition.calculate(False)
-    assert isinstance(rh_output, str)
-    assert "大氣壓力" in rh_output
-
     module.all_entries["psy_twb"]["val"].value = "20"
+    module.all_entries["psy_rh"]["val"].value = "88"
+
+    # RH definition 必須真的以 RH 模式計算（忽略 TWB 欄位），TWB definition
+    # 必須真的以 TWB 模式計算（忽略 RH 欄位）——確認兩個 closure 真的各自
+    # 綁定到不同的 mode key，不是碰巧都能算出結果就通過。
+    rh_output = rh_definition.calculate(False)
     twb_output = twb_definition.calculate(False)
+    assert isinstance(rh_output, str)
     assert isinstance(twb_output, str)
+    assert "大氣壓力" in rh_output
     assert "大氣壓力" in twb_output
+    assert rh_output != twb_output
+
+    direct_rh = module.calculate_psy(False, mode_key=PsyModule.MODE_TDB_RH)
+    direct_twb = module.calculate_psy(False, mode_key=PsyModule.MODE_TDB_TWB)
+    assert rh_output == direct_rh
+    assert twb_output == direct_twb
 
 
 def test_analysis_definition_factory_does_not_reference_calculation_mode() -> None:

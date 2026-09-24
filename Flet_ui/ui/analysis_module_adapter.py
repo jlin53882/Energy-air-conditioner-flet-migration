@@ -110,9 +110,9 @@ class AnalysisModuleAdapter:
 
         ``AnalysisDefinition.calculate`` 一律是統一的
         ``Callable[[bool], str]``；任何模組專屬的呼叫慣例（例如 PsyModule
-        需要的 mode_key）都已在 :func:`definitions_from_module` 建構
-        definition 時綁定完成，這裡完全不需要知道 psychrometric 或任何
-        特定分類的存在。
+        需要的 mode_key）都已由該模組自己在 ``get_analysis_definitions()``
+        回傳的 ``calc_func`` 完成綁定，這個 adapter 完全不需要知道
+        psychrometric 或任何特定分類的存在。
 
         回傳：
             無。
