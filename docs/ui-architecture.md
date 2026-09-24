@@ -12,10 +12,10 @@
 
 `AppShell` 負責四個區域：
 
-- **頂端列**：應用程式識別資訊與全域結果輸出單位偏好。
-- **側邊欄**：以穩定路由鍵值識別的分組導覽，不以翻譯後的顯示文字作為路由識別。
-- **工作區**：目前選取的畫面及其路由標題。
-- **情境面板**：桌面版選用區域。不得自行假造計算歷史；在歷史資料儲存介面尚未接通前，只能呈現明確的空狀態及冷媒捷徑。
+- **頂端列**：左側品牌區延續深色導覽的底色；右側為「分類 › 路由」麵包屑、快捷鍵提示及全域結果輸出單位偏好。
+- **側邊欄**：深色、以穩定路由鍵值識別的分組導覽，不以翻譯後的顯示文字作為路由識別。選取樣式由 `Sidebar.set_selected()` 負責，外殼不得直接改寫導覽項目的內部控制項。
+- **工作區**：頁首（依分類著色的路由圖示、路由標題與 `WorkspaceRoute.description`）及目前選取的畫面。
+- **情境面板**：桌面版選用區域，以堆疊小卡呈現目前輸出單位系統、常用冷媒捷徑、鍵盤快捷鍵及計算歷史。不得自行假造計算歷史；在歷史資料儲存介面尚未接通前，只能呈現明確的空狀態。
 
 外殼會將每個唯一畫面固定掛載於同一個 `Stack`，切換路由時只改變可見狀態。這可避免圖表等昂貴子控制項在導覽時被銷毀重建，並減少 Flet 控制項生命週期變動。PR #4（Analysis Workspace Migration）之後，每個分析路由對應各自獨立的 dedicated view 實例（`CompressorView` / `EvaporatorView` / `CondenserView` / `PsychrometricsView` / `ThermoDiagramView`），彼此互不共享父容器；`AppShell` 不需要知道任何 analysis category 的細節，只依 `route.key` 決定要顯示哪一個已掛載的 view。
 
@@ -23,18 +23,23 @@
 
 `Flet_ui/ui/navigation.py` 定義語意路由識別碼與顯示文字。目前註冊的路由包括首頁、熱力狀態查詢、壓縮機、蒸發器、冷凝器、濕空氣性質、P-h 圖及 T-s 圖。每個分析路由都對應既有分析註冊表中的分類。新增路由必須代表已實作工具，或明確標示為不可使用；規劃中的項目不得呈現得像可執行功能。
 
-路由身分是資料（`route.key`），與顯示文字彼此獨立。導覽狀態由 `WorkspaceState` 保存，不得依賴標籤文字或 Flet 選取索引。
+路由身分是資料（`route.key`），與顯示文字彼此獨立。導覽狀態由 `WorkspaceState` 保存，不得依賴標籤文字或 Flet 選取索引。`WorkspaceRoute.description` 只供頁首與首頁卡片顯示，不參與路由判斷。
 
 ## 設計權杖與共用元件
 
-`Flet_ui/ui/theme.py` 集中管理間距、圓角、控制項尺寸、寬度建議、顏色及字體。新增工作區畫面應重用這些設計權杖，不應在各畫面另行建立局部色盤或間距常數。
+`Flet_ui/ui/theme.py` 集中管理間距、圓角、控制項尺寸、寬度建議、品牌／語意／深色導覽色彩、字體層級、分類強調色（`SECTION_COLORS`），以及共用的欄位、按鈕、膠囊按鈕與卡片陰影樣式（`style_text_field`、`style_dropdown`、`primary_button_style`、`secondary_button_style`、`chip_button_style`、`card_shadow`）。新增工作區畫面應重用這些設計權杖與樣式函式，不應在各畫面另行建立局部色盤或間距常數。樣式函式只改變外觀，不得改變控制項的值或事件。
 
 `Flet_ui/ui/components/` 目前提供：
 
-- `EngineeringCard`：共用的卡片底面與標題分組。
+- `EngineeringCard`：共用的卡片底面、陰影與標題分組，可加上圖示底座與標題列右側操作。
 - `QuantityInput`：語意上合併數值與單位的輸入元件，可在逐步遷移舊表單時沿用既有控制項。
-- `ResultPanel`：明確呈現空白、載入中、成功、警告與錯誤狀態；指標卡只呈現計算轉接器實際提供的數值。
-- `Sidebar`：帶有分組及工具提示的路由控制項。
+- `ResultPanel`：以狀態橫幅明確呈現空白、載入中、成功、警告與錯誤狀態；指標卡只呈現計算轉接器實際提供的數值，中繼資料以標籤呈現。指標鍵值維持英文識別字，中文標籤與圖示只屬於呈現層。
+- `MetricTile`：單一結果的標籤、主數值與單位；只拆分既有格式化文字的開頭數字與單位，不重新計算。
+- `StatusBadge`：以圖示、文字與色彩同時表達狀態的膠囊標籤。
+- `result_sections`：將分析模組回傳的「名稱: 數值 單位」文字與 `--- 分組 ---` 標題投影為分組指標卡片；無法配對的文字保留為說明，不補上模組未提供的數值。
+- `Sidebar`：帶有分組、選取指示、精簡圖示列與工具提示的路由控制項。
+
+`Flet_ui/ui/analysis_presentation.py` 以穩定 `analysis_id` 為鍵，提供分析項目的短標籤、說明與公式提示。此表只屬於呈現層，不得放入計算；公式文字必須與實際服務行為一致，實作與命名不一致的項目只保留文字說明。新增分析時應同步新增說明，測試會檢查註冊表與說明表的一致性。
 
 輸入控制項包裝器負責畫面呈現及欄位層級驗證。單位換算由既有 `UnitConverter` 或領域／應用程式轉接器負責；畫面不得複製一套換算公式。
 
@@ -42,7 +47,10 @@
 
 ## 畫面職責與遷移界線
 
-- 性質查詢工作區將既有的模式、流體、參考狀態及性質控制項組合成計算設定、已知條件、選用廣延性質、結果與操作區域。
+- 首頁以橫幅、工具卡片格與建議工作流程呈現已實作工具。卡片上的分析數量與總數只來自各 dedicated view 的 `AnalysisModuleAdapter.definitions`，不得寫死或推估。
+- 性質查詢工作區將既有的模式、流體、參考狀態及性質控制項組合成全寬計算設定卡，下方左欄為已知條件與選用廣延性質、右欄為結果；窄視窗時依序堆疊。水模式的理想氣體選項必須實際出現在計算設定卡中。常用組合以膠囊按鈕呈現，並標示與前兩列性質相符的組合。
+- 分析工作區（壓縮機、蒸發器、冷凝器、濕空氣）由 `AnalysisWorkspace` 組成：分析項目卡（`ToolSelector` 膠囊按鈕，只有一項分析的畫面會隱藏）、輸入卡（說明、公式提示、模組輸入及執行按鈕）與結果卡（`AnalysisResultView`：狀態、分組指標、原始文字與複製）。頁面標題與說明由 AppShell 頁首呈現，`AnalysisWorkspace.header` 預設隱藏。`AnalysisModuleAdapter` 保存模組回傳的原始 `result_text`；以「計算錯誤」或「計算失敗」開頭的文字以錯誤狀態呈現，不投影指標。
+- 熱力圖路由由 `ThermoDiagramView` 直接呈現熱力圖模組自有的設定卡（工作流體、圖表、狀態點）與圖表卡，不套用共用結果卡。
 - 通用狀態查詢求解器接受兩個獨立性質。在求解器支援第三條件限制前，必須隱藏第三列輸入及新增入口；支援的性質選單和值／單位控制項應排列於對齊的響應式欄位。
 - HVAC 分析計算仍由既有 `analysis_modules` 註冊，改由各自 dedicated view 內的 `AnalysisModuleAdapter` 派送計算與結果呈現；adapter 只認得 `AnalysisDefinition`（`key` + `label` + `input_view` + `calculate` 契約），完全不知道特定分類的存在，因此新增一種既有分析工具不需修改 adapter，只需提供新的 `AnalysisDefinition` 清單。`AnalysisDefinition.calculate` 一律是統一簽章 `Callable[[bool], str]`；任何模組專屬的呼叫慣例（例如 `PsyModule` 需要的 `mode_key`）完全由該模組自己在 `get_analysis_definitions()` 回傳的 `calc_func` 建構時吸收完成（見 `PsyModule._calculate_tdb_twb` / `_calculate_tdb_rh`），`Flet_ui/ui/analysis_definition.py` 的 `definitions_from_module()` 這個 generic factory 本身不判斷、不 import、也不知道任何特定模組的計算模式或呼叫慣例——新增一種分析類別不需要修改這個 factory 或 adapter。`AnalysisModuleAdapter.__init__()` 會在彙整多個模組的定義時做全域 key 驗證：若不同模組間出現重複的 `analysis_id`，立即拋出 `ValueError`（fail fast），不允許 silent overwrite。畫面組成本身由共用的 `AnalysisWorkspace` presentation 殼負責（Header + ToolSelector + Input/Result 並排 + ActionBar），dedicated view 只負責把既有模組接上這個殼。已選取的工具必須有明顯的視覺狀態（`ToolSelector`）。
 - 濕空氣計算的雙模式（乾濕球 / 乾球+RH）仍共用 `PsyModule` 同一組輸入容器並以 `configure_ui_for_mode` 切換欄位可見性；dispatch 只依賴穩定的 mode key（`PsyModule.MODE_TDB_TWB` / `MODE_TDB_RH`，對應 `AnalysisDefinition.key`），不依賴顯示 label —— 翻譯或改文案不會影響計算路徑或 UI 模式切換。`PsychrometricsView` 傳給 `configure_ui_for_mode` 的一律是 `definition.key`；legacy `AnalysisTab` 仍可能傳入顯示 label，`PsyModule._resolve_mode_key()` 會將其正規化為穩定 key 後才判斷，只是相容層，不影響新架構的 key/label 分離。這個特例被限制在 `PsychrometricsView` / `PsyModule` 內部，不會外洩到共用的 `DedicatedAnalysisView` 基底或 `AnalysisModuleAdapter`。
@@ -71,7 +79,9 @@
 
 - **寬版**（約 1200 px 以上）：完整側邊欄、工作區與情境面板。
 - **中版**（約 800–1200 px）：精簡圖示導覽列並隱藏情境面板。
-- **窄版**（低於約 800 px）：工作區使用全寬、側邊導覽改為可切換的覆蓋式抽屜，且不顯示情境面板。
+- **窄版**（低於約 800 px）：工作區使用全寬、側邊導覽改為可切換的覆蓋式抽屜，且不顯示情境面板；頂端列只保留抽屜按鈕、標誌、目前路由名稱及輸出單位切換。
+
+Flet `ResponsiveRow` 的斷點依頁面寬度判斷，而不是依父容器寬度。放在半寬欄位中的指標卡片因此最多每列兩張，避免寬螢幕搭配情境面板時數值被壓縮。
 
 捲動責任必須明確：工作區不得帶動整個外殼捲動；各計算畫面負責自己的捲動區域。性質查詢的底部操作列必須置於可捲動輸入／結果區域之外，讓使用者捲動時仍能操作「重設」及「執行計算」。
 
