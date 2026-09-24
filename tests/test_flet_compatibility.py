@@ -17,6 +17,7 @@ from Flet_ui.ui_components.analysis_modules import thermo_diagram_module
 from Flet_ui.ui_components.analysis_modules.thermo_diagram_module import ThermoDiagramModule
 from Flet_ui.ui_components.analysis_tab import AnalysisTab
 from Flet_ui.ui.state import WorkspaceState
+from Flet_ui.ui.views.thermo_diagram_view import ThermoDiagramView
 from Flet_ui.ui_components.property_tab import PropertyTab
 from Flet_ui.ui_components.unit.HVACAnalyzer import HVACAnalyzer
 from Flet_ui.ui_components.unit.PropertyFormatter import PropertyFormatter
@@ -432,8 +433,8 @@ def test_analysis_hides_generic_execute_button_for_thermodiagram() -> None:
     assert analysis_tab.calc_button_container.visible is True
 
 
-def test_chart_routes_hide_the_legacy_analysis_result_panel() -> None:
-    """確認 P-h 與 T-s 圖頁隱藏舊共用結果面板，其他分析仍保留面板。
+def test_chart_routes_use_dedicated_diagram_view_without_shared_execute_button() -> None:
+    """確認 P-h 與 T-s 圖頁使用專屬 ThermoDiagramView，且分析頁保留共用執行按鈕與結果卡。
 
 回傳：
     無。
@@ -444,14 +445,15 @@ def test_chart_routes_hide_the_legacy_analysis_result_panel() -> None:
 
     for route_key in ("ph_chart", "ts_chart"):
         shell.navigate(route_key)
-        analysis_tab = shell.views[route_key]
-        assert analysis_tab.result_container.visible is False
-        assert analysis_tab.controls[-2].visible is False
+        diagram_view = shell.views[route_key]
+        assert isinstance(diagram_view, ThermoDiagramView)
+        # 熱力圖使用專屬繪圖按鈕，不應該再有共用的 AnalysisWorkspace 執行按鈕。
+        assert not hasattr(diagram_view, "workspace")
 
     shell.navigate("compressor")
-    analysis_tab = shell.views["compressor"]
-    assert analysis_tab.result_container.visible is True
-    assert analysis_tab.controls[-2].visible is True
+    compressor_view = shell.views["compressor"]
+    assert compressor_view.workspace.action_bar.visible is True
+    assert compressor_view.workspace.result_card.visible is True
 
 
 def test_chart_route_change_clears_previous_plot_contents() -> None:
@@ -463,10 +465,8 @@ def test_chart_route_change_clears_previous_plot_contents() -> None:
     page = DummyPage()
     flet_main(page)
     shell = page.controls[0]
-    module = next(
-        item for item in shell.views["ph_chart"].modules_to_load
-        if isinstance(item, ThermoDiagramModule)
-    )
+    diagram_view = shell.views["ph_chart"]
+    module = diagram_view.module
 
     for source_route, target_route, target_diagram in (
         ("ph_chart", "ts_chart", "T-s"),
@@ -530,8 +530,8 @@ def test_app_shell_replaces_top_level_tabs_and_exposes_implemented_routes() -> N
     assert shell.route_header.controls[0].value == "狀態查詢"
 
 
-def test_navigation_routes_update_analysis_category_and_chart_choice() -> None:
-    """確認路由切換選取既有分析分類與圖表，而非依顯示文字建立假功能。
+def test_navigation_routes_expose_dedicated_views_and_chart_choice() -> None:
+    """確認路由切換命中各自的 dedicated view，而非共用單一 AnalysisTab。
 
 回傳：
     無。"""
@@ -541,26 +541,43 @@ def test_navigation_routes_update_analysis_category_and_chart_choice() -> None:
 
     workspace_content = shell.workspace.content
     shell.navigate("compressor")
-    assert shell.views["compressor"].active_category == "compressor"
-    assert shell.views["compressor"].analysis_dd.value in shell.views["compressor"]._active_analysis_names
+    compressor_view = shell.views["compressor"]
+    assert compressor_view.active_key in {key for key, _ in compressor_view.adapter.tool_items()}
     assert shell.workspace.content is workspace_content
     assert shell.views["thermo_properties"].visible is False
-    assert shell.views["compressor"].visible is True
-    assert shell.views["compressor"].module_nav.controls
+    assert compressor_view.visible is True
+    assert compressor_view.tool_selector.controls
 
     shell.navigate("ph_chart")
-    chart_module = next(
-        module for module in shell.views["ph_chart"].modules_to_load
-        if isinstance(module, ThermoDiagramModule)
-    )
-    assert chart_module.diagram_dd.value == "P-h"
+    chart_view = shell.views["ph_chart"]
+    assert chart_view.module.diagram_dd.value == "P-h"
 
     shell.navigate("ts_chart")
-    assert chart_module.diagram_dd.value == "T-s"
+    assert chart_view.module.diagram_dd.value == "T-s"
 
 
-def test_analysis_navigation_deduplicates_panels_and_identifies_selected_mode() -> None:
-    """確認跨頁後分析容器不重複，並清楚顯示濕空氣模式選取狀態。
+def test_dedicated_analysis_views_are_distinct_instances() -> None:
+    """禁止所有 analysis routes 又指向同一個 generic view。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    flet_main(page)
+    shell = page.controls[0]
+
+    compressor_view = shell.views["compressor"]
+    evaporator_view = shell.views["evaporator"]
+    condenser_view = shell.views["condenser"]
+    psychrometrics_view = shell.views["psychrometrics"]
+
+    assert compressor_view is not evaporator_view
+    assert compressor_view is not condenser_view
+    assert compressor_view is not psychrometrics_view
+    assert evaporator_view is not condenser_view
+
+
+def test_psychrometrics_view_retains_state_across_route_navigation() -> None:
+    """確認跨頁後濕空氣分析容器不重複，且切換模式狀態於路由間保留。
 
     回傳：
         無。
@@ -572,23 +589,22 @@ def test_analysis_navigation_deduplicates_panels_and_identifies_selected_mode() 
 
     for route in ("compressor", "psychrometrics", "evaporator", "condenser", "psychrometrics"):
         shell.navigate(route)
-        controls = tab.controls_stack.controls
+        controls = tab.input_stack.controls
         assert len(controls) == len({id(control) for control in controls})
-        assert sum(bool(control.visible) for control in controls) == 1
 
-    first_mode = tab._active_analysis_names[0]
-    second_mode = tab._active_analysis_names[1]
-    assert tab.analysis_mode_status.visible is True
-    assert first_mode in tab.analysis_mode_status.value
-    buttons = tab.module_nav.controls
-    assert buttons[0].style.bgcolor != buttons[1].style.bgcolor
+    tool_items = tab.adapter.tool_items()
+    first_key, _first_label = tool_items[0]
+    second_key, second_label = tool_items[1]
+    assert tab.active_key == first_key
 
-    tab.module_nav.controls[1].on_click(SimpleNamespace())
-    assert second_mode in tab.analysis_mode_status.value
-    assert tab.module_nav.controls[0].style.bgcolor != tab.module_nav.controls[1].style.bgcolor
+    tab.tool_selector._handle_select(second_key)
+    assert tab.active_key == second_key
+    assert tab.psy_module.all_entries["psy_rh"]["ui_row"].visible is (
+        "已知乾球與相對濕度" in second_label
+    )
 
     shell.navigate("compressor")
-    assert tab.analysis_mode_status.visible is False
+    assert tab.active_key == second_key
 
 
 def test_property_query_hides_unsupported_third_condition_and_aligns_controls() -> None:
@@ -712,8 +728,12 @@ def test_global_output_unit_switch_renders_new_metrics_without_mutating_inputs(m
     assert property_tab.result_panel.status == "error"
 
 
-def test_analysis_local_unit_toggle_updates_the_global_preference() -> None:
-    """確認分析頁沿用的單位切換會同步更新全域偏好。
+def test_global_unit_toggle_propagates_to_dedicated_analysis_views() -> None:
+    """確認全域單位切換會同步套用至各 dedicated analysis view 的 adapter。
+
+    PR #4 之後 dedicated view 不再擁有各自的 output_unit_toggle；
+    ``WorkspaceState.output_unit_system`` 是唯一的 source of truth，
+    透過 AppShell 頂部共用的 ``unit_toggle`` 切換。
 
 回傳：
     無。"""
@@ -721,14 +741,14 @@ def test_analysis_local_unit_toggle_updates_the_global_preference() -> None:
     flet_main(page)
     shell = page.controls[0]
     analysis_view = shell.views["compressor"]
-    analysis_view.output_unit_toggle.selected = ["Imperial"]
-    analysis_view.output_unit_toggle.on_change(
-        SimpleNamespace(control=analysis_view.output_unit_toggle)
-    )
+
+    shell.unit_toggle.selected = ["Imperial"]
+    shell.unit_toggle.on_change(SimpleNamespace(control=shell.unit_toggle))
 
     assert shell.state.output_unit_system == "Imperial"
     assert shell.unit_toggle.selected == ["Imperial"]
     assert shell.views["thermo_properties"].output_unit_system == "Imperial"
+    assert analysis_view.adapter.output_unit_system == "Imperial"
 
 
 def test_workspace_state_remembers_input_units_by_row_and_property() -> None:

@@ -1,14 +1,26 @@
 # flet_app_re.py (主程式 - 負責依賴注入)
+#
+# PR #4（Analysis Workspace Migration）之後，此檔案不再依賴共用的
+# ``AnalysisTab.set_category(...)`` 做 route switching，也不再對圖表路由
+# 特別判斷 ``P-h`` / ``T-s`` —— 每個 route 直接映射到各自的 dedicated view，
+# diagram type 由 ``ThermoDiagramView`` 自己管理。
 
 import flet as ft
 
 from .ui.app_shell import AppShell
-from .ui.navigation import ROUTE_BY_KEY
 from .ui.theme import TOKENS, workspace_theme
 from .ui.state import WorkspaceState
 from .ui.views.home_view import HomeView
+from .ui.views.compressor_view import CompressorView
+from .ui.views.evaporator_view import EvaporatorView
+from .ui.views.condenser_view import CondenserView
+from .ui.views.psychrometrics_view import PsychrometricsView
+from .ui.views.thermo_diagram_view import ThermoDiagramView
+from .ui_components.analysis_modules.hvac_compressor_module import CompressorModule
+from .ui_components.analysis_modules.hvac_condenser_module import CondenserModule
+from .ui_components.analysis_modules.hvac_evaporator_module import EvaporatorModule
+from .ui_components.analysis_modules.psy_module import PsyModule
 from .ui_components.analysis_modules.thermo_diagram_module import ThermoDiagramModule
-from .ui_components.analysis_tab import AnalysisTab
 from .ui_components.property_tab import PropertyTab
 from .ui_components.unit.HVACAnalyzer import HVACAnalyzer
 from .ui_components.unit.PropertyFormatter import PropertyFormatter
@@ -48,62 +60,56 @@ def main(page: ft.Page) -> None:
         query_service=property_query_service,
         workspace_state=workspace_state,
     )
-    analysis_view = AnalysisTab(
+
+    # --- 每個分析分類擁有自己的既有模組實例，不再共用單一 AnalysisTab。 ---
+    compressor_module = CompressorModule(
         unit_converter=unit_converter,
         page=page,
         analyzer=hvac_analyzer,
-        psy_calculator=psy_calculator,
         state_calculator=state_calculator,
         property_query_service=property_query_service,
     )
-    diagram_module = next(
-        module for module in analysis_view.modules_to_load
-        if isinstance(module, ThermoDiagramModule)
+    evaporator_module = EvaporatorModule(unit_converter=unit_converter, page=page, analyzer=hvac_analyzer)
+    condenser_module = CondenserModule(
+        unit_converter=unit_converter, page=page, analyzer=hvac_analyzer, state_calculator=state_calculator
     )
+    psy_module = PsyModule(unit_converter=unit_converter, page=page, psy_calculator=psy_calculator)
+    diagram_module = ThermoDiagramModule(unit_converter, page, hvac_analyzer, state_calculator)
+
+    compressor_view = CompressorView(compressor_module, workspace_state=workspace_state)
+    evaporator_view = EvaporatorView(evaporator_module, workspace_state=workspace_state)
+    condenser_view = CondenserView(condenser_module, workspace_state=workspace_state)
+    psychrometrics_view = PsychrometricsView(psy_module, workspace_state=workspace_state)
+    diagram_view = ThermoDiagramView(diagram_module)
+
     shell_ref: dict[str, AppShell] = {}
     home_view = HomeView(lambda route_key: shell_ref["shell"].navigate(route_key))
     views = {
         "home": home_view,
         "thermo_properties": property_view,
-        "compressor": analysis_view,
-        "evaporator": analysis_view,
-        "condenser": analysis_view,
-        "psychrometrics": analysis_view,
-        "ph_chart": analysis_view,
-        "ts_chart": analysis_view,
+        "compressor": compressor_view,
+        "evaporator": evaporator_view,
+        "condenser": condenser_view,
+        "psychrometrics": psychrometrics_view,
+        "ph_chart": diagram_view,
+        "ts_chart": diagram_view,
     }
 
     def on_route_change(route_key: str) -> None:
-        """依穩定路由鍵切換 HVAC 分析類別或圖表，並清除圖表舊內容。
+        """讓熱力圖畫面依路由切換自己的 view-local mode，不再由 App root 判斷。
 
 參數：
     route_key: 工作區內部使用的路由識別碼。
 
 回傳：
     無。"""
-        route = ROUTE_BY_KEY[route_key]
-        if route.analysis_category:
-            analysis_view.set_category(route.analysis_category)
         if route_key == "ph_chart":
-            diagram_module.set_diagram_type("P-h")
+            diagram_view.set_mode("ph")
         elif route_key == "ts_chart":
-            diagram_module.set_diagram_type("T-s")
-
-    def on_analysis_unit_change(event: ft.ControlEvent) -> None:
-        """將分析頁舊有的輸出單位切換同步到全域偏好。
-
-參數：
-    event: 含有目前選取單位系統的 Flet 控制事件。
-
-回傳：
-    無。"""
-        selected = next(iter(event.control.selected), "SI")
-        shell_ref["shell"].set_output_unit_system(selected)
-
-    analysis_view.output_unit_toggle.on_change = on_analysis_unit_change
+            diagram_view.set_mode("ts")
 
     def on_unit_system_change(unit_system: str) -> None:
-        """更新全域輸出偏好並重新呈現輸出，不改寫各輸入欄位單位。
+        """更新全域輸出偏好並重新呈現各 dedicated view，不改寫輸入欄位單位。
 
 參數：
     unit_system: 要套用的輸出單位系統。
@@ -111,8 +117,8 @@ def main(page: ft.Page) -> None:
 回傳：
     無。"""
         property_view.set_output_unit_system(unit_system)
-        analysis_view.output_unit_toggle.selected = [unit_system]
-        analysis_view.on_output_unit_change(None)
+        for view in (compressor_view, evaporator_view, condenser_view, psychrometrics_view):
+            view.set_output_unit_system(unit_system)
 
     def choose_fluid(fluid: str) -> None:
         """將常用冷媒捷徑套用至熱力性質工作區。
