@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from domain.thermodynamics.reference_state import ReferenceStatePolicy
+from domain.thermodynamics.reference_state import ReferenceStatePolicy, normalize_reference_state_policy
 
 from .states import CycleState, ThermodynamicStateProvider, query_state
 
@@ -35,7 +35,12 @@ class VaporCompressionInputs:
 
 @dataclass(frozen=True)
 class VaporCompressionResult:
-    """循環狀態點與性能指標。系統量（kg/s、W、m³/s）只在提供冷凍能力時才有值。"""
+    """循環狀態點與性能指標。系統量（kg/s、W、m³/s）只在提供冷凍能力時才有值。
+
+    ``reference_state`` 是求解時實際使用的 reference-state policy code（例如
+    ``ASHRAE``）；焓、熵等數值都以此為基準，繪製同一循環的圖表必須沿用它，
+    不可重新解析。
+    """
 
     fluid: str
     states: dict[str, CycleState]
@@ -47,6 +52,7 @@ class VaporCompressionResult:
     cop_cooling: float
     cop_heating: float
     pressure_ratio: float
+    reference_state: str
     mass_flow_kg_s: float | None = None
     refrigeration_capacity_w: float | None = None
     compressor_power_w: float | None = None
@@ -170,5 +176,6 @@ def solve_vapor_compression_cycle(
         cop_cooling=refrigerating_effect / compressor_work,
         cop_heating=heat_rejection / compressor_work,
         pressure_ratio=p_cond / p_evap,
+        reference_state=normalize_reference_state_policy(policy),
         **system,
     )

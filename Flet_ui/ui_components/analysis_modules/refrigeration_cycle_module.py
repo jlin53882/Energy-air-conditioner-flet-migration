@@ -1,7 +1,8 @@
 """冷凍循環分析：蒸氣壓縮循環（含 P-h 圖）與過熱度／過冷度判讀。
 
 計算委派給 `RefrigerationService`；P-h 圖沿用既有 `generate_thermo_diagram`，
-以與循環計算相同的 reference-state policy（Auto）繪製。
+並使用循環結果攜帶的 reference-state policy（求解時實際使用的那一個）繪製，
+不在繪圖時重新解析。
 """
 
 from __future__ import annotations
@@ -271,7 +272,8 @@ class RefrigerationCycleModule(BaseAnalysisModule):
             unit_converter=self.unit_converter,
             connect_points=True,
             input_mode="Cycle",
-            ref_state="Auto",
+            # 與求解使用同一個已解析的 policy，確保圖上焓值與結果一致。
+            ref_state=result.reference_state,
             target_P_unit="MPa",
             figure=self.chart_panel.figure,
         )
