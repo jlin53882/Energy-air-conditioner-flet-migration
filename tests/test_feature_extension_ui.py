@@ -6,6 +6,7 @@ import pytest
 
 from Flet_ui.flet_app import main as flet_main
 from Flet_ui.ui.components.figure_panel import FigurePanel
+from Flet_ui.ui_components.analysis_modules.psy_module import PsyModule
 from Flet_ui.ui_components.analysis_modules.result_formatting import ResultFormatter
 from Flet_ui.ui_components.unit.UnitConverter import UnitConverter
 
@@ -298,3 +299,90 @@ def test_unit_converter_view_lists_every_unit(shell) -> None:
     assert "絕對零度" in view.value_tf.error_text
     view.value_tf.value = "1"
     view.convert()
+
+
+def test_psychrometric_property_modes_use_structured_result_view(shell) -> None:
+    """濕空氣性質模式以關鍵數值、焓濕圖與性質表取代通用指標卡片。
+
+回傳：
+    無。"""
+    shell.navigate("psychrometrics")
+    tab = shell.views["psychrometrics"]
+    sections = tab.workspace.result_view.result_sections
+    tab._handle_tool_change(PsyModule.MODE_TDB_TWB)
+    tab.perform_calculation(None)
+
+    view = tab.psy_module.result_view
+    assert tab.result_panel.status == "success"
+    assert sections.controls == [view]
+    assert view.kpis["RH"].value_control.value == "63.5"
+    assert view.kpis["Tdp"].value_control.value == "17.59"
+    inputs, results = view.property_table.groups
+    assert [row.label for row in inputs.rows][:2] == ["乾球溫度", "濕球溫度"]
+    assert inputs.highlighted is True
+    assert "相對濕度" in [row.label for row in results.rows]
+    axes = view.chart_panel.figure.axes[0]
+    assert any(text.get_text() == "Tdp 17.6" for text in axes.texts)
+    assert any(text.get_text() == "Twb 20.0" for text in axes.texts)
+
+    assert view.process_body.visible is False
+    view.toggle_process(None)
+    assert view.process_body.visible is True
+    view.toggle_process(None)
+
+    tab._handle_tool_change(PsyModule.MODE_TDB_RH)
+    assert sections.controls == []
+    tab.perform_calculation(None)
+    inputs, results = view.property_table.groups
+    assert inputs.rows[1].label == "相對濕度"
+    assert "濕球溫度" in [row.label for row in results.rows]
+
+
+def test_psychrometric_result_view_follows_output_units(shell) -> None:
+    """切換英制後關鍵數值與性質表改用英制單位。
+
+回傳：
+    無。"""
+    shell.navigate("psychrometrics")
+    tab = shell.views["psychrometrics"]
+    tab._handle_tool_change(PsyModule.MODE_TDB_TWB)
+    view = tab.psy_module.result_view
+    tab.perform_calculation(None)
+    try:
+        tab.set_output_unit_system("Imperial")
+        assert view.kpis["Tdp"].unit_control.value == "°F"
+        assert view.kpis["W"].unit_control.value == "gr/lbm(DA)"
+    finally:
+        tab.set_output_unit_system("SI")
+
+
+def test_altitude_field_shows_atmospheric_pressure_hint(shell) -> None:
+    """海拔輸入即時顯示大氣壓力，無效輸入時顯示提示而不拋錯。
+
+回傳：
+    無。"""
+    module = shell.views["psychrometrics"].psy_module
+    field = module.all_entries["psy_alt"]["val"]
+    try:
+        field.value = "1000"
+        module.update_pressure_hint(None)
+        assert module.pressure_hint.value == "→ 大氣壓力 89.875 kPa"
+        field.value = "abc"
+        module.update_pressure_hint(None)
+        assert "有效海拔" in module.pressure_hint.value
+    finally:
+        field.value = "0"
+        module.update_pressure_hint(None)
+    assert module.pressure_hint.value == "→ 大氣壓力 101.325 kPa"
+
+
+def test_chart_axes_expand_for_hot_humid_states() -> None:
+    """焓濕圖預設 0–35 °C／30 g/kg，狀態點超出時自動放大。
+
+回傳：
+    無。"""
+    from Flet_ui.ui_components.analysis_modules.psy_result_view import chart_axes_for
+
+    assert chart_axes_for({"Tdb": 298.15, "Tdp": 290.74, "W": 0.0126}) == ((0.0, 35.0), 0.030)
+    (low, high), w_max = chart_axes_for({"Tdb": 318.15, "Tdp": 305.0, "W": 0.030})
+    assert high == 50.0 and w_max == pytest.approx(0.045)

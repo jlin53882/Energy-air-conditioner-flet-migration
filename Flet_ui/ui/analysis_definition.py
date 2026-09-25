@@ -39,6 +39,8 @@ class AnalysisDefinition:
             計算後顯示於結果卡片，重設或失敗時隱藏。
         result_chart_first: 以圖表為主要產出的分析設為 True，圖表會放在
             指標卡片之前。
+        result_view: 選用的模組自有結構化結果控制項；成功計算時取代預設
+            指標卡片，狀態列、原始文字與複製仍由共用結果區負責。
     """
 
     key: str
@@ -48,6 +50,7 @@ class AnalysisDefinition:
     show_execute_button: bool = True
     result_chart: ft.Control | None = None
     result_chart_first: bool = False
+    result_view: ft.Control | None = None
 
 
 def definitions_from_module(module: object) -> list[AnalysisDefinition]:
@@ -90,6 +93,7 @@ def definitions_from_module(module: object) -> list[AnalysisDefinition]:
                 show_execute_button=raw.get("show_execute_button", True),
                 result_chart=raw.get("result_chart"),
                 result_chart_first=raw.get("result_chart_first", False),
+                result_view=raw.get("result_view"),
             )
         )
     return definitions

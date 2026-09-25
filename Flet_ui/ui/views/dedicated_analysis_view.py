@@ -131,6 +131,7 @@ class DedicatedAnalysisView(ft.Column):
             self.adapter.result_text,
             chart=definition.result_chart,
             chart_first=definition.result_chart_first,
+            custom_view=definition.result_view,
         )
 
     @property

@@ -4,6 +4,12 @@ import flet as ft
 from .base_analysis_module import BaseAnalysisModule
 from ..unit.PsychrometricCalculator import PsychrometricCalculator
 from ..unit.UnitConverter import UnitConverter
+from ...ui.theme import TOKENS
+from .psy_result_view import (
+    KNOWN_RELATIVE_HUMIDITY,
+    KNOWN_WET_BULB,
+    PsychrometricResultView,
+)
 
 class PsyModule(BaseAnalysisModule):
     # 穩定的分析模式 key，routing / dispatch 一律使用這兩個常數；
@@ -29,13 +35,32 @@ class PsyModule(BaseAnalysisModule):
         # --- 建立 UI ---
         self._build_ui_components()
         self._setup_unit_sync()
+        self.result_view = PsychrometricResultView(unit_converter, self.psy_calculator.service)
+        # 海拔輸入即時換算大氣壓力，讓使用者在計算前就看到推導值。
+        self.pressure_hint = ft.Text("", size=TOKENS.caption, color=TOKENS.text_muted)
+        self.all_entries["psy_alt"]["val"].on_change = self.update_pressure_hint
+        convert_altitude_unit = self.all_entries["psy_alt"]["unit"].on_select
+
+        def on_altitude_unit_change(event) -> None:
+            """換算海拔數值後同步更新大氣壓力提示。
+
+參數：
+    event: 單位選單的 Flet 事件。
+
+回傳：
+    無。"""
+            convert_altitude_unit(event)
+            self.update_pressure_hint(None)
+
+        self.all_entries["psy_alt"]["unit"].on_select = on_altitude_unit_change
+        self.update_pressure_hint(None)
         
         # --- 建立 UI 容器 ---
         # 兩種模式共用 *同一個* UI 容器實例
         self.ui_container = ft.Container(
             content=ft.Column(
                 controls=[
-                    self.all_entries["psy_alt"]["ui_row"],
+                    ft.Column([self.all_entries["psy_alt"]["ui_row"], self.pressure_hint], spacing=4),
                     self.all_entries["psy_tdb"]["ui_row"],
                     self.all_entries["psy_twb"]["ui_row"],
                     self.all_entries["psy_rh"]["ui_row"],
@@ -63,12 +88,14 @@ class PsyModule(BaseAnalysisModule):
         return {
             "濕空氣性質 (已知乾濕球)": {
                 "analysis_id": self.MODE_TDB_TWB,
+                "result_view": self.result_view,
                 "ui": self.ui_container,
                 "calc_func": self._calculate_tdb_twb,
                 "calculation_mode": "psychrometric"
             },
             "濕空氣性質 (已知乾球與相對濕度)": {
                 "analysis_id": self.MODE_TDB_RH,
+                "result_view": self.result_view,
                 "ui": self.ui_container,
                 "calc_func": self._calculate_tdb_rh,
                 "calculation_mode": "psychrometric"
@@ -116,6 +143,26 @@ class PsyModule(BaseAnalysisModule):
         self.all_entries["psy_tdb"]["unit"].on_select = self._create_unit_sync_handler("T", psy_t_sync_group)
         self.all_entries["psy_twb"]["unit"].on_select = self._create_unit_sync_handler("T", psy_t_sync_group)
         self.all_entries["psy_alt"]["unit"].on_select = self._create_unit_sync_handler("L", ["psy_alt"])
+
+    def update_pressure_hint(self, _event: ft.ControlEvent | None) -> None:
+        """依目前海拔輸入顯示推算的大氣壓力；輸入無效時提示而不拋錯。
+
+參數：
+    _event: 海拔欄位的 Flet 變更事件；初始化時為 None。
+
+回傳：
+    無。"""
+        entry = self.all_entries["psy_alt"]
+        try:
+            altitude_m = self.unit_converter.convert_to_si("L", float(entry["val"].value), entry["unit"].value)
+            pressure_kpa = self.psy_calculator.calculate_pressure_from_altitude(altitude_m) / 1000.0
+            self.pressure_hint.value = f"→ 大氣壓力 {pressure_kpa:.3f} kPa"
+        except (TypeError, ValueError):
+            self.pressure_hint.value = "→ 輸入有效海拔後顯示大氣壓力"
+        try:
+            self.pressure_hint.update()
+        except RuntimeError:
+            pass
 
     def _resolve_mode_key(self, mode: str) -> str:
         """將呼叫端傳入值正規化為穩定的 mode key。
@@ -200,8 +247,10 @@ class PsyModule(BaseAnalysisModule):
             rh_si = self.unit_converter.convert_to_si("RH", rh_val, "%") 
             psy_results = self.psy_calculator.calculate_from_tdb_rh(tdb_k, rh_si, alt_m)
 
-        # 4. 格式化輸出
+        # 4. 格式化輸出；結構化畫面與文字結果來自同一份狀態
         if psy_results:
+            known_input = KNOWN_WET_BULB if mode_key == self.MODE_TDB_TWB else KNOWN_RELATIVE_HUMIDITY
+            self.result_view.show(psy_results, known_input=known_input, use_imperial=use_imperial)
             result_lines = self._format_psy_results(psy_results, use_imperial)
             return "\n".join(result_lines)
         else:

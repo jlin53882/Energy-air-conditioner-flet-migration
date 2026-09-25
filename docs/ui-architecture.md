@@ -51,6 +51,7 @@
 - 性質查詢工作區將既有的模式、流體、參考狀態及性質控制項組合成全寬計算設定卡，下方左欄為已知條件與選用廣延性質、右欄為結果；窄視窗時依序堆疊。水模式的理想氣體選項必須實際出現在計算設定卡中。常用組合以膠囊按鈕呈現，並標示與前兩列性質相符的組合。
 - 分析工作區（壓縮機、蒸發器、冷凝器、濕空氣）由 `AnalysisWorkspace` 組成：分析項目卡（`ToolSelector` 膠囊按鈕，只有一項分析的畫面會隱藏）、輸入卡（說明、公式提示、模組輸入及執行按鈕）與結果卡（`AnalysisResultView`：狀態、分組指標、原始文字與複製）。頁面標題與說明由 AppShell 頁首呈現，`AnalysisWorkspace.header` 預設隱藏。`AnalysisModuleAdapter` 保存模組回傳的原始 `result_text`；以「計算錯誤」或「計算失敗」開頭的文字以錯誤狀態呈現，不投影指標。
 - 分析定義可選擇提供 `result_chart`（通常為 `FigurePanel`），由 `definitions_from_module()` 帶入 `AnalysisDefinition.result_chart`；成功計算後由 `AnalysisResultView` 顯示於結果卡片，重設、切換工具或錯誤時隱藏，且不得沿用前一個分析的圖表。`result_chart_first` 為真時圖表放在指標之前（以圖表為主要產出的分析）。`FigurePanel` 持有長期存在的 Matplotlib figure，繪圖程式必須清除並重畫同一個 figure，再呼叫 `refresh()`。
+- 分析定義可提供 `result_view`（帶入 `AnalysisDefinition.result_view`）：模組自行呈現的結構化結果畫面，成功計算時取代預設的指標卡片（狀態列、原始文字與複製仍由 `AnalysisResultView` 負責）。濕空氣性質的兩種模式使用 `PsychrometricResultView`：四個關鍵數值（RH、露點、焓、濕度比）、帶濕球／露點輔助線的焓濕圖、分成「輸入值／計算結果」的完整性質表，以及可展開的計算過程；海拔欄位下方即時顯示推算的大氣壓力。結果畫面與文字結果必須來自同一份服務回傳的狀態。
 - 空氣處理程序路由（`AirProcessView` + `PsyProcessModule`）：氣流混合、顯熱加熱／冷卻、冷卻除濕盤管與送風量估算，計算委派給 `AirProcessService`，過程標示在濕空氣線圖上。濕空氣性質路由（`PsychrometricsView`）維持原本的兩種模式。
 - 冷凍循環路由（`RefrigerationCycleView` + `RefrigerationCycleModule`）提供蒸氣壓縮循環（P-h 圖沿用 `generate_thermo_diagram`，與求解使用相同的 Auto reference-state policy）及過熱度／過冷度判讀（錶壓力需加上輸入的大氣壓力）。
 - 濕空氣線圖路由（`PsychrometricChartView` + `PsychrometricChartModule`）以逗號分隔的乾球溫度與 RH 標示最多 8 點。線圖曲線來自無頭的 `chart.psychrometric`，Matplotlib 呈現位於 `thermo_draw/psychrometric_plot.py`。

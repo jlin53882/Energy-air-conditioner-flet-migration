@@ -247,6 +247,7 @@ class AnalysisWorkspace(ft.Column):
         *,
         chart: ft.Control | None = None,
         chart_first: bool = False,
+        custom_view: ft.Control | None = None,
     ) -> None:
         """以目前 ResultPanel 狀態重新呈現結果區。
 
@@ -254,11 +255,18 @@ class AnalysisWorkspace(ft.Column):
             result_text: 模組回傳的原始結果文字；尚未計算時為 None。
             chart: 選用的結果圖表。
             chart_first: True 表示圖表放在指標卡片之前。
+            custom_view: 選用的模組自有結果畫面。
 
         回傳：
             無。
         """
-        self.result_view.show(result_text, accent=self.accent, chart=chart, chart_first=chart_first)
+        self.result_view.show(
+            result_text,
+            accent=self.accent,
+            chart=chart,
+            chart_first=chart_first,
+            custom_view=custom_view,
+        )
 
     def set_action_bar_visible(self, visible: bool) -> None:
         """切換共用執行按鈕的顯示，避免與模組內建按鈕重複。

@@ -49,6 +49,20 @@ class ResultFormatter:
         )
         return units[prop_code]
 
+    def parts(self, prop_code: str, value_si: float, digits: int = 2) -> tuple[str, str]:
+        """將 SI 數值轉為目前單位系統的（數值文字, 單位）。
+
+參數：
+    prop_code: UnitConverter 性質代碼。
+    value_si: canonical SI 數值。
+    digits: 小數位數。
+
+回傳：
+    數值文字與單位文字。"""
+        unit = self.unit(prop_code)
+        value = self.unit_converter.convert_from_si(prop_code, value_si, unit)
+        return f"{value:.{digits}f}", unit
+
     def quantity(self, prop_code: str, value_si: float, digits: int = 2) -> str:
         """將 SI 數值轉為目前單位系統的「數值 單位」文字。
 
@@ -59,9 +73,8 @@ class ResultFormatter:
 
 回傳：
     格式化文字。"""
-        unit = self.unit(prop_code)
-        value = self.unit_converter.convert_from_si(prop_code, value_si, unit)
-        return f"{value:.{digits}f} {unit}"
+        number, unit = self.parts(prop_code, value_si, digits)
+        return f"{number} {unit}"
 
     def section(self, title: str) -> "ResultFormatter":
         """新增一個結果分組標題。

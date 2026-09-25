@@ -17,6 +17,7 @@ from chart.psychrometric import PsychrometricChartData
 from . import coolprop_utils  # noqa: F401  # 套用共用的中文字型設定
 
 PROCESS_COLORS = ("#1B5FAA", "#C2620F", "#0F9D9A", "#6D4BC4")
+GUIDE_COLOR = "#C2410C"
 
 
 @dataclass(frozen=True)
@@ -40,12 +41,21 @@ class ChartMarker:
         return cls(label, float(state["Tdb"]) - 273.15, float(state["W"]))
 
 
+@dataclass(frozen=True)
+class ChartGuide:
+    """由狀態點延伸出的輔助線（例如到露點或濕球溫度），終點以空心圓與標籤標示。"""
+
+    start: ChartMarker
+    end: ChartMarker
+
+
 def draw_psychrometric_chart(
     figure: Figure,
     data: PsychrometricChartData,
     *,
     markers: Sequence[ChartMarker] = (),
     paths: Sequence[Sequence[ChartMarker]] = (),
+    guides: Sequence[ChartGuide] = (),
     title: str | None = None,
 ) -> None:
     """在既有 figure 上重畫濕空氣線圖、狀態點與過程線。
@@ -55,7 +65,8 @@ def draw_psychrometric_chart(
     data: 線圖曲線資料。
     markers: 要標示的狀態點。
     paths: 過程線，每條為依序連接的狀態點。
-    title: 選用標題；未提供時顯示大氣壓力與海拔。
+    guides: 輔助線；終點標籤取自 end.label。
+    title: 選用標題；None 時顯示大氣壓力與海拔，空字串時不顯示標題與圖例說明。
 
 回傳：
     無。"""
@@ -84,6 +95,15 @@ def draw_psychrometric_chart(
         axes.plot([point.dry_bulb_c for point in path],
                   [point.humidity_ratio * 1000 for point in path],
                   color=color, linewidth=2.2)
+    for guide in guides:
+        axes.plot([guide.start.dry_bulb_c, guide.end.dry_bulb_c],
+                  [guide.start.humidity_ratio * 1000, guide.end.humidity_ratio * 1000],
+                  color=GUIDE_COLOR, linewidth=1.0, linestyle="--")
+        axes.plot(guide.end.dry_bulb_c, guide.end.humidity_ratio * 1000, "o",
+                  markerfacecolor="white", markeredgecolor=GUIDE_COLOR, markersize=5, zorder=5)
+        axes.annotate(guide.end.label, (guide.end.dry_bulb_c, guide.end.humidity_ratio * 1000),
+                      xytext=(-6, 5), textcoords="offset points", fontsize=8, color=GUIDE_COLOR,
+                      ha="right")
     for marker in markers:
         axes.plot(marker.dry_bulb_c, marker.humidity_ratio * 1000, "o",
                   color="#C0362C", markersize=7, zorder=5)
@@ -98,10 +118,10 @@ def draw_psychrometric_chart(
     axes.set_xlabel("乾球溫度 (°C)")
     axes.set_ylabel("濕度比 W (g/kg 乾空氣)")
     axes.grid(True, color="#E4E9F0", linewidth=0.6)
-    axes.set_title(
-        title or f"濕空氣線圖（大氣壓力 {data.pressure_pa / 1000:.2f} kPa，海拔 {data.altitude_m:g} m）",
-        fontsize=11,
-    )
-    axes.text(0.01, 0.98, "虛線：等焓線 (kJ/kg)", transform=axes.transAxes, fontsize=7,
-              color="#A0845C", va="top")
+    if title is None:
+        title = f"濕空氣線圖（大氣壓力 {data.pressure_pa / 1000:.2f} kPa，海拔 {data.altitude_m:g} m）"
+    if title:
+        axes.set_title(title, fontsize=11)
+        axes.text(0.01, 0.98, "虛線：等焓線 (kJ/kg)", transform=axes.transAxes, fontsize=7,
+                  color="#A0845C", va="top")
     figure.tight_layout()

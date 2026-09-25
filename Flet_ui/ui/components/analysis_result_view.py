@@ -61,6 +61,7 @@ class AnalysisResultView(ft.Column):
         accent: str,
         chart: ft.Control | None = None,
         chart_first: bool = False,
+        custom_view: ft.Control | None = None,
     ) -> None:
         """依目前狀態呈現結果；只有成功狀態才會投影指標與圖表。
 
@@ -69,6 +70,7 @@ class AnalysisResultView(ft.Column):
             accent: 指標卡片使用的強調色。
             chart: 選用的結果圖表；成功時顯示並要求重繪。
             chart_first: True 表示圖表放在指標卡片之前。
+            custom_view: 選用的模組自有結果畫面；成功時取代預設指標卡片。
 
         回傳：
             無。
@@ -76,11 +78,14 @@ class AnalysisResultView(ft.Column):
         has_text = bool(result_text)
         succeeded = has_text and self.result_panel.status == "success"
         self.raw_text.value = result_text or ""
-        self.result_sections.controls = (
-            build_result_section_controls(parse_result_text(result_text), accent=accent)
-            if succeeded
-            else []
-        )
+        if not succeeded:
+            self.result_sections.controls = []
+        elif custom_view is not None:
+            self.result_sections.controls = [custom_view]
+        else:
+            self.result_sections.controls = build_result_section_controls(
+                parse_result_text(result_text), accent=accent
+            )
         self._show_chart(chart if succeeded else None, chart_first)
         self.details_button.disabled = not has_text
         self.copy_button.disabled = not succeeded
