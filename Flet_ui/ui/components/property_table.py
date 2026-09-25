@@ -1,29 +1,13 @@
 """以分組、右對齊數值呈現性質清單的表格元件。"""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
 
 import flet as ft
 
+from ..structured_result import PropertyGroup, PropertyRow
 from ..theme import TOKENS
 
-
-@dataclass(frozen=True)
-class PropertyRow:
-    """表格中的一列：名稱、已格式化數值與單位。"""
-
-    label: str
-    value: str
-    unit: str = ""
-
-
-@dataclass(frozen=True)
-class PropertyGroup:
-    """一組性質；highlighted 為真時以淡底色標示（例如輸入值）。"""
-
-    title: str
-    rows: Sequence[PropertyRow]
-    highlighted: bool = False
+__all__ = ["PropertyGroup", "PropertyRow", "PropertyTable"]
 
 
 class PropertyTable(ft.Column):

@@ -34,7 +34,7 @@ class PsychrometricsView(DedicatedAnalysisView):
             modules=[module],
             workspace_state=workspace_state,
             accent=section_colors("空氣處理")[0],
-            column_split=(4, 8),
+            tool_label="已知參數組合",
         )
         # 初始化時同步一次目前選取模式，維持既有 UI 顯示狀態。
         self._on_tool_selected(self.adapter.active_key)

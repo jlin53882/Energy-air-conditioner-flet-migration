@@ -35,7 +35,7 @@ class DedicatedAnalysisView(ft.Column):
         modules: list[object],
         workspace_state: WorkspaceState | None = None,
         accent: str = TOKENS.primary,
-        column_split: tuple[int, int] = (6, 6),
+        tool_label: str = "分析項目",
     ) -> None:
         """組合 tool selector、輸入堆疊與結果面板。
 
@@ -45,7 +45,7 @@ class DedicatedAnalysisView(ft.Column):
             modules: 此分類使用的既有分析模組實例清單。
             workspace_state: 選用的共用工作區狀態；用於讀取全域輸出單位。
             accent: 此分類使用的強調色（通常取自導覽分類色）。
-            column_split: 寬版時輸入欄與結果欄的欄寬（合計 12）。
+            tool_label: 分析項目選單的欄位名稱。
 
         回傳：
             無。
@@ -59,15 +59,14 @@ class DedicatedAnalysisView(ft.Column):
             self.adapter.output_unit_system = workspace_state.output_unit_system
 
         tool_items = self.adapter.tool_items()
-        # 按鈕顯示 analysis_presentation 的短標籤，完整名稱放在提示文字；
+        # 選單顯示 analysis_presentation 的短標籤，完整名稱顯示在輸入卡中；
         # dispatch 仍只使用 key。
         self.tool_selector = ToolSelector(
             items=[(key, self._short_label(key, label)) for key, label in tool_items],
             selected=self.adapter.active_key,
             on_change=self._handle_tool_change,
             disabled=len(tool_items) <= 1,
-            accent=accent,
-            tooltips=dict(tool_items),
+            label=tool_label,
         )
 
         seen_ui_ids: set[int] = set()
@@ -89,7 +88,6 @@ class DedicatedAnalysisView(ft.Column):
             show_execute_button=self.adapter.active_definition.show_execute_button,
             show_tool_selector=len(tool_items) > 1,
             accent=accent,
-            column_split=column_split,
         )
         self.controls = [self.workspace]
         self._sync_presentation()
@@ -130,11 +128,11 @@ class DedicatedAnalysisView(ft.Column):
             無。
         """
         definition = self.adapter.active_definition
+        structured = None
+        if self.adapter.result_panel.status == "success" and definition.structured_result:
+            structured = definition.structured_result()
         self.workspace.show_result(
-            self.adapter.result_text,
-            chart=definition.result_chart,
-            chart_first=definition.result_chart_first,
-            custom_view=definition.result_view,
+            self.adapter.result_text, chart=definition.result_chart, structured=structured
         )
 
     @property

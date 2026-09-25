@@ -69,7 +69,6 @@ class PsychrometricChartModule(BaseAnalysisModule):
                 "ui": self.chart_ui,
                 "calc_func": self.calculate_chart,
                 "result_chart": self.chart_panel,
-                "result_chart_first": True,
             },
         }
 

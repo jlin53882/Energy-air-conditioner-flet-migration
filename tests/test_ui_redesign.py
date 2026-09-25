@@ -326,11 +326,11 @@ def test_single_analysis_views_hide_tool_card_and_show_formula() -> None:
     shell = _build_shell()
 
     compressor = shell.views["compressor"].workspace
-    assert compressor.selector_card.visible is True
+    assert compressor.tool_selector.visible is True
     assert compressor.formula_box.visible is True
 
     evaporator = shell.views["evaporator"].workspace
-    assert evaporator.selector_card.visible is False
+    assert evaporator.tool_selector.visible is False
     assert evaporator.analysis_title.value
     assert evaporator.formula_box.visible is True
 

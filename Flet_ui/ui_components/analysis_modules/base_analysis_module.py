@@ -5,7 +5,7 @@ from math import isfinite
 
 import flet as ft
 from ..unit.UnitConverter import UnitConverter
-from ...ui.theme import TOKENS, style_dropdown, style_text_field
+from ...ui.theme import TOKENS, style_text_field
 
 class BaseAnalysisModule:
     """
@@ -88,42 +88,64 @@ class BaseAnalysisModule:
         self._last_units[key] = final_default_unit
 
         label_control = ft.Text(
-            label, size=TOKENS.body, weight=ft.FontWeight.W_500, color=TOKENS.text_primary
+            label, size=TOKENS.body, weight=ft.FontWeight.W_500, color=TOKENS.text_secondary
         )
-        val_tf = style_text_field(ft.TextField(
+        # 數值與單位合成同一個外框：單位選單放在欄位尾端，仍可逐欄切換。
+        val_tf = ft.TextField(
             value=str(default_val),
             keyboard_type=ft.KeyboardType.NUMBER,
             expand=True,
-            height=TOKENS.input_height,
             hint_text="輸入數值",
-        ))
-
-        unit_label_control = ft.Text("單位", size=TOKENS.caption, color=TOKENS.text_muted)
-        unit_dd = style_dropdown(ft.Dropdown(
+            border=ft.InputBorder.NONE,
+            text_size=TOKENS.body + 1,
+            cursor_color=TOKENS.primary,
+            content_padding=ft.Padding.symmetric(horizontal=14, vertical=12),
+        )
+        unit_dd = ft.Dropdown(
             value=final_default_unit,
             options=[ft.dropdown.Option(u) for u in units],
-            width=124,
+            width=96,
+            border=ft.InputBorder.NONE,
+            text_size=TOKENS.body - 1,
+            text_align=ft.TextAlign.RIGHT,
+            color=TOKENS.text_muted,
+            trailing_icon=ft.Icon(ft.Icons.EXPAND_MORE, size=16, color=TOKENS.text_muted),
+            selected_trailing_icon=ft.Icon(ft.Icons.EXPAND_LESS, size=16, color=TOKENS.text_muted),
+            content_padding=ft.Padding.only(left=4, right=0),
+            disabled=(prop_code == "RH" or prop_code == "Q"),
+        )
+        field_box = ft.Container(
+            content=ft.Row(
+                controls=[val_tf, unit_dd],
+                spacing=0,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
             height=TOKENS.input_height,
-            disabled=(prop_code == "RH" or prop_code == "Q")
-        ))
+            bgcolor=TOKENS.surface,
+            border=ft.Border.all(1, TOKENS.border_strong),
+            border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
+        )
 
-        value_column = ft.Column(
-            controls=[label_control, val_tf],
-            spacing=6,
-            expand=True
-        )
-        unit_column = ft.Column(
-            controls=[unit_label_control, unit_dd],
-            spacing=6,
-            width=124,
-            horizontal_alignment=ft.CrossAxisAlignment.START,
-        )
-        input_row = ft.Row(
-            controls=[value_column, unit_column],
-            alignment=ft.MainAxisAlignment.START,
-            spacing=TOKENS.spacing_sm + 2,
-            vertical_alignment=ft.CrossAxisAlignment.END,
-        )
+        def set_focused(focused: bool) -> None:
+            """以外框顏色與粗細標示目前聚焦的欄位。
+
+            參數：
+                focused: 欄位是否取得焦點。
+
+            回傳：
+                無。
+            """
+            field_box.border = ft.Border.all(
+                2 if focused else 1, TOKENS.primary if focused else TOKENS.border_strong
+            )
+            try:
+                field_box.update()
+            except RuntimeError:
+                pass
+
+        val_tf.on_focus = lambda _event: set_focused(True)
+        val_tf.on_blur = lambda _event: set_focused(False)
+        input_row = ft.Column(controls=[label_control, field_box], spacing=6)
 
         self.all_entries[key] = {
             "val": val_tf,
@@ -131,7 +153,7 @@ class BaseAnalysisModule:
             "ui_row": input_row,
             "prop_code": prop_code,
             "label_control": label_control,
-            "unit_label_control": unit_label_control,
+            "field_box": field_box,
         }
         return self.all_entries[key] # 返回字典
 

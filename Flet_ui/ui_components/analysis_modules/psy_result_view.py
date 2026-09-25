@@ -1,4 +1,4 @@
-"""濕空氣性質的結果畫面：關鍵數值、焓濕圖、完整性質表與可展開的計算過程。
+"""濕空氣性質的結構化結果：關鍵數值、焓濕圖、完整性質表與可展開的計算過程。
 
 只負責呈現 `PsychrometricService` 回傳的中立狀態，不做任何濕空氣計算；
 圖表曲線來自 `chart.psychrometric`，數值格式與單位由 `ResultFormatter` 決定。
@@ -10,15 +10,11 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-import flet as ft
-
 from chart.psychrometric import PsychrometricChartData, build_psychrometric_chart_data
 from domain.psychrometrics.service import PsychrometricService
 
 from ...ui.components.figure_panel import FigurePanel
-from ...ui.components.kpi_tile import KpiTile
-from ...ui.components.property_table import PropertyGroup, PropertyRow, PropertyTable
-from ...ui.theme import TOKENS
+from ...ui.structured_result import PropertyGroup, PropertyRow, ResultMetric, StructuredResult
 from ..unit.UnitConverter import UnitConverter
 from ..unit.thermo_draw.psychrometric_plot import ChartGuide, ChartMarker, draw_psychrometric_chart
 from .result_formatting import ResultFormatter
@@ -45,37 +41,11 @@ def chart_axes_for(state: Mapping[str, Any]) -> tuple[tuple[float, float], float
     return (low, high), w_max
 
 
-def _card(title: str, content: ft.Control, trailing: ft.Control | None = None) -> ft.Container:
-    """建立結果畫面中的白底區塊。
-
-參數：
-    title: 區塊標題。
-    content: 區塊內容。
-    trailing: 選用的標題列右側控制項。
-
-回傳：
-    區塊容器。"""
-    header: list[ft.Control] = [
-        ft.Text(title, size=TOKENS.body + 1, weight=ft.FontWeight.W_600, color=TOKENS.text_primary,
-                expand=True)
-    ]
-    if trailing is not None:
-        header.append(trailing)
-    return ft.Container(
-        content=ft.Column([ft.Row(header, vertical_alignment=ft.CrossAxisAlignment.CENTER), content],
-                          spacing=TOKENS.spacing_sm + 4),
-        padding=TOKENS.spacing_lg - 4,
-        bgcolor=TOKENS.surface,
-        border=ft.Border.all(1, TOKENS.border),
-        border_radius=ft.BorderRadius.all(TOKENS.radius_md),
-    )
-
-
-class PsychrometricResultView(ft.Column):
-    """濕空氣性質計算的結構化結果畫面。"""
+class PsychrometricResultBuilder:
+    """把濕空氣狀態整理成結構化結果（關鍵數值、性質表、計算過程）並繪製焓濕圖。"""
 
     def __init__(self, unit_converter: UnitConverter, psychrometrics: PsychrometricService) -> None:
-        """建立空白的結果畫面。
+        """建立結果產生器與長期存在的焓濕圖面板。
 
 參數：
     unit_converter: 共用單位轉換器。
@@ -86,86 +56,10 @@ class PsychrometricResultView(ft.Column):
         self.unit_converter = unit_converter
         self.psychrometrics = psychrometrics
         self._chart_cache: dict[tuple, PsychrometricChartData] = {}
-        kpi_col = {"xs": 6, "xl": 3}
-        self.kpis = {
-            "RH": KpiTile("相對濕度 RH", col=kpi_col),
-            "Tdp": KpiTile("露點溫度 Tdp", col=kpi_col),
-            "H": KpiTile("焓值 h", col=kpi_col),
-            "W": KpiTile("濕度比 W", col=kpi_col),
-        }
         self.chart_panel = FigurePanel(height=420, placeholder="計算後顯示焓濕圖")
-        self.property_table = PropertyTable()
-        self.process_table = PropertyTable()
-        self.process_body = ft.Container(content=self.process_table, visible=False)
-        self.process_icon = ft.Icon(ft.Icons.CHEVRON_RIGHT, size=18, color=TOKENS.text_secondary)
-        self.process_toggle = ft.Container(
-            content=ft.Row(
-                [
-                    self.process_icon,
-                    ft.Text("顯示計算過程", size=TOKENS.body, weight=ft.FontWeight.W_600,
-                            color=TOKENS.text_primary),
-                    ft.Text("飽和壓力、飽和濕度比等中間值", size=TOKENS.caption,
-                            color=TOKENS.text_muted),
-                ],
-                spacing=TOKENS.spacing_sm,
-            ),
-            on_click=self.toggle_process,
-            ink=True,
-            padding=ft.Padding.symmetric(vertical=4),
-        )
-        legend = ft.Row(
-            [
-                ft.Container(width=8, height=8, bgcolor="#C0362C",
-                             border_radius=ft.BorderRadius.all(4)),
-                ft.Text("目前狀態點", size=TOKENS.caption, color=TOKENS.text_secondary),
-            ],
-            spacing=6,
-            tight=True,
-        )
-        super().__init__(
-            [
-                ft.ResponsiveRow(list(self.kpis.values()), spacing=TOKENS.spacing_sm,
-                                 run_spacing=TOKENS.spacing_sm),
-                # 寬螢幕時焓濕圖與完整性質表並排，較窄時上下排列。
-                ft.ResponsiveRow(
-                    [
-                        ft.Container(_card("焓濕圖", self.chart_panel, legend), col={"xs": 12, "xl": 7}),
-                        ft.Container(_card("完整性質", self.property_table), col={"xs": 12, "xl": 5}),
-                    ],
-                    spacing=TOKENS.spacing_md,
-                    run_spacing=TOKENS.spacing_md,
-                    vertical_alignment=ft.CrossAxisAlignment.START,
-                ),
-                ft.Container(
-                    content=ft.Column([self.process_toggle, self.process_body],
-                                      spacing=TOKENS.spacing_sm),
-                    padding=ft.Padding.symmetric(horizontal=TOKENS.spacing_lg - 4,
-                                                 vertical=TOKENS.spacing_sm + 4),
-                    bgcolor=TOKENS.surface,
-                    border=ft.Border.all(1, TOKENS.border),
-                    border_radius=ft.BorderRadius.all(TOKENS.radius_md),
-                ),
-            ],
-            spacing=TOKENS.spacing_md,
-        )
 
-    def toggle_process(self, _event: ft.ControlEvent | None) -> None:
-        """展開或收合計算過程。
-
-參數：
-    _event: Flet 點擊事件；此處不需讀取內容。
-
-回傳：
-    無。"""
-        self.process_body.visible = not self.process_body.visible
-        self.process_icon.icon = ft.Icons.EXPAND_MORE if self.process_body.visible else ft.Icons.CHEVRON_RIGHT
-        try:
-            self.update()
-        except RuntimeError:
-            pass
-
-    def show(self, state: Mapping[str, Any], *, known_input: str, use_imperial: bool) -> None:
-        """以新的計算結果更新關鍵數值、焓濕圖與性質表。
+    def build(self, state: Mapping[str, Any], *, known_input: str, use_imperial: bool) -> StructuredResult:
+        """以新的計算結果重畫焓濕圖，並回傳結構化結果。
 
 參數：
     state: PsychrometricService 回傳的中立狀態。
@@ -173,16 +67,22 @@ class PsychrometricResultView(ft.Column):
     use_imperial: 是否以英制輸出。
 
 回傳：
-    無。"""
+    StructuredResult。"""
         fmt = ResultFormatter(self.unit_converter, use_imperial)
-        self.kpis["RH"].set_value(f"{state['RH'] * 100:.1f}", "%")
-        self.kpis["Tdp"].set_value(*fmt.parts("T", state["Tdp"], 2))
-        # 關鍵數值卡空間有限，乾空氣基準 (DA) 只標在完整性質表中。
-        self.kpis["H"].set_value(*fmt.parts("H", state["H"], 2))
-        self.kpis["W"].set_value(*fmt.parts("W", state["W"], 2))
-        self.property_table.set_groups(self._property_groups(state, known_input, fmt))
-        self.process_table.set_groups(self._process_groups(state, fmt))
         self._draw_chart(state)
+        # 關鍵數值卡空間有限，乾空氣基準 (DA) 只標在完整性質表中。
+        return StructuredResult(
+            key_metrics=(
+                ResultMetric("相對濕度 RH", f"{state['RH'] * 100:.1f}", "%"),
+                ResultMetric("露點溫度 Tdp", *fmt.parts("T", state["Tdp"], 2)),
+                ResultMetric("焓值 h", *fmt.parts("H", state["H"], 2)),
+                ResultMetric("濕度比 W", *fmt.parts("W", state["W"], 2)),
+            ),
+            groups=tuple(self._property_groups(state, known_input, fmt)),
+            process_groups=tuple(self._process_groups(state, fmt)),
+            chart_title="焓濕圖",
+            chart_legend="目前狀態點",
+        )
 
     def _property_groups(self, state: Mapping[str, Any], known_input: str,
                          fmt: ResultFormatter) -> list[PropertyGroup]:

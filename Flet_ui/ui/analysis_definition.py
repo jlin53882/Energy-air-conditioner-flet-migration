@@ -20,6 +20,8 @@ from dataclasses import dataclass
 
 import flet as ft
 
+from .structured_result import StructuredResult
+
 
 @dataclass(frozen=True)
 class AnalysisDefinition:
@@ -37,10 +39,9 @@ class AnalysisDefinition:
         show_execute_button: 是否顯示共用的「執行分析」按鈕。
         result_chart: 選用的結果圖表控制項（例如 ``FigurePanel``）；成功
             計算後顯示於結果卡片，重設或失敗時隱藏。
-        result_chart_first: 以圖表為主要產出的分析設為 True，圖表會放在
-            指標卡片之前。
-        result_view: 選用的模組自有結構化結果控制項；成功計算時取代預設
-            指標卡片，狀態列、原始文字與複製仍由共用結果區負責。
+        structured_result: 選用的無參數函式，回傳最近一次成功計算的
+            :class:`~Flet_ui.ui.structured_result.StructuredResult`（關鍵數值、
+            性質表與計算過程）；未提供時結果區由文字投影分組指標。
     """
 
     key: str
@@ -49,8 +50,7 @@ class AnalysisDefinition:
     calculate: Callable[[bool], str]
     show_execute_button: bool = True
     result_chart: ft.Control | None = None
-    result_chart_first: bool = False
-    result_view: ft.Control | None = None
+    structured_result: Callable[[], StructuredResult | None] | None = None
 
 
 def definitions_from_module(module: object) -> list[AnalysisDefinition]:
@@ -92,8 +92,7 @@ def definitions_from_module(module: object) -> list[AnalysisDefinition]:
                 calculate=raw_calc_func,
                 show_execute_button=raw.get("show_execute_button", True),
                 result_chart=raw.get("result_chart"),
-                result_chart_first=raw.get("result_chart_first", False),
-                result_view=raw.get("result_view"),
+                structured_result=raw.get("structured_result"),
             )
         )
     return definitions

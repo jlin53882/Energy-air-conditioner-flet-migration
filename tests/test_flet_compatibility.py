@@ -212,11 +212,11 @@ def test_shared_analysis_input_labels_are_outside_field_borders() -> None:
         for key in entry_keys:
             entry = modules[module_name].all_entries[key]
             input_row = entry["ui_row"]
-            assert entry["label_control"] in input_row.controls[0].controls
-            assert entry["val"] in input_row.controls[0].controls
+            # 欄名在外框之上；數值與單位選單合成同一個外框，單位位於欄位尾端。
+            assert input_row.controls[0] is entry["label_control"]
+            assert input_row.controls[1] is entry["field_box"]
+            assert entry["field_box"].content.controls == [entry["val"], entry["unit"]]
             assert entry["val"].label is None
-            assert entry["unit_label_control"] in input_row.controls[1].controls
-            assert entry["unit"] in input_row.controls[1].controls
             assert entry["unit"].label is None
 
     for module_name, key in (

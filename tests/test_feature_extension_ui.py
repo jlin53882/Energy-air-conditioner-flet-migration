@@ -104,10 +104,11 @@ def test_air_process_analyses_render_metrics_and_chart(shell, analysis_key, expe
 
     view.perform_calculation(None)
 
-    chart_host = view.workspace.result_view.chart_host
+    result_view = view.workspace.result_view
+    chart_host = result_view.chart_host
     assert view.result_panel.status == "success", view.result_panel.message
     assert expected_label in view.adapter.result_text
-    assert chart_host.visible is True
+    assert result_view.chart_column.visible is True
     assert isinstance(chart_host.content, FigurePanel)
     axes = chart_host.content.figure.axes[0]
     assert len(axes.lines) > 10
@@ -132,7 +133,7 @@ def test_air_process_invalid_field_names_the_field(shell) -> None:
 
     assert view.result_panel.status == "error"
     assert "風量" in view.result_panel.message
-    assert view.workspace.result_view.chart_host.visible is False
+    assert view.workspace.result_view.chart_column.visible is False
 
 
 def test_switching_air_process_tool_hides_previous_chart(shell) -> None:
@@ -144,12 +145,12 @@ def test_switching_air_process_tool_hides_previous_chart(shell) -> None:
     view = shell.views["air_processes"]
     view._handle_tool_change("psychrometrics.supply_airflow")
     view.perform_calculation(None)
-    assert view.workspace.result_view.chart_host.visible is True
+    assert view.workspace.result_view.chart_column.visible is True
 
     view._handle_tool_change("psychrometrics.sensible")
 
     assert view.result_panel.status == "empty"
-    assert view.workspace.result_view.chart_host.visible is False
+    assert view.workspace.result_view.chart_column.visible is False
 
 
 def test_refrigeration_cycle_route_plots_cycle_on_ph_chart(shell) -> None:
@@ -166,7 +167,7 @@ def test_refrigeration_cycle_route_plots_cycle_on_ph_chart(shell) -> None:
     chart_host = view.workspace.result_view.chart_host
     assert view.result_panel.status == "success", view.result_panel.message
     assert "冷房 COP" in view.adapter.result_text
-    assert chart_host.visible is True
+    assert view.workspace.result_view.chart_column.visible is True
     title = chart_host.content.figure.axes[0].get_title()
     assert "P-h" in title and "R32" in title
 
@@ -185,7 +186,7 @@ def test_superheat_tool_converts_gauge_pressure(shell) -> None:
     assert view.result_panel.status == "success", view.result_panel.message
     assert "過熱蒸氣" in view.adapter.result_text
     assert "1001.33 kPa" in view.adapter.result_text
-    assert view.workspace.result_view.chart_host.visible is False
+    assert view.workspace.result_view.chart_column.visible is False
 
     module.sh_pressure_type.selected = ["Absolute"]
     module.on_pressure_type_change(None)
@@ -224,23 +225,13 @@ def test_psychrometric_chart_route_lists_each_point(shell) -> None:
     view = shell.views["psychrometric_chart"]
     result_view = view.workspace.result_view
 
-    assert view.workspace.selector_card.visible is False
+    assert view.tool_selector.visible is False
     view.perform_calculation(None)
 
     assert view.result_panel.status == "success", view.result_panel.message
     for index in (1, 2, 3):
         assert f"--- 狀態點 {index} ---" in view.adapter.result_text
-    assert result_view.chart_host.visible is True
-    body = result_view.controls
-    assert body.index(result_view.chart_host) < body.index(result_view.result_sections)
-
-    shell.navigate("air_processes")
-    air_view = shell.views["air_processes"]
-    air_view.perform_calculation(None)
-    air_body = air_view.workspace.result_view.controls
-    assert air_body.index(air_view.workspace.result_view.chart_host) > air_body.index(
-        air_view.workspace.result_view.result_sections
-    )
+    assert result_view.chart_column.visible is True
 
 
 def test_psychrometric_chart_validates_point_counts_and_converts_lists(shell) -> None:
@@ -310,30 +301,37 @@ def test_psychrometric_property_modes_use_structured_result_view(shell) -> None:
     無。"""
     shell.navigate("psychrometrics")
     tab = shell.views["psychrometrics"]
-    sections = tab.workspace.result_view.result_sections
+    view = tab.workspace.result_view
     tab._handle_tool_change(PsyModule.MODE_TDB_TWB)
     tab.perform_calculation(None)
 
-    view = tab.psy_module.result_view
     assert tab.result_panel.status == "success"
-    assert sections.controls == [view]
-    assert view.kpis["RH"].value_control.value == "63.5"
-    assert view.kpis["Tdp"].value_control.value == "17.59"
+    assert view.sections_card.visible is False
+    assert view.status_card.visible is False
+    kpis = {tile.label_control.value: tile for tile in view.kpi_row.controls}
+    assert list(kpis) == ["相對濕度 RH", "露點溫度 Tdp", "焓值 h", "濕度比 W"]
+    assert kpis["相對濕度 RH"].value_control.value == "63.5"
+    assert kpis["露點溫度 Tdp"].value_control.value == "17.59"
+    assert view.chart_title.value == "焓濕圖"
+    assert view.chart_column.visible is True
+    assert view.table_column.col == {"xs": 12, "xl": 5}
     inputs, results = view.property_table.groups
     assert [row.label for row in inputs.rows][:2] == ["乾球溫度", "濕球溫度"]
     assert inputs.highlighted is True
     assert "相對濕度" in [row.label for row in results.rows]
-    axes = view.chart_panel.figure.axes[0]
+    axes = tab.psy_module.result_builder.chart_panel.figure.axes[0]
     assert any(text.get_text() == "Tdp 17.6" for text in axes.texts)
     assert any(text.get_text() == "Twb 20.0" for text in axes.texts)
 
+    assert view.process_card.visible is True
     assert view.process_body.visible is False
     view.toggle_process(None)
     assert view.process_body.visible is True
     view.toggle_process(None)
 
     tab._handle_tool_change(PsyModule.MODE_TDB_RH)
-    assert sections.controls == []
+    assert view.kpi_row.visible is False
+    assert view.status_card.visible is True
     tab.perform_calculation(None)
     inputs, results = view.property_table.groups
     assert inputs.rows[1].label == "相對濕度"
@@ -348,12 +346,13 @@ def test_psychrometric_result_view_follows_output_units(shell) -> None:
     shell.navigate("psychrometrics")
     tab = shell.views["psychrometrics"]
     tab._handle_tool_change(PsyModule.MODE_TDB_TWB)
-    view = tab.psy_module.result_view
+    view = tab.workspace.result_view
     tab.perform_calculation(None)
     try:
         tab.set_output_unit_system("Imperial")
-        assert view.kpis["Tdp"].unit_control.value == "°F"
-        assert view.kpis["W"].unit_control.value == "gr/lbm"
+        kpis = {tile.label_control.value: tile for tile in view.kpi_row.controls}
+        assert kpis["露點溫度 Tdp"].unit_control.value == "°F"
+        assert kpis["濕度比 W"].unit_control.value == "gr/lbm"
     finally:
         tab.set_output_unit_system("SI")
 
@@ -419,11 +418,16 @@ def test_context_panel_is_collapsed_by_default_and_toggles_on_wide_screens() -> 
     assert shell.context_panel_open is False
 
 
-def test_result_heavy_views_widen_the_result_column(shell) -> None:
-    """濕空氣性質與濕空氣線圖讓結果欄較寬；其他分析維持平分。
+def test_every_analysis_view_uses_the_shared_calculation_layout(shell) -> None:
+    """所有分析頁共用左側輸入卡＋右側結果區的欄寬。
 
 回傳：
     無。"""
-    assert shell.views["psychrometrics"].workspace.result_column.col == {"xs": 12, "lg": 8}
-    assert shell.views["psychrometric_chart"].workspace.result_column.col == {"xs": 12, "lg": 7}
-    assert shell.views["compressor"].workspace.result_column.col == {"xs": 12, "lg": 6}
+    from Flet_ui.ui.components.analysis_workspace import INPUT_COLUMN, RESULT_COLUMN
+
+    for key, view in shell.views.items():
+        if not hasattr(view, "workspace"):
+            continue
+        assert view.workspace.input_column.col == INPUT_COLUMN, key
+        assert view.workspace.result_column.col == RESULT_COLUMN, key
+    assert shell.views["psychrometrics"].tool_selector.label_control.value == "已知參數組合"

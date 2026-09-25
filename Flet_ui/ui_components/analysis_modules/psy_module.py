@@ -8,7 +8,7 @@ from ...ui.theme import TOKENS
 from .psy_result_view import (
     KNOWN_RELATIVE_HUMIDITY,
     KNOWN_WET_BULB,
-    PsychrometricResultView,
+    PsychrometricResultBuilder,
 )
 
 class PsyModule(BaseAnalysisModule):
@@ -35,7 +35,8 @@ class PsyModule(BaseAnalysisModule):
         # --- 建立 UI ---
         self._build_ui_components()
         self._setup_unit_sync()
-        self.result_view = PsychrometricResultView(unit_converter, self.psy_calculator.service)
+        self.result_builder = PsychrometricResultBuilder(unit_converter, self.psy_calculator.service)
+        self.last_structured_result = None
         # 海拔輸入即時換算大氣壓力，讓使用者在計算前就看到推導值。
         self.pressure_hint = ft.Text("", size=TOKENS.caption, color=TOKENS.text_muted)
         self.all_entries["psy_alt"]["val"].on_change = self.update_pressure_hint
@@ -88,14 +89,16 @@ class PsyModule(BaseAnalysisModule):
         return {
             "濕空氣性質 (已知乾濕球)": {
                 "analysis_id": self.MODE_TDB_TWB,
-                "result_view": self.result_view,
+                "result_chart": self.result_builder.chart_panel,
+                "structured_result": lambda: self.last_structured_result,
                 "ui": self.ui_container,
                 "calc_func": self._calculate_tdb_twb,
                 "calculation_mode": "psychrometric"
             },
             "濕空氣性質 (已知乾球與相對濕度)": {
                 "analysis_id": self.MODE_TDB_RH,
-                "result_view": self.result_view,
+                "result_chart": self.result_builder.chart_panel,
+                "structured_result": lambda: self.last_structured_result,
                 "ui": self.ui_container,
                 "calc_func": self._calculate_tdb_rh,
                 "calculation_mode": "psychrometric"
@@ -250,7 +253,9 @@ class PsyModule(BaseAnalysisModule):
         # 4. 格式化輸出；結構化畫面與文字結果來自同一份狀態
         if psy_results:
             known_input = KNOWN_WET_BULB if mode_key == self.MODE_TDB_TWB else KNOWN_RELATIVE_HUMIDITY
-            self.result_view.show(psy_results, known_input=known_input, use_imperial=use_imperial)
+            self.last_structured_result = self.result_builder.build(
+                psy_results, known_input=known_input, use_imperial=use_imperial
+            )
             result_lines = self._format_psy_results(psy_results, use_imperial)
             return "\n".join(result_lines)
         else:

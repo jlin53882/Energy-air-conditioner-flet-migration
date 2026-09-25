@@ -1,8 +1,15 @@
-"""Presentation-only 共用殼：ToolSelector 卡片 + Input/Result 卡片 + ActionBar。
+"""Presentation-only 共用計算頁版型：左側輸入卡、右側結果區。
 
 ``AnalysisWorkspace`` 只負責版面組成，禁止知道任何 compressor / evaporator /
 psychrometric / CoolProp / diagram 相關邏輯。呼叫端負責提供已建構好的
-input 控制項與 :class:`ResultPanel`，以及目前分析的標題、說明與公式文字。
+工具選單、input 控制項與 :class:`ResultPanel`，以及目前分析的標題、說明與
+公式文字。
+
+版面：
+- 左欄「輸入條件」卡：分析項目選單、分析說明與公式、模組輸入、全寬「計算」按鈕。
+- 右欄結果區（:class:`AnalysisResultView`）：關鍵數值列、圖表＋完整性質表、
+  可展開的計算過程。
+窄視窗時兩欄上下堆疊（ResponsiveRow + col breakpoints）。
 """
 
 from __future__ import annotations
@@ -11,36 +18,19 @@ from collections.abc import Callable
 
 import flet as ft
 
-from ..theme import TOKENS, card_shadow, primary_button_style
+from ..structured_result import StructuredResult
+from ..theme import TOKENS, primary_button_style
 from .analysis_result_view import AnalysisResultView
 from .result_panel import ResultPanel
 
-
-def _card(content: ft.Control, *, padding: int = TOKENS.spacing_lg) -> ft.Container:
-    """建立工作區共用的白色圓角卡片。
-
-    參數：
-        content: 卡片內容。
-        padding: 卡片內距。
-
-    回傳：
-        卡片容器。
-    """
-    return ft.Container(
-        content=content,
-        padding=padding,
-        bgcolor=TOKENS.surface,
-        border=ft.Border.all(1, TOKENS.border),
-        border_radius=ft.BorderRadius.all(TOKENS.radius_md),
-        shadow=card_shadow(),
-    )
+# 輸入欄固定佔較窄的欄寬，讓結果區有足夠空間並排圖表與性質表。
+INPUT_COLUMN = {"xs": 12, "md": 5, "lg": 4, "xl": 3}
+RESULT_COLUMN = {"xs": 12, "md": 7, "lg": 8, "xl": 9}
 
 
 class AnalysisWorkspace(ft.Column):
-    """以一致的工程排版呈現 ToolSelector、Input/Result 卡片與 ActionBar。
+    """以一致的工程排版呈現輸入卡與結果區。
 
-    Wide / Medium 版面呈現 Input | Result 並排；Narrow 版面改為單欄堆疊，
-    沿用 PR #2 建立的 responsive contract（ResponsiveRow + col breakpoints）。
     頁面標題與說明由 AppShell 的 route header 呈現，因此 ``header`` 只保留
     給沒有外殼的嵌入情境，預設不顯示。
     """
@@ -57,7 +47,6 @@ class AnalysisWorkspace(ft.Column):
         show_execute_button: bool = True,
         show_tool_selector: bool = True,
         accent: str = TOKENS.primary,
-        column_split: tuple[int, int] = (6, 6),
     ) -> None:
         """組合工作區版面。
 
@@ -67,14 +56,11 @@ class AnalysisWorkspace(ft.Column):
             tool_selector: 已建構好的工具選取控制項（通常是 ToolSelector）。
             input_content: 已建構好的輸入表單控制項。
             result_panel: 已建構好的 ResultPanel 實例。
-            on_calculate: 執行分析按鈕的點擊回呼。
-            show_execute_button: 是否顯示共用的「執行分析」按鈕；部分分析
-                （例如熱力圖）使用專屬按鈕，此時應設為 False 以避免
-                duplicate execute 按鈕同時出現。
-            show_tool_selector: 是否顯示工具選取卡片；只有單一工具時可隱藏。
-            accent: 此分類使用的強調色。
-            column_split: 寬版時輸入欄與結果欄的欄寬（合計 12）；結果較多的
-                畫面可讓結果欄較寬，避免指標與圖表被壓縮。
+            on_calculate: 計算按鈕的點擊回呼。
+            show_execute_button: 是否顯示共用的「計算」按鈕；部分分析使用
+                專屬按鈕時應設為 False，避免重複的執行按鈕。
+            show_tool_selector: 是否顯示工具選單；只有單一工具時可隱藏。
+            accent: 文字投影指標卡片使用的強調色。
 
         回傳：
             無。
@@ -90,145 +76,76 @@ class AnalysisWorkspace(ft.Column):
             visible=False,
         )
         self.tool_selector = tool_selector
-        self.active_tool_label = ft.Text(
-            "", color=accent, weight=ft.FontWeight.W_600, size=TOKENS.caption + 1
-        )
-        self.selector_card = _card(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Text("分析項目", size=TOKENS.caption, weight=ft.FontWeight.W_600,
-                                    color=TOKENS.text_muted),
-                            ft.Container(expand=True),
-                            self.active_tool_label,
-                        ],
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    tool_selector,
-                ],
-                spacing=TOKENS.spacing_sm + 2,
-            ),
-            padding=TOKENS.spacing_md,
-        )
-        self.selector_card.visible = show_tool_selector
+        self.tool_selector.visible = show_tool_selector
 
-        # 輸入卡片：分析標題、說明、公式、模組輸入與執行列
-        self.analysis_title = ft.Text("", size=TOKENS.section_title, weight=ft.FontWeight.W_600,
+        # 分析名稱、說明與公式提示
+        self.analysis_title = ft.Text("", size=TOKENS.body + 1, weight=ft.FontWeight.W_600,
                                       color=TOKENS.text_primary)
         self.analysis_summary = ft.Text("", size=TOKENS.caption, color=TOKENS.text_muted)
-        self.formula_text = ft.Text("", size=TOKENS.body, font_family="Courier New",
-                                    color=TOKENS.text_primary, selectable=True)
+        self.formula_text = ft.Text("", size=TOKENS.caption + 1, font_family="Courier New",
+                                    color=TOKENS.text_secondary, selectable=True)
         self.formula_box = ft.Container(
-            content=ft.Row(
-                [ft.Icon(ft.Icons.FUNCTIONS, size=16, color=TOKENS.text_muted), self.formula_text],
-                spacing=TOKENS.spacing_sm,
-                wrap=True,
-            ),
-            padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+            content=self.formula_text,
+            padding=ft.Padding.symmetric(horizontal=12, vertical=8),
             bgcolor=TOKENS.surface_variant,
-            border=ft.Border.all(1, TOKENS.border),
             border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
         )
-        input_header = ft.Column(
-            [
-                ft.Row(
-                    [
-                        ft.Container(
-                            content=ft.Icon(ft.Icons.FUNCTIONS, size=18, color=accent),
-                            width=34, height=34, alignment=ft.Alignment.CENTER,
-                            bgcolor=ft.Colors.with_opacity(0.12, accent),
-                            border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
-                        ),
-                        ft.Column([self.analysis_title, self.analysis_summary], spacing=2,
-                                  tight=True, expand=True),
-                    ],
-                    spacing=TOKENS.spacing_sm + 4,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                self.formula_box,
-                ft.Divider(height=1, color=TOKENS.border),
-            ],
-            spacing=TOKENS.spacing_md,
+        self.analysis_info = ft.Column(
+            [self.analysis_title, self.analysis_summary, self.formula_box],
+            spacing=6,
         )
-        # action_bar.content 必須是執行按鈕本身，呼叫端與測試依此觸發計算。
+        # action_bar.content 必須是計算按鈕本身，呼叫端與測試依此觸發計算。
         self.action_bar = ft.Container(
             content=ft.Button(
-                content="執行分析",
+                content="計算",
                 icon=ft.Icons.PLAY_ARROW_ROUNDED,
                 on_click=on_calculate,
                 style=primary_button_style(),
+                expand=True,
+                height=TOKENS.button_height + 4,
+                tooltip="Ctrl + Enter",
             ),
             visible=show_execute_button,
-        )
-        self.action_hint = ft.Row(
-            [
-                ft.Icon(ft.Icons.KEYBOARD_OUTLINED, size=14, color=TOKENS.text_muted),
-                ft.Text("Ctrl + Enter 執行", size=TOKENS.caption, color=TOKENS.text_muted),
-            ],
-            spacing=6,
-            visible=show_execute_button,
-        )
-        action_row = ft.Container(
-            content=ft.Row(
-                [self.action_hint, ft.Container(expand=True), self.action_bar],
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
             padding=ft.Padding.only(top=TOKENS.spacing_sm),
         )
-        self.input_card = _card(
-            ft.Column([input_header, input_content, action_row], spacing=TOKENS.spacing_md)
-        )
-
-        # 結果卡片
-        self.result_view = AnalysisResultView(result_panel)
-        self.result_card = _card(
-            ft.Column(
+        self.input_card = ft.Container(
+            content=ft.Column(
                 [
-                    ft.Row(
-                        [
-                            ft.Container(
-                                content=ft.Icon(ft.Icons.INSIGHTS_OUTLINED, size=18, color=TOKENS.accent),
-                                width=34, height=34, alignment=ft.Alignment.CENTER,
-                                bgcolor=TOKENS.accent_soft,
-                                border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
-                            ),
-                            ft.Column(
-                                [
-                                    ft.Text("分析結果", size=TOKENS.section_title,
-                                            weight=ft.FontWeight.W_600, color=TOKENS.text_primary),
-                                    ft.Text("切換頂端輸出單位會以相同輸入重新格式化。",
-                                            size=TOKENS.caption, color=TOKENS.text_muted),
-                                ],
-                                spacing=2,
-                                tight=True,
-                                expand=True,
-                            ),
-                        ],
-                        spacing=TOKENS.spacing_sm + 4,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    self.result_view,
+                    ft.Text("輸入條件", size=TOKENS.body + 2, weight=ft.FontWeight.W_700,
+                            color=TOKENS.text_primary),
+                    self.tool_selector,
+                    self.analysis_info,
+                    ft.Divider(height=1, color=TOKENS.border),
+                    input_content,
+                    self.action_bar,
                 ],
                 spacing=TOKENS.spacing_md,
-            )
+                # 讓計算按鈕與輸入欄同寬。
+                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+            ),
+            padding=TOKENS.spacing_lg,
+            bgcolor=TOKENS.surface,
+            border=ft.Border.all(1, TOKENS.border),
+            border_radius=ft.BorderRadius.all(TOKENS.radius_md),
         )
-        input_span, result_span = column_split
-        self.input_column = ft.Column([self.input_card], col={"xs": 12, "lg": input_span})
-        self.result_column = ft.Column([self.result_card], col={"xs": 12, "lg": result_span})
+
+        self.result_view = AnalysisResultView(result_panel)
+        # result_card 指向整個結果區，方便呼叫端與測試判斷結果區是否可見。
+        self.result_card = self.result_view
+        self.input_column = ft.Container(self.input_card, col=dict(INPUT_COLUMN))
+        self.result_column = ft.Container(self.result_view, col=dict(RESULT_COLUMN))
         self.controls = [
             self.header,
-            self.selector_card,
             ft.ResponsiveRow(
                 [self.input_column, self.result_column],
-                spacing=TOKENS.spacing_md,
+                spacing=TOKENS.spacing_md + 4,
                 run_spacing=TOKENS.spacing_md,
                 vertical_alignment=ft.CrossAxisAlignment.START,
             ),
         ]
 
     def show_analysis(self, label: str, summary: str = "", formula: str = "") -> None:
-        """更新輸入卡片頂端的分析名稱、說明與公式提示。
+        """更新輸入卡片中的分析名稱、說明與公式提示。
 
         參數：
             label: 分析名稱。
@@ -238,7 +155,6 @@ class AnalysisWorkspace(ft.Column):
         回傳：
             無。
         """
-        self.active_tool_label.value = f"目前：{label}"
         self.analysis_title.value = label
         self.analysis_summary.value = summary
         self.analysis_summary.visible = bool(summary)
@@ -250,36 +166,27 @@ class AnalysisWorkspace(ft.Column):
         result_text: str | None,
         *,
         chart: ft.Control | None = None,
-        chart_first: bool = False,
-        custom_view: ft.Control | None = None,
+        structured: StructuredResult | None = None,
     ) -> None:
         """以目前 ResultPanel 狀態重新呈現結果區。
 
         參數：
             result_text: 模組回傳的原始結果文字；尚未計算時為 None。
             chart: 選用的結果圖表。
-            chart_first: True 表示圖表放在指標卡片之前。
-            custom_view: 選用的模組自有結果畫面。
+            structured: 選用的結構化結果。
 
         回傳：
             無。
         """
-        self.result_view.show(
-            result_text,
-            accent=self.accent,
-            chart=chart,
-            chart_first=chart_first,
-            custom_view=custom_view,
-        )
+        self.result_view.show(result_text, accent=self.accent, chart=chart, structured=structured)
 
     def set_action_bar_visible(self, visible: bool) -> None:
-        """切換共用執行按鈕的顯示，避免與模組內建按鈕重複。
+        """切換共用計算按鈕的顯示，避免與模組內建按鈕重複。
 
         參數：
-            visible: 是否顯示共用執行按鈕。
+            visible: 是否顯示共用計算按鈕。
 
         回傳：
             無。
         """
         self.action_bar.visible = visible
-        self.action_hint.visible = visible
