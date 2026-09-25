@@ -96,7 +96,7 @@ CoolProp 參考狀態是程序全域的。`ReferenceStateService` 負責：
 
 ## 10. 分析註冊
 
-每個分析定義都擁有穩定且具語意的 `analysis_id`。`AnalysisTab` 會驗證並註冊定義、拒絕缺少或重複的 ID，並使用這些 ID 控制流程。顯示標籤、在地化名稱、清單位置，以及類別名稱加位置都不是識別身分。
+每個分析定義都擁有穩定且具語意的 `analysis_id`。`definitions_from_module()` 會驗證並轉成 `AnalysisDefinition`、拒絕缺少或同一模組內重複的 ID；`AnalysisModuleAdapter` 再拒絕跨模組重複的 ID，並只以這些 ID 控制流程。顯示標籤、在地化名稱、清單位置，以及類別名稱加位置都不是識別身分。
 
 ## 11. 架構不變量
 

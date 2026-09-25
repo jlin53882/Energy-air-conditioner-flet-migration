@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import math
 
 import pytest
 
+from Flet_ui.flet_app import main as flet_main
 from Flet_ui.ui_components.analysis_modules.psy_module import PsyModule
-from Flet_ui.ui_components.analysis_tab import AnalysisTab
 from Flet_ui.ui_components.unit.HVACAnalyzer import HVACAnalyzer
 from Flet_ui.ui_components.unit.PsychrometricCalculator import PsychrometricCalculator
 from Flet_ui.ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
@@ -153,7 +154,7 @@ def test_psychrometric_relative_humidity_renders_percentage() -> None:
 回傳：
     無。"""
     module = PsyModule(UnitConverter(), DummyPage(), PsychrometricCalculator())
-    mode = "濕空氣性質 (已知乾球與相對濕度)"
+    mode = PsyModule.MODE_TDB_RH
     module.configure_ui_for_mode(mode)
     module.all_entries["psy_rh"]["val"].value = "88"
 
@@ -169,7 +170,7 @@ def test_psychrometric_ui_matches_trusted_model_contract() -> None:
 回傳：
     無。"""
     module = PsyModule(UnitConverter(), DummyPage(), PsychrometricCalculator())
-    mode = "濕空氣性質 (已知乾球與相對濕度)"
+    mode = PsyModule.MODE_TDB_RH
     module.configure_ui_for_mode(mode)
     module.all_entries["psy_tdb"]["val"].value = "15.5"
     module.all_entries["psy_rh"]["val"].value = "88"
@@ -182,30 +183,41 @@ def test_psychrometric_ui_matches_trusted_model_contract() -> None:
     assert "14.29 °C" in output
     assert "0.009662 kg/kg" in output
     assert "40.0372 kJ/kg" in output
-def test_every_analysis_option_switches_and_calculates() -> None:
-    """Smoke-test 每個已註冊 analysis page 與其 default calculation path。
+def test_every_analysis_option_switches_and_calculates(caplog: pytest.LogCaptureFixture) -> None:
+    """Smoke-test 每個 dedicated view 已註冊的分析項目與其預設計算路徑。
+
+    每個分析切換後只顯示自己的輸入區；以預設值計算時只能得到成功結果或以欄名
+    提示的輸入錯誤，不得出現未預期的例外。
+
+參數：
+    caplog: pytest 的 log 擷取工具。
 
 回傳：
     無。"""
     page = DummyPage()
-    converter = UnitConverter()
-    tab = AnalysisTab(
-        unit_converter=converter,
-        page=page,
-        analyzer=HVACAnalyzer(),
-        psy_calculator=PsychrometricCalculator(),
-        state_calculator=ThermoStateCalculator(converter),
-    )
-    tab.update = lambda: None
-    assert len(tab.analysis_map) == 16
+    flet_main(page)
+    shell = page.controls[0]
+    analysis_views = {
+        route_key: view for route_key, view in shell.views.items() if hasattr(view, "adapter")
+    }
+    total = 0
+    with caplog.at_level(logging.ERROR, logger="Flet_ui.ui.analysis_module_adapter"):
+        for route_key, view in analysis_views.items():
+            shell.navigate(route_key)
+            for definition in view.adapter.definitions:
+                total += 1
+                view._handle_tool_change(definition.key)
+                assert definition.input_view.visible is True, definition.key
+                visible_inputs = {
+                    id(item.input_view) for item in view.adapter.definitions if item.input_view.visible
+                }
+                assert visible_inputs == {id(definition.input_view)}, definition.key
+                view.perform_calculation(None)
+                assert view.result_panel.status in {"success", "error"}, definition.key
+                if view.result_panel.status == "success":
+                    assert view.adapter.result_text, definition.key
+    assert not caplog.records, [record.getMessage() for record in caplog.records]
+    assert total == sum(len(view.adapter.definitions) for view in analysis_views.values())
 
-    for name, definition in tab.analysis_map.items():
-        tab.analysis_dd.value = name
-        tab.on_analysis_change(None)
-        assert definition["ui"].visible is True, name
-        visible_containers = {id(item["ui"]) for item in tab.analysis_map.values() if item["ui"].visible}
-        assert id(definition["ui"]) in visible_containers
-        assert len(visible_containers) == 1
-        tab.calculate_analysis(None)
-        assert isinstance(tab.result_text.value, str), name
-        assert tab.result_text.value, name
+    diagram_module = shell.views["ph_chart"].module
+    assert "成功" in diagram_module.calculate_thermo_diagram(use_imperial=False)

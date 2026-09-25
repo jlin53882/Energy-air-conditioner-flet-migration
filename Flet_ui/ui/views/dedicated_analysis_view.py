@@ -50,6 +50,7 @@ class DedicatedAnalysisView(ft.Column):
         """
         super().__init__(expand=True, spacing=0)
         self.adapter = AnalysisModuleAdapter(modules)
+        self.adapter.on_result_invalidated = self._on_result_invalidated
         # workspace_state 只在建構當下讀取一次目前的全域輸出單位；此 View
         # 不持有對它的長期參照（沒有 ongoing ownership），避免造成「看似
         # 訂閱了 WorkspaceState 但實際上沒有」的誤導。
@@ -193,6 +194,15 @@ class DedicatedAnalysisView(ft.Column):
         回傳：
             無。
         """
+
+    def _on_result_invalidated(self) -> None:
+        """使用者修改輸入使結果失效時，重繪結果區（隱藏舊數值與圖表）。
+
+        回傳：
+            無。
+        """
+        self._show_result()
+        self._refresh()
 
     def _handle_calculate(self, _event: ft.ControlEvent | None) -> None:
         """執行目前選取分析的計算並重繪結果面板。

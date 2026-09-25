@@ -64,6 +64,8 @@ def main(page: ft.Page) -> None:
     property_query_service = PropertyQueryService(state_calculator.state_service)
     hvac_analyzer = HVACAnalyzer()
     psy_calculator = PsychrometricCalculator()
+    # 錶壓換算的「海拔 → 大氣壓力」全系統共用濕空氣服務的同一個公式。
+    pressure_from_altitude = psy_calculator.service.calculate_pressure_from_altitude
 
     property_view = PropertyTab(
         unit_converter=unit_converter,
@@ -79,7 +81,7 @@ def main(page: ft.Page) -> None:
         page=page,
         analyzer=hvac_analyzer,
         state_calculator=state_calculator,
-        property_query_service=property_query_service,
+        pressure_from_altitude=pressure_from_altitude,
     )
     evaporator_module = EvaporatorModule(unit_converter=unit_converter, page=page, analyzer=hvac_analyzer)
     # 冷凝器㶲分析與冷凍循環共用同一個 application service。
@@ -90,11 +92,13 @@ def main(page: ft.Page) -> None:
         analyzer=hvac_analyzer,
         state_calculator=state_calculator,
         refrigeration_service=refrigeration_service,
+        pressure_from_altitude=pressure_from_altitude,
     )
     cycle_module = RefrigerationCycleModule(
         unit_converter=unit_converter,
         page=page,
         refrigeration_service=refrigeration_service,
+        pressure_from_altitude=pressure_from_altitude,
     )
     psy_module = PsyModule(unit_converter=unit_converter, page=page, psy_calculator=psy_calculator)
     # 空氣處理與濕空氣線圖共用同一個 application service。

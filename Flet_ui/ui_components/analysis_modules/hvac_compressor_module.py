@@ -2,6 +2,8 @@
 # (已擴充 - 包含所有壓縮機相關計算)
 
 # --- 導入 UI 框架 ---
+from collections.abc import Callable
+
 import flet as ft 
 
 # --- 導入核心服務與基底類別 ---
@@ -16,7 +18,6 @@ from ..unit.UnitConverter import UnitConverter
 from ..unit.ThermoStateCalculator import ThermoStateCalculator
 from application.analysis_services import CompressionRatioService
 from application.models import CompressionRatioRequest
-from application.property_queries import PropertyQueryService
 from domain.thermodynamics.fluid_policy import resolve_reference_state_policy
 
 # CompressorModule 繼承自 BaseAnalysisModule，專門處理壓縮機相關的 UI 與邏輯
@@ -29,10 +30,11 @@ class CompressorModule(BaseAnalysisModule):
                  analyzer: HVACAnalyzer,             # 接收 HVAC 分析器服務
                  state_calculator: ThermoStateCalculator,
                  compression_ratio_service: CompressionRatioService | None = None,
-                 property_query_service: PropertyQueryService | None = None): # 接收熱力學狀態計算服務
+                 pressure_from_altitude: Callable[[float], float] | None = None):
         
         # 呼叫基類的構造函數，將所有服務傳入，通常會將它們儲存在 self.services 字典中
-        super().__init__(unit_converter, page, analyzer=analyzer,state_calculator=state_calculator) 
+        super().__init__(unit_converter, page, analyzer=analyzer, state_calculator=state_calculator,
+                         pressure_from_altitude=pressure_from_altitude)
         
         
         # 從基類的服務容器中取出並儲存 HVAC 分析器 (analyzer)
@@ -42,7 +44,6 @@ class CompressorModule(BaseAnalysisModule):
         # 這樣就能在類別的其他方法中，方便地調用其熱力學計算功能
         self.state_calculator: ThermoStateCalculator = self.services.get("state_calculator")
         self.compression_ratio_service = compression_ratio_service or CompressionRatioService()
-        self.reference_state_provider = property_query_service
         
         # --- 建立此模組所需的所有 UI 元件 (每個方法負責一個計算區塊) ---
         # 透過多個私有方法建立 UI，確保程式碼的模組化與可維護性
@@ -69,7 +70,7 @@ class CompressorModule(BaseAnalysisModule):
     def get_analysis_definitions(self) -> dict:
         """
         回報此模組提供的 *所有* 功能。
-        AnalysisTab 將會自動讀取這個字典來建立下拉選單。
+        CompressorView 透過 AnalysisModuleAdapter 讀取這個字典建立分析項目選單。
         """
         return {
             "壓縮比 (CR)": {
@@ -143,7 +144,7 @@ class CompressorModule(BaseAnalysisModule):
             selected=["Absolute"],
             on_change=self.on_pressure_type_change,
         )
-        self.create_input_row("cr_atm_p", "大氣壓力 (Atm. Pressure)", "101.325", "P", "kPa")
+        atmosphere_rows = self.create_atmosphere_rows("cr_alt", "cr_atm_p")
         self.create_input_row("cr_pe", "入口壓力 (Inlet Pressure)", "", "P", "MPa")
         self.create_input_row("cr_pc", "出口壓力 (Outlet Pressure)", "", "P", "MPa")
         
@@ -158,7 +159,7 @@ class CompressorModule(BaseAnalysisModule):
                         ],
                         spacing=6,
                     ),
-                    self.all_entries["cr_atm_p"]["ui_row"],
+                    *atmosphere_rows,
                     self.all_entries["cr_pe"]["ui_row"],
                     self.all_entries["cr_pc"]["ui_row"],
                 ], spacing=15,
@@ -166,36 +167,34 @@ class CompressorModule(BaseAnalysisModule):
         )
 
     def calculate_cr(self, use_imperial: bool) -> str:
-        pe_val = self.read_float("cr_pe")
-        pe_unit = self.all_entries["cr_pe"]["unit"].value
-        pc_val = self.read_float("cr_pc")
-        pc_unit = self.all_entries["cr_pc"]["unit"].value
-        
-        pe_pa = self.unit_converter.convert_to_si("P", pe_val, pe_unit) 
-        pc_pa = self.unit_converter.convert_to_si("P", pc_val, pc_unit)
+        """以吸入與排出絕對壓力計算壓縮比；錶壓力模式時先加上大氣壓力。
 
-        atm_p_si = 0.0
-        if "Gauge" in self.cr_pressure_type_toggle.selected:
-            atm_p_val = self.read_float("cr_atm_p")
-            atm_p_unit = self.all_entries["cr_atm_p"]["unit"].value
-            atm_p_si = self.unit_converter.convert_to_si("P", atm_p_val, atm_p_unit)
-        
-        pe_abs_pa = pe_pa + atm_p_si
-        pc_abs_pa = pc_pa + atm_p_si
-        
+參數：
+    use_imperial: 是否以英制輸出（壓縮比無單位，不影響結果）。
+
+回傳：
+    格式化結果文字。"""
+        pe_abs_pa = self.read_absolute_pressure_pa("cr_pe", "cr_atm_p")
+        pc_abs_pa = self.read_absolute_pressure_pa("cr_pc", "cr_atm_p")
         cr = self.compression_ratio_service.calculate(
             CompressionRatioRequest(pe_abs_pa, pc_abs_pa)
         )
         return f"壓縮比 (CR): {cr:.4f} (無單位)"
-    
+
     def on_pressure_type_change(self, e):
-        is_gauge = "Gauge" in self.cr_pressure_type_toggle.selected
-        self.all_entries["cr_atm_p"]["ui_row"].visible = is_gauge
-        try:
-            self.cr_ui_container.update()
-        except RuntimeError:
-            # Flet 1 在控制項附加到 Page 之前會拒絕更新。
-            pass
+        """切換錶壓力／絕對壓力：入口與出口壓力改用對應語意的單位，並維持相同的實際壓力。
+
+大氣壓力無法解析而無法換算時，維持原模式並在大氣壓力欄位提示（換算規則見
+``BaseAnalysisModule.switch_pressure_basis``）。
+
+參數：
+    e: Flet 事件；初始化或測試時可為 None。
+
+回傳：
+    無。"""
+        self.apply_pressure_basis(
+            self.cr_pressure_type_toggle, ["cr_pe", "cr_pc"], "cr_alt", "cr_atm_p", self.cr_ui_container
+        )
 
     # --- 2. 壓縮機功 (W_in) [修正版] ---
     def _build_work_ui(self):
@@ -780,18 +779,17 @@ class CompressorModule(BaseAnalysisModule):
     )
 
     def _reference_state_for(self, fluid: str) -> str:
-        """回傳應用程式針對壓縮機流體要求的 policy。
+        """回傳綜合分析範例使用的 policy：依流體決定，不跟隨其他頁面的設定。
+
+此分析只輸出效率、功與㶲破壞等狀態差值，結果與 reference state 無關，因此不提供
+選單；policy 只決定 CoolProp 查詢時的基準。
 
 參數：
-    fluid (str): 函數輸入值。
+    fluid (str): 流體名稱。
 
 回傳：
-    str：函數計算或處理後的結果。"""
-        if self.reference_state_provider is None:
-            requested_policy = "ASHRAE"
-        else:
-            requested_policy = self.reference_state_provider.requested_reference_state(fluid)
-        return resolve_reference_state_policy(fluid, requested_policy)
+    str：明確的 policy code。"""
+        return resolve_reference_state_policy(fluid)
 
     def calculate_comp_example(self, use_imperial: bool) -> str:
         # 1. 獲取並轉換輸入值
@@ -826,7 +824,7 @@ class CompressorModule(BaseAnalysisModule):
         t2_k = self.unit_converter.convert_to_si("T", t2_val, t2_unit)
         t0_k = self.unit_converter.convert_to_si("T", t0_val, t0_unit)
         
-        # 3. 讀取由 application 擁有的要求 policy，而不是 facade 快取。
+        # 3. 依流體決定 policy；結果只含狀態差值，與 reference state 無關。
         current_ref = self._reference_state_for(substance)
 
         v1_dot_si = self.unit_converter.convert_to_si("VolumeFlow", v1_dot_val, v1_dot_unit)
@@ -891,13 +889,12 @@ class CompressorModule(BaseAnalysisModule):
     # --- 12. 單位同步 (此模組共用) [已擴充] ---
     def _setup_unit_sync(self):
         # 壓力 (P)
-        cr_sync_group = ["cr_pe", "cr_pc", "cr_atm_p","ce_p1", "ce_p2", "ce_p0"]
-        self.all_entries["cr_pe"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
-        self.all_entries["cr_pc"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
-        self.all_entries["cr_atm_p"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
-        self.all_entries["ce_p1"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
-        self.all_entries["ce_p2"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
-        self.all_entries["ce_p0"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
+        # 壓縮比的壓力列可在錶壓／絕對壓間切換（性質代碼會改變），因此各自獨立
+        # 換算，不與其他分析的絕對壓力列共用同步群組。
+        self.bind_independent_unit_sync(["cr_pe", "cr_pc", "cr_alt", "cr_atm_p"])
+        ce_sync_group = ["ce_p1", "ce_p2", "ce_p0"]
+        for key in ce_sync_group:
+            self.all_entries[key]["unit"].on_select = self._create_unit_sync_handler("P", ce_sync_group)
 
         
         # 焓 (H)
@@ -939,30 +936,3 @@ class CompressorModule(BaseAnalysisModule):
         self.all_entries["ref_rho1"]["unit"].on_select = self._create_unit_sync_handler("D", ["ref_rho1"])
 
         # "ref_eta_vol" (效率) 使用 "RH" 代理，單位下拉選單被禁用，無需同步
-
-
-    # --- 13. 由 AnalysisTab 呼叫的特定方法 (不變) ---
-    def update_atm_pressure_default(self, use_imperial: bool):
-        """由 AnalysisTab 呼叫，用於更新大氣壓力預設值
-
-參數：
-    use_imperial (bool): 函數輸入值。
-
-回傳：
-    無。"""
-        atm_p_controls = self.all_entries["cr_atm_p"]
-        atm_p_si_base = 101325.0
-        
-        if use_imperial:
-            new_unit = self.unit_converter.imperial_units["P"]
-            new_val = self.unit_converter.convert_from_si("P", atm_p_si_base, new_unit)
-        else:
-            new_unit = "kPa"
-            new_val = self.unit_converter.convert_from_si("P", atm_p_si_base, new_unit)
-        
-        atm_p_controls["val"].value = f"{new_val:.5g}"
-        atm_p_controls["unit"].value = new_unit
-        self._last_units["cr_atm_p"] = new_unit
-        
-        if self.cr_ui_container.parent: # 安全檢查
-            self.cr_ui_container.update()

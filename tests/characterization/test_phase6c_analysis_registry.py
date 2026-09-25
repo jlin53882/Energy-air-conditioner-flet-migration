@@ -4,11 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from Flet_ui.ui_components.analysis_tab import AnalysisTab
-from Flet_ui.ui_components.unit.HVACAnalyzer import HVACAnalyzer
-from Flet_ui.ui_components.unit.PsychrometricCalculator import PsychrometricCalculator
-from Flet_ui.ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
-from Flet_ui.ui_components.unit.UnitConverter import UnitConverter
+from Flet_ui.flet_app import main as flet_main
 
 
 class DummyPage:
@@ -18,6 +14,16 @@ class DummyPage:
         self.overlay = []
         self.controls = []
 
+    def add(self, *controls) -> None:
+        """收集進入點新增的控制項。
+
+參數：
+    controls: 要加入頁面的控制項。
+
+回傳：
+    無。"""
+        self.controls.extend(controls)
+
     def update(self) -> None:
         """接受 headless update。
 
@@ -25,23 +31,22 @@ class DummyPage:
     無。"""
 
 
-def test_analysis_definitions_have_stable_ids_and_explicit_modes() -> None:
-    """Analysis dispatch metadata 不依賴 display-label prefix。
+def test_analysis_definitions_have_stable_ids_without_label_dispatch() -> None:
+    """Analysis dispatch metadata 以穩定 ID 為準，不依賴 display-label prefix。
 
 回傳：
     無。"""
-    tab = AnalysisTab(
-        unit_converter=UnitConverter(),
-        page=DummyPage(),
-        analyzer=HVACAnalyzer(),
-        psy_calculator=PsychrometricCalculator(),
-        state_calculator=ThermoStateCalculator(UnitConverter()),
-    )
-    definitions = list(tab.analysis_map.values())
-    assert all(definition["analysis_id"] for definition in definitions)
-    assert all(definition["calculation_mode"] in {"standard", "psychrometric"} for definition in definitions)
+    page = DummyPage()
+    flet_main(page)
+    definitions = [
+        definition
+        for view in page.controls[0].views.values()
+        if hasattr(view, "adapter")
+        for definition in view.adapter.definitions
+    ]
+    assert definitions
+    assert all(definition.key and definition.key != definition.label for definition in definitions)
 
-    source = (Path(__file__).parents[2] / "Flet_ui/ui_components/analysis_tab.py").read_text(
-        encoding="utf-8"
-    )
-    assert 'startswith("濕空氣性質")' not in source
+    for path in (Path(__file__).parents[2] / "Flet_ui").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        assert 'startswith("濕空氣性質")' not in source, path

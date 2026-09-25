@@ -106,7 +106,11 @@ class SuperheatCheckRequest:
 
 @dataclass(frozen=True)
 class CondenserExergyRequest:
-    """以冷凝壓力與冷媒進出口溫度分析冷凝器㶲平衡；等效傳熱邊界溫度必須依所選控制邊界明確指定。"""
+    """以冷凝壓力與冷媒進出口溫度分析冷凝器㶲平衡；等效傳熱邊界溫度必須依所選控制邊界明確指定。
+
+    reference_state 為 None 或 "Auto" 時依流體套用預設 policy；只影響回報的焓、熵數值，
+    不影響㶲平衡結果。
+    """
 
     fluid: str
     pressure_pa: float
@@ -115,3 +119,4 @@ class CondenserExergyRequest:
     mass_flow_kg_s: float
     dead_state_temperature_k: float
     boundary_temperature_k: float
+    reference_state: str | None = None

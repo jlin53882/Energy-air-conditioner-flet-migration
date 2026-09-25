@@ -123,8 +123,8 @@ def test_chart_auto_water_aliases_use_default_reference_state(fluid: str) -> Non
     assert _effective_reference_state("R134a", "Auto") == ReferenceStatePolicy.ASHRAE
 
 
-def test_property_selection_policy_is_shared_with_compressor_example() -> None:
-    """PropertyTab 的選擇就是 compressor page 消費的 policy。
+def test_property_selection_policy_does_not_leak_into_compressor_example() -> None:
+    """PropertyTab 的 Reference State 只影響物性查詢頁；壓縮機範例依流體決定 policy。
 
 回傳：
     None：函數計算或處理後的結果。"""
@@ -158,7 +158,6 @@ def test_property_selection_policy_is_shared_with_compressor_example() -> None:
     property_tab.on_ref_state_change(None)
 
     compressor = CompressorModule.__new__(CompressorModule)
-    compressor.reference_state_provider = query_service
     compressor.unit_converter = converter
     compressor.analyzer = CapturingAnalyzer()
     compressor.ce_substance_tf = ValueControl("R134a")
@@ -175,15 +174,15 @@ def test_property_selection_policy_is_shared_with_compressor_example() -> None:
             ("ce_v1_dot", "1", converter.default_units["VolumeFlow"]),
         )
     }
-    compressor._reference_state_for("R134a")
     assert compressor._reference_state_for(" water ") == ReferenceStatePolicy.DEFAULT
     compressor.calculate_comp_example(use_imperial=False)
-    assert compressor.analyzer.reference_states == ["IIR"]
+    assert compressor.analyzer.reference_states == ["ASHRAE"]
 
     property_tab.ref_state_dd.value = "NBP"
     property_tab.on_ref_state_change(None)
     compressor.calculate_comp_example(use_imperial=False)
-    assert compressor.analyzer.reference_states == ["IIR", "NBP"]
+    assert compressor.analyzer.reference_states == ["ASHRAE", "ASHRAE"]
+    assert query_service.requested_reference_state("R134a") == "NBP"
 
 
 def test_t_s_renderer_path_returns_figure_without_residual_count_access(monkeypatch) -> None:
@@ -491,27 +490,28 @@ def test_analysis_ids_are_semantic_and_unique() -> None:
 
 回傳：
     無。"""
-    from Flet_ui.ui_components.analysis_tab import AnalysisTab
-    from Flet_ui.ui_components.unit.HVACAnalyzer import HVACAnalyzer
-    from Flet_ui.ui_components.unit.PsychrometricCalculator import PsychrometricCalculator
-    from Flet_ui.ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
+    from Flet_ui.flet_app import main as flet_main
 
     class DummyPage:
-        overlay: list[object] = []
-        controls: list[object] = []
+        def __init__(self) -> None:
+            self.overlay: list[object] = []
+            self.controls: list[object] = []
+
+        def add(self, *controls: object) -> None:
+            self.controls.extend(controls)
 
         def update(self) -> None:
             pass
 
-    tab = AnalysisTab(
-        unit_converter=UnitConverter(),
-        page=DummyPage(),
-        analyzer=HVACAnalyzer(),
-        psy_calculator=PsychrometricCalculator(),
-        state_calculator=ThermoStateCalculator(UnitConverter()),
-    )
-    definitions = list(tab.analysis_map.values())
-    ids = [definition["analysis_id"] for definition in definitions]
+    page = DummyPage()
+    flet_main(page)
+    ids = [
+        definition.key
+        for view in page.controls[0].views.values()
+        if hasattr(view, "adapter")
+        for definition in view.adapter.definitions
+    ]
+    assert ids
     assert len(ids) == len(set(ids))
     assert all("Module." not in analysis_id for analysis_id in ids)
     assert all(not analysis_id.rsplit(".", 1)[-1].isdigit() for analysis_id in ids)

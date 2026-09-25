@@ -9,6 +9,9 @@ compressor、evaporator、condenser、psychrometric 等任何特定分類的存�
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Iterator
+
+import flet as ft
 
 from .analysis_definition import AnalysisDefinition, definitions_from_module
 from .components.result_panel import ResultPanel
@@ -17,6 +20,41 @@ logger = logging.getLogger(__name__)
 
 # 既有模組以這些前綴的文字回報未完成的計算，呈現為錯誤而非結果指標。
 _FAILED_RESULT_PREFIXES = ("計算錯誤", "計算失敗")
+
+
+# 使用者修改後會改變計算語意的輸入控制項，以及各自的事件屬性名稱。
+_SEMANTIC_INPUT_EVENTS = (
+    (ft.TextField, "on_change"),
+    (ft.Dropdown, "on_select"),
+    (ft.Checkbox, "on_change"),
+    (ft.Switch, "on_change"),
+    (ft.RadioGroup, "on_change"),
+    (ft.SegmentedButton, "on_change"),
+)
+
+
+def iter_controls(root: ft.Control) -> Iterator[ft.Control]:
+    """依控制項樹的固定順序走訪所有子控制項（含 root）。
+
+    參數：
+        root: 起點控制項。
+
+    回傳：
+        Iterator：依深度優先順序產生的控制項。
+    """
+    stack: list[ft.Control] = [root]
+    while stack:
+        control = stack.pop()
+        yield control
+        children: list[ft.Control] = []
+        content = getattr(control, "content", None)
+        if isinstance(content, ft.Control):
+            children.append(content)
+        for attribute in ("controls", "actions"):
+            nested = getattr(control, attribute, None)
+            if isinstance(nested, list):
+                children.extend(child for child in nested if isinstance(child, ft.Control))
+        stack.extend(reversed(children))
 
 
 class AnalysisModuleAdapter:
@@ -62,8 +100,11 @@ class AnalysisModuleAdapter:
         self.result_panel = ResultPanel()
         self.result_text: str | None = None
         self._has_calculated_result = False
+        # 結果因輸入修改而失效時通知 view 重繪結果區。
+        self.on_result_invalidated: Callable[[], None] | None = None
         self.output_unit_system = "SI"
         self._sync_visibility()
+        self._bind_input_invalidation()
 
     @property
     def active_definition(self) -> AnalysisDefinition:
@@ -160,9 +201,11 @@ class AnalysisModuleAdapter:
         self._has_calculated_result = False
 
     def set_output_unit_system(self, unit_system: str) -> None:
-        """更新輸出單位偏好，並視需要以新單位重新格式化既有結果。
+        """更新輸出單位偏好，並以新單位重新呈現仍有效的結果。
 
         這個偏好只影響「結果如何呈現」，不得覆寫任何 input 欄位的值或單位。
+        既有模組只輸出格式化文字，因此目前以重新計算取代重新格式化；這是過渡期
+        限制（見 docs/state-invalidation.md §3.1），canonical request 與工程結果不得改變。
         壓縮機等模組的大氣壓力等輸入，一律沿用使用者目前輸入的 value +
         selected input unit；domain/unit converter 會在計算時自行處理換算，
         不需要（也不應該）因為切換輸出單位而竄改 input 預設值。
@@ -174,8 +217,70 @@ class AnalysisModuleAdapter:
             無。
         """
         self.output_unit_system = unit_system
+        # 模組只輸出格式化文字，換單位必須重新計算。輸入一被修改結果就已失效
+        # （見 invalidate_result），因此仍有結果時輸入必定與該結果一致。
         if self._has_calculated_result:
             self.calculate()
+
+    def invalidate_result(self) -> None:
+        """使用者修改計算輸入後清除舊結果，並提示以目前輸入重新計算。
+
+        尚無成功結果（未計算或計算失敗）時不做任何事。
+
+        回傳：
+            無。
+        """
+        if not self._has_calculated_result:
+            return
+        self.result_text = None
+        self._has_calculated_result = False
+        self.result_panel.set_status(
+            "warning", "輸入已變更", "舊結果已清除，請使用目前輸入重新執行計算。"
+        )
+        if self.on_result_invalidated is not None:
+            self.on_result_invalidated()
+
+    def _bind_input_invalidation(self) -> None:
+        """讓每個會改變計算語意的輸入在使用者修改時使結果失效。
+
+        單位選單（``all_entries[...]["unit"]``）與模組宣告的
+        ``presentation_only_controls``（例如錶壓／絕對壓切換）只改變表示方式、
+        實際數值不變，不視為修改。既有的事件處理器會先執行，再使結果失效。
+
+        回傳：
+            無。
+        """
+        presentation_only: set[int] = set()
+        for module in self.modules:
+            for entry in getattr(module, "all_entries", {}).values():
+                presentation_only.add(id(entry["unit"]))
+            presentation_only.update(id(control) for control in getattr(module, "presentation_only_controls", ()))
+        seen: set[int] = set()
+        for definition in self.definitions:
+            for control in iter_controls(definition.input_view):
+                if id(control) in seen or id(control) in presentation_only:
+                    continue
+                seen.add(id(control))
+                for control_type, event_name in _SEMANTIC_INPUT_EVENTS:
+                    if isinstance(control, control_type):
+                        setattr(control, event_name, self._invalidating_handler(getattr(control, event_name)))
+                        break
+
+    def _invalidating_handler(self, original: Callable[[object], object] | None) -> Callable[[object], None]:
+        """包裝既有事件處理器：先執行原處理器，再使結果失效。
+
+        參數：
+            original: 控制項原有的事件處理器；沒有時為 None。
+
+        回傳：
+            新的事件處理器。
+        """
+        def handler(event: object) -> None:
+            if original is not None:
+                original(event)
+            self.invalidate_result()
+
+        return handler
 
     def tool_items(self) -> list[tuple[str, str]]:
         """提供給 ToolSelector 使用的 (key, label) 清單。

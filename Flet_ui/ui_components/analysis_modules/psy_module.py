@@ -18,15 +18,6 @@ class PsyModule(BaseAnalysisModule):
     MODE_TDB_TWB = "psychrometrics.tdb_twb"
     MODE_TDB_RH = "psychrometrics.tdb_rh"
 
-    # Legacy AnalysisTab（以及既有直接呼叫 configure_ui_for_mode /
-    # calculate_psy 的測試）仍可能傳入顯示 label 而非穩定 key；
-    # _resolve_mode_key() 用這張表把 label 正規化為 key，dispatch 本身
-    # 只比對正規化後的 key。
-    _LEGACY_LABEL_TO_KEY = {
-        "濕空氣性質 (已知乾濕球)": MODE_TDB_TWB,
-        "濕空氣性質 (已知乾球與相對濕度)": MODE_TDB_RH,
-    }
-
     def __init__(self, unit_converter: UnitConverter, page: ft.Page, psy_calculator: PsychrometricCalculator):
         super().__init__(unit_converter, page, psy_calculator=psy_calculator)
         
@@ -76,14 +67,10 @@ class PsyModule(BaseAnalysisModule):
         """回報此模組提供的 *兩種* 濕空氣計算模式。
 
         ``calc_func`` 一律指向本模組已綁定對應 mode 的統一簽章方法
-        （``Callable[[bool], str]``），呼叫端（新架構的
-        :func:`~Flet_ui.ui.analysis_definition.definitions_from_module`
-        與 legacy ``AnalysisTab``）都不需要知道 ``mode_key`` 這個參數的
-        存在——module-specific 的呼叫慣例完全由 ``PsyModule`` 自己吸收。
-
-        ``calculation_mode`` 這個 key 只保留給 legacy ``AnalysisTab``
-        （狀態文字顯示 / 既有 characterization test）使用；新架構的
-        generic factory 不讀取也不依賴這個欄位。
+        （``Callable[[bool], str]``），呼叫端
+        （:func:`~Flet_ui.ui.analysis_definition.definitions_from_module`）
+        不需要知道 ``mode_key`` 這個參數的存在——module-specific 的呼叫慣例
+        完全由 ``PsyModule`` 自己吸收。
 
 回傳：
     dict：函數計算或處理後的結果。"""
@@ -94,7 +81,6 @@ class PsyModule(BaseAnalysisModule):
                 "structured_result": lambda: self.last_structured_result,
                 "ui": self.ui_container,
                 "calc_func": self._calculate_tdb_twb,
-                "calculation_mode": "psychrometric"
             },
             "濕空氣性質 (已知乾球與相對濕度)": {
                 "analysis_id": self.MODE_TDB_RH,
@@ -102,7 +88,6 @@ class PsyModule(BaseAnalysisModule):
                 "structured_result": lambda: self.last_structured_result,
                 "ui": self.ui_container,
                 "calc_func": self._calculate_tdb_rh,
-                "calculation_mode": "psychrometric"
             }
         }
 
@@ -167,38 +152,15 @@ class PsyModule(BaseAnalysisModule):
         except RuntimeError:
             pass
 
-    def _resolve_mode_key(self, mode: str) -> str:
-        """將呼叫端傳入值正規化為穩定的 mode key。
-
-        新的 dedicated view / adapter（見 ``PsychrometricsView`` /
-        ``AnalysisModuleAdapter``）一律傳入穩定 key（``self.MODE_TDB_TWB`` /
-        ``self.MODE_TDB_RH``）；為了不破壞仍直接傳入舊版顯示文字的呼叫端
-        （legacy ``AnalysisTab`` 與既有直接呼叫此方法的測試），保留 label
-        → key 的相容對照表。實際的模式判斷（見下方 if/elif）只比對正規化
-        後的 key，不比對 label 字串本身。
-
-        參數：
-            mode: 穩定 key 或舊版顯示 label。
-
-        回傳：
-            str：正規化後的穩定 mode key；無法辨識時原樣傳回，交由呼叫端
-            的既有錯誤處理路徑判斷。
-        """
-        if mode in (self.MODE_TDB_TWB, self.MODE_TDB_RH):
-            return mode
-        return self._LEGACY_LABEL_TO_KEY.get(mode, mode)
-
     def configure_ui_for_mode(self, mode: str):
         """
-        由 PsychrometricsView（傳入穩定 key）或 legacy AnalysisTab（傳入
-        label，經 ``_resolve_mode_key`` 正規化）呼叫，配置 UI 顯示模式。
+        由 PsychrometricsView 以穩定 mode key 呼叫，配置 UI 顯示模式。
         這是一個 *特定* 方法，僅供 PsyModule 使用。
         """
-        mode_key = self._resolve_mode_key(mode)
-        if mode_key == self.MODE_TDB_TWB:
+        if mode == self.MODE_TDB_TWB:
             self.all_entries["psy_twb"]["ui_row"].visible = True
             self.all_entries["psy_rh"]["ui_row"].visible = False
-        elif mode_key == self.MODE_TDB_RH:
+        elif mode == self.MODE_TDB_RH:
             self.all_entries["psy_twb"]["ui_row"].visible = False
             self.all_entries["psy_rh"]["ui_row"].visible = True
         
@@ -218,14 +180,11 @@ class PsyModule(BaseAnalysisModule):
         參數：
             use_imperial: 是否以 Imperial 單位呈現結果。
             mode_key: 穩定的計算模式 key（``self.MODE_TDB_TWB`` /
-                ``self.MODE_TDB_RH``）；為相容仍可傳入舊版顯示 label，
-                會經 :meth:`_resolve_mode_key` 正規化為 key 後才用於
-                dispatch，label 本身永遠不直接參與判斷。
+                ``self.MODE_TDB_RH``）；顯示 label 不參與 dispatch。
 
         回傳：
             str：格式化後的計算結果文字。
         """
-        mode_key = self._resolve_mode_key(mode_key)
         # 1. 讀取通用值和單位
         alt_val = self.read_float("psy_alt")
         alt_unit = self.all_entries["psy_alt"]["unit"].value
@@ -238,7 +197,7 @@ class PsyModule(BaseAnalysisModule):
 
         psy_results = {}
         
-        # 3. 根據正規化後的 mode_key 決定計算路徑；label 不參與判斷。
+        # 3. 根據 mode_key 決定計算路徑；label 不參與判斷。
         if mode_key == self.MODE_TDB_TWB:
             twb_val = self.read_float("psy_twb")
             twb_unit = self.all_entries["psy_twb"]["unit"].value
