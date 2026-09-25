@@ -67,7 +67,7 @@
 - P-h／T-s 圖表路由（`ph_chart` / `ts_chart`）共用同一個 `ThermoDiagramView` 實例與底層 `ThermoDiagramModule`。`AppShell.navigate()` 提供 generic 的 route-activation 協定：若目標畫面實作了 `activate_route(route_key)`，導覽完成後會呼叫它，讓畫面自行處理 route-local 的啟用邏輯；`ThermoDiagramView.activate_route()` 內部持有自己的 `route → mode` 對照表並呼叫既有的 `set_mode("ph"|"ts")`。`flet_app.py`（組合根）及 `AppShell` 完全不知道 `ph_chart`/`ts_chart` 對應 `P-h`/`T-s`，也不會直接呼叫 `set_diagram_type()` 或 `set_mode()`。熱力圖使用專屬的「繪圖」按鈕（非共用 `AnalysisWorkspace` 的執行按鈕），因此其 view 不掛載 `AnalysisWorkspace`。
 - 濕空氣計算與圖表產生仍留在既有轉接器／模組；dedicated view 一律透過既有模組實例呼叫，不得複製計算邏輯。
 - 舊版 `AnalysisTab` 已移除；分析頁一律由 dedicated view 與 `AnalysisModuleAdapter` 組成，characterization tests 也改由正式進入點建構的工作區驗證。
-- 切頁、切換輸出單位、Reference State 與錶壓／絕對壓切換時，輸入、結果與圖表的保留或失效規則見 [`state-invalidation.md`](state-invalidation.md)。`AnalysisModuleAdapter` 為每個分析的輸入加上失效處理：使用者修改會影響計算的輸入時結果立即失效；單位選單與模組登記在 `presentation_only_controls` 的控制項（錶壓／絕對壓切換）只改表示方式，不使結果失效。切換輸出單位時只重新計算仍有效的結果。
+- 切頁、切換輸出單位、Reference State 與錶壓／絕對壓切換時，輸入、結果與圖表的保留或失效規則見 [`state-invalidation.md`](state-invalidation.md)。`AnalysisModuleAdapter` 為每個分析的輸入加上失效處理：使用者修改會影響計算的輸入時結果立即失效；單位選單與模組登記在 `presentation_only_controls` 的控制項（錶壓／絕對壓切換）只改表示方式：會換算欄位數值以維持相同的實際物理量，因此不使結果失效。切換輸出單位時只重新計算仍有效的結果；以重新計算取代重新格式化是過渡期限制，保證與新增輸入控制項時的規則見 `state-invalidation.md` §3.1–3.2。
 - `ThermoDiagramModule` 提供 public `perform_plot(event=None)` 作為唯一的繪圖執行入口；plot button 的 `on_click`（`_on_plot_click`）與 `ThermoDiagramView.perform_calculation()`（供 AppShell Ctrl+Enter 捷徑使用）都轉交給這個 public method，確保兩條觸發路徑最終走同一段邏輯。`_on_plot_click` 保留僅為與既有 Flet button 事件簽章相容，內部直接委派給 `perform_plot`，dedicated view 不再直接依賴 private API。
 
 ## 狀態歸屬

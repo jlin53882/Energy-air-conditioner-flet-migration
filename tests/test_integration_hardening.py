@@ -16,7 +16,7 @@ from domain.refrigeration.condenser_exergy import analyze_condenser_exergy
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units import CanonicalUnitConverter
 from Flet_ui.flet_app import main as flet_main
-from Flet_ui.ui.analysis_module_adapter import iter_controls
+from Flet_ui.ui.analysis_module_adapter import AnalysisModuleAdapter, iter_controls
 from Flet_ui.ui_components.unit.UnitConverter import GAUGE_PRESSURE, UnitConverter
 
 
@@ -885,3 +885,282 @@ def test_psychrometric_chart_redraw_does_not_duplicate_series(shell, route_key, 
     assert len(panel.chart.data_series) == series_count
     assert len(panel.markers) == marker_count
     assert len(panel.guides) == guide_count
+
+
+# ======================================================
+# 6. 輸出單位切換的不變量（過渡期限制）
+# ======================================================
+def test_output_unit_round_trip_keeps_canonical_cycle_result(shell, monkeypatch) -> None:
+    """SI → Imperial → SI 時交給冷凍服務的 canonical 輸入與工程結果都不變，輸入欄位也不變。
+
+    切換輸出單位目前仍會重新計算（見 docs/state-invalidation.md §3.1 的過渡期限制）；
+    本測試確認重新計算不改變工程意義：request 相同，COP、壓縮比、壓縮功、冷凍效果與
+    質量流率相同，只有顯示單位不同。
+
+參數：
+    shell: 工作區外殼。
+    monkeypatch: pytest 的屬性替換工具。
+
+回傳：
+    無。"""
+    shell.navigate("refrigeration_cycle")
+    view = shell.views["refrigeration_cycle"]
+    module = view.adapter.modules[0]
+    service = module.refrigeration
+    solved = []
+    original_solve = service.solve_cycle
+
+    def recording_solve(request):
+        result = original_solve(request)
+        solved.append((request, result))
+        return result
+
+    monkeypatch.setattr(service, "solve_cycle", recording_solve)
+    view.perform_calculation(None)
+    inputs_before = _entry_state(module, list(module.all_entries))
+    fluid_before = module.text_entries["cyc_fluid"]["val"].value
+
+    for unit_system in ("Imperial", "SI"):
+        _switch_unit_system(shell, unit_system)
+        assert view.result_panel.status == "success", view.result_panel.message
+
+    assert len(solved) == 3
+    baseline_request, baseline = solved[0]
+    # 每次狀態查詢都會設定並還原 CoolProp reference state，重複求解在 ~1e-9 相對誤差內
+    # 可能不是逐位元相同（見 docs/state-invalidation.md §3.1）；1e-7 遠小於顯示精度。
+    tolerance = 1e-7
+    for request, result in solved[1:]:
+        assert request == baseline_request
+        assert result.cop_cooling == pytest.approx(baseline.cop_cooling, rel=tolerance)
+        assert result.pressure_ratio == pytest.approx(baseline.pressure_ratio, rel=tolerance)
+        assert result.compressor_work_j_kg == pytest.approx(baseline.compressor_work_j_kg, rel=tolerance)
+        assert result.refrigerating_effect_j_kg == pytest.approx(baseline.refrigerating_effect_j_kg, rel=tolerance)
+        assert result.mass_flow_kg_s == pytest.approx(baseline.mass_flow_kg_s, rel=tolerance)
+    assert _entry_state(module, list(module.all_entries)) == inputs_before
+    assert module.text_entries["cyc_fluid"]["val"].value == fluid_before
+
+
+# ======================================================
+# 7. 錶壓／絕對壓切換的無效輸入
+# ======================================================
+@pytest.mark.parametrize("raw_value", ["", "abc", "nan", "inf", "-inf"])
+def test_compression_ratio_pressure_basis_with_invalid_input(shell, monkeypatch, raw_value) -> None:
+    """無效的壓力輸入切換錶壓／絕對壓時不當掉、不部分切換、不偽造換算，計算時以欄名報錯。
+
+參數：
+    shell: 工作區外殼。
+    monkeypatch: pytest 的屬性替換工具。
+    raw_value: 入口壓力欄位中的無效內容。
+
+回傳：
+    無。"""
+    view, module = _compression_ratio_module(shell)
+    pe = module.all_entries["cr_pe"]
+    pc = module.all_entries["cr_pc"]
+    pe["val"].value = "0.3"
+    pc["val"].value = "1.2"
+    view.perform_calculation(None)
+    assert view.result_panel.status == "success"
+    pe["val"].value = raw_value
+    requests = []
+    original_calculate = module.compression_ratio_service.calculate
+    monkeypatch.setattr(
+        module.compression_ratio_service, "calculate",
+        lambda request: requests.append(request) or original_calculate(request),
+    )
+
+    expected = {
+        "Gauge": (GAUGE_PRESSURE, "MPag", 1.2 - 0.101325),
+        "Absolute": ("P", "MPa", 1.2),
+    }
+    for mode in ("Gauge", "Absolute", "Gauge"):
+        _set_compression_ratio_mode(module, mode)
+        prop_code, unit, pc_value = expected[mode]
+        assert module.cr_pressure_type_toggle.selected == [mode]
+        for entry in (pe, pc):
+            assert entry["prop_code"] == prop_code
+            assert entry["unit"].value == unit
+        assert pe["val"].value == raw_value
+        assert float(pc["val"].value) == pytest.approx(pc_value)
+
+    view.perform_calculation(None)
+
+    assert view.result_panel.status == "error"
+    assert "入口壓力 (Inlet Pressure)" in view.result_panel.message
+    assert view.adapter.result_text is None
+    assert requests == []
+
+
+@pytest.mark.parametrize(
+    ("route_key", "analysis_key", "toggle_name", "pressure_key", "label"),
+    [
+        ("refrigeration_cycle", "cycle.superheat_subcooling", "sh_pressure_type", "sh_p", "量測壓力"),
+        ("condenser", "condenser.exergy", "cx_pressure_type", "cx_p", "冷凝壓力"),
+    ],
+)
+@pytest.mark.parametrize("raw_value", ["abc", "nan"])
+def test_pressure_basis_with_invalid_input_on_other_pages(
+    shell, route_key, analysis_key, toggle_name, pressure_key, label, raw_value
+) -> None:
+    """過熱度判讀與冷凝器 Exergy 的無效壓力輸入切換後保留原文字，計算時以欄名報錯。
+
+參數：
+    shell: 工作區外殼。
+    route_key: 要測試的路由。
+    analysis_key: 分析項目。
+    toggle_name: 壓力類型切換按鈕的屬性名稱。
+    pressure_key: 壓力輸入列識別鍵。
+    label: 壓力欄位名稱。
+    raw_value: 無效內容。
+
+回傳：
+    無。"""
+    shell.navigate(route_key)
+    view = shell.views[route_key]
+    view._handle_tool_change(analysis_key)
+    module = view.adapter.modules[0]
+    toggle = getattr(module, toggle_name)
+    entry = module.all_entries[pressure_key]
+    entry["val"].value = raw_value
+
+    for mode in ("Gauge", "Absolute", "Gauge", "Absolute"):
+        toggle.selected = [mode]
+        toggle.on_change(SimpleNamespace(control=toggle))
+        assert toggle.selected == [mode]
+        assert entry["prop_code"] == (GAUGE_PRESSURE if mode == "Gauge" else "P")
+        assert entry["val"].value == raw_value
+
+    view.perform_calculation(None)
+    assert view.result_panel.status == "error"
+    assert label in view.result_panel.message
+
+
+# ======================================================
+# 8. 語意輸入／只改表示方式的輸入契約
+# ======================================================
+class _ContractModule:
+    """含各種支援輸入類型的最小分析模組，用來驗證 adapter 的失效契約。"""
+
+    def __init__(self) -> None:
+        """建立每種語意輸入、一個單位選單與一個只改表示方式的切換按鈕。
+
+回傳：
+    無。"""
+        self.unit = ft.Dropdown(options=[ft.dropdown.Option("kPa"), ft.dropdown.Option("MPa")], value="kPa")
+        self.presentation_toggle = ft.SegmentedButton(
+            segments=[ft.Segment(value="Gauge", label=ft.Text("Gauge")),
+                      ft.Segment(value="Absolute", label=ft.Text("Absolute"))],
+            selected=["Absolute"],
+        )
+        self.semantic = {
+            "TextField": (ft.TextField(value="1"), "on_change"),
+            "Dropdown": (ft.Dropdown(options=[ft.dropdown.Option("a"), ft.dropdown.Option("b")], value="a"), "on_select"),
+            "Checkbox": (ft.Checkbox(value=False), "on_change"),
+            "Switch": (ft.Switch(value=False), "on_change"),
+            "RadioGroup": (ft.RadioGroup(content=ft.Column([ft.Radio(value="a"), ft.Radio(value="b")]), value="a"), "on_change"),
+            "SegmentedButton": (ft.SegmentedButton(
+                segments=[ft.Segment(value="x", label=ft.Text("x")), ft.Segment(value="y", label=ft.Text("y"))],
+                selected=["x"],
+            ), "on_change"),
+        }
+        self.all_entries = {"value": {"unit": self.unit}}
+        self.presentation_only_controls = [self.presentation_toggle]
+        controls = [control for control, _event in self.semantic.values()]
+        self.ui = ft.Container(content=ft.Column([*controls, ft.Row([self.unit]), self.presentation_toggle]))
+
+    def get_analysis_definitions(self) -> dict:
+        """回報單一分析。
+
+回傳：
+    分析定義字典。"""
+        return {"契約分析": {"analysis_id": "contract.analysis", "ui": self.ui, "calc_func": lambda _imperial: "結果: 1"}}
+
+
+def _fire(control, event_name: str) -> None:
+    """以 Flet 會使用的事件名稱觸發控制項事件。
+
+參數：
+    control: 控制項。
+    event_name: 事件屬性名稱。
+
+回傳：
+    無。"""
+    getattr(control, event_name)(SimpleNamespace(control=control))
+
+
+@pytest.mark.parametrize("control_type", ["TextField", "Dropdown", "Checkbox", "Switch", "RadioGroup", "SegmentedButton"])
+def test_every_supported_semantic_input_type_invalidates_result(control_type) -> None:
+    """每種支援的語意輸入被使用者修改時，既有成功結果都會失效，原有事件處理器也會執行。
+
+參數：
+    control_type: 輸入控制項類型名稱。
+
+回傳：
+    無。"""
+    module = _ContractModule()
+    control, event_name = module.semantic[control_type]
+    original_calls = []
+    setattr(control, event_name, lambda event: original_calls.append(event))
+    adapter = AnalysisModuleAdapter([module])
+    adapter.calculate()
+    assert adapter.result_panel.status == "success"
+
+    _fire(control, event_name)
+
+    assert adapter.result_panel.status == "warning"
+    assert adapter.result_text is None
+    assert len(original_calls) == 1
+
+
+def test_unit_dropdown_and_presentation_only_controls_keep_result() -> None:
+    """單位選單與登記為 presentation_only_controls 的控制項變更後，成功結果保留。
+
+回傳：
+    無。"""
+    module = _ContractModule()
+    adapter = AnalysisModuleAdapter([module])
+    adapter.calculate()
+
+    for control, event_name in ((module.unit, "on_select"), (module.presentation_toggle, "on_change")):
+        handler = getattr(control, event_name)
+        if handler is not None:
+            handler(SimpleNamespace(control=control))
+
+    assert adapter.result_panel.status == "success"
+    assert adapter.result_text == "結果: 1"
+
+
+# 會改變數值、但 AnalysisModuleAdapter 尚未支援失效處理的 Flet 輸入類型。
+_UNSUPPORTED_VALUE_INPUT_TYPES = tuple(
+    control_type
+    for control_type in (
+        getattr(ft, name, None)
+        for name in (
+            "Slider", "RangeSlider", "CupertinoSwitch", "CupertinoCheckbox", "CupertinoSlider",
+            "CupertinoSegmentedButton", "CupertinoSlidingSegmentedButton", "AutoComplete", "SearchBar",
+        )
+    )
+    if isinstance(control_type, type)
+)
+
+
+def test_production_analysis_inputs_only_use_supported_input_types(shell) -> None:
+    """正式分析頁的輸入只使用 adapter 支援失效處理的控制項類型。
+
+    新增其他類型（例如 Slider）時，必須同步擴充 ``_SEMANTIC_INPUT_EVENTS`` 與本檔的回歸測試，
+    否則使用者修改它時結果不會失效。
+
+參數：
+    shell: 工作區外殼。
+
+回傳：
+    無。"""
+    unsupported = [
+        (route_key, definition.key, type(control).__name__)
+        for route_key, view in shell.views.items()
+        if hasattr(view, "adapter")
+        for definition in view.adapter.definitions
+        for control in iter_controls(definition.input_view)
+        if isinstance(control, _UNSUPPORTED_VALUE_INPUT_TYPES)
+    ]
+    assert unsupported == []

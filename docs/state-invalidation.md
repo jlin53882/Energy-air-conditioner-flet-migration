@@ -34,22 +34,60 @@
 
 ### 3.1 單位切換只改呈現
 
-全域 SI / Imperial 是輸出偏好，不得改寫任何輸入欄位的數值或單位。
+**預期契約**：全域 SI / Imperial 是輸出偏好（presentation preference）。理想做法是保存
+canonical 計算結果，切換時只重新格式化，不重新求解 domain。
 
-- 物性查詢頁保存 SI 結果快照，切換時只重新格式化，不重新查詢。
-- 分析頁的模組只輸出格式化文字，切換時需要重新計算才能換單位。因為修改輸入時結果
-  已經失效，所以仍然有效的結果必定對應目前的輸入，重新計算不會把未送出的輸入當成
-  原結果呈現。
+- 物性查詢頁已符合：保存 SI 結果快照，切換時只重新格式化，不重新查詢。
+
+**目前的過渡期限制**：大多數分析模組只輸出格式化文字，沒有保存可重新格式化的 canonical
+結構化結果，因此 `AnalysisModuleAdapter.set_output_unit_system()` 暫時會以目前輸入重新執行
+計算（冷凍循環也會重畫 P-h 圖）。這是遷移期的實作限制，不代表單位切換可以改變輸入或
+domain 狀態。改為保存 canonical 結果後即可移除這項限制（見 `docs/ui-architecture.md` 對
+`structured_from_text()` 的說明）。
+
+即使重新計算，仍必須保證：
+
+- 不修改任何輸入欄位的數值與單位。
+- 不使用已修改、尚未送出的輸入覆蓋原結果：修改輸入時結果已經失效（§3.2），切換單位只
+  重新計算仍有效的結果。
+- 交給 application／domain 的 canonical request 與切換前完全相同。
+- 工程結果（COP、壓縮比、壓縮功、冷凍效果、質量流率等）不變，只有顯示單位與格式不同。
+
+每次狀態查詢都會設定並還原 CoolProp reference state，重複求解同一個 request 的結果在
+約 1e-9 相對誤差內可能不是逐位元相同；此差異遠小於顯示精度。回歸測試以 1e-7 相對容差
+比對工程結果，canonical request 則必須完全相同。
 
 ### 3.2 修改輸入使結果失效
 
-`AnalysisModuleAdapter` 在建構時為每個分析的輸入控制項（文字欄位、下拉選單、核取方塊、
-開關、單選群組、分段按鈕）加上失效處理，原有的事件處理器會先執行。以下控制項不視為
-修改：
+`AnalysisModuleAdapter` 在建構時走訪每個分析的輸入控制項（`iter_controls()`），依
+`_SEMANTIC_INPUT_EVENTS` 為以下類型加上失效處理，原有的事件處理器會先執行：
 
-- 各輸入列的單位選單（`all_entries[...]["unit"]`）。
-- 模組登記在 `presentation_only_controls` 的控制項；`BaseAnalysisModule.apply_pressure_basis`
-  會自動登記錶壓／絕對壓切換按鈕。
+| 控制項 | 事件 |
+|---|---|
+| `TextField` | `on_change` |
+| `Dropdown` | `on_select` |
+| `Checkbox`、`Switch`、`RadioGroup`、`SegmentedButton` | `on_change` |
+
+判斷標準是**計算語意是否改變**，不是控制項類型：
+
+- **語意輸入**：修改後會改變計算結果的控制項（數值、流體、Reference State、模式選項）。
+  必須是上表支援的類型，且位於分析定義的 `input_view` 之下，才會被 `iter_controls()` 找到。
+  使用者修改後結果失效。
+- **只改表示方式的輸入**：處理器會自行換算欄位數值、使實際物理量維持不變的控制項。欄位
+  數值可能改變（例如 0.3 MPa 切成錶壓後顯示 0.198675 MPag），但實際壓力不變，因此不使結果
+  失效。包括：
+  - 各輸入列的單位選單（`all_entries[...]["unit"]`，adapter 自動排除）。
+  - 模組登記在 `presentation_only_controls` 的控制項；`BaseAnalysisModule.apply_pressure_basis`
+    會自動登記錶壓／絕對壓切換按鈕。其他這類控制項必須由模組明確登記，不能因為「看起來
+    只是 UI」就略過失效處理。
+
+新增輸入控制項時：
+
+1. 若會改變計算語意，確認類型在 `_SEMANTIC_INPUT_EVENTS` 內且放在 `input_view` 之下。
+2. 若要使用未支援的 Flet 輸入類型（例如 `Slider`），必須同步擴充 `_SEMANTIC_INPUT_EVENTS`
+   與 `tests/test_integration_hardening.py` 的契約測試；該檔另有測試確保正式分析頁沒有使用
+   未支援的輸入類型。
+3. 若只改表示方式且處理器會維持相同物理量，登記到 `presentation_only_controls`。
 
 ### 3.3 Reference State
 

@@ -201,9 +201,11 @@ class AnalysisModuleAdapter:
         self._has_calculated_result = False
 
     def set_output_unit_system(self, unit_system: str) -> None:
-        """更新輸出單位偏好，並視需要以新單位重新格式化既有結果。
+        """更新輸出單位偏好，並以新單位重新呈現仍有效的結果。
 
         這個偏好只影響「結果如何呈現」，不得覆寫任何 input 欄位的值或單位。
+        既有模組只輸出格式化文字，因此目前以重新計算取代重新格式化；這是過渡期
+        限制（見 docs/state-invalidation.md §3.1），canonical request 與工程結果不得改變。
         壓縮機等模組的大氣壓力等輸入，一律沿用使用者目前輸入的 value +
         selected input unit；domain/unit converter 會在計算時自行處理換算，
         不需要（也不應該）因為切換輸出單位而竄改 input 預設值。
