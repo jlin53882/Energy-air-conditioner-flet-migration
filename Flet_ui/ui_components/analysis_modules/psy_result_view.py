@@ -10,13 +10,12 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-from chart.psychrometric import PsychrometricChartData, build_psychrometric_chart_data
+from chart.psychrometric import ChartGuide, ChartMarker, PsychrometricChartData, build_psychrometric_chart_data
 from domain.psychrometrics.service import PsychrometricService
 
-from ...ui.components.figure_panel import FigurePanel
+from ...ui.components.psychrometric_chart_panel import PsychrometricChartPanel
 from ...ui.structured_result import PropertyGroup, PropertyRow, ResultMetric, StructuredResult
 from ..unit.UnitConverter import UnitConverter
-from ..unit.thermo_draw.psychrometric_plot import ChartGuide, ChartMarker, draw_psychrometric_chart
 from .result_formatting import ResultFormatter
 
 KNOWN_WET_BULB = "twb"
@@ -56,7 +55,7 @@ class PsychrometricResultBuilder:
         self.unit_converter = unit_converter
         self.psychrometrics = psychrometrics
         self._chart_cache: dict[tuple, PsychrometricChartData] = {}
-        self.chart_panel = FigurePanel(height=420, placeholder="計算後顯示焓濕圖")
+        self.chart_panel = PsychrometricChartPanel(height=420, placeholder="計算後顯示焓濕圖")
 
     def build(self, state: Mapping[str, Any], *, known_input: str, use_imperial: bool) -> StructuredResult:
         """以新的計算結果重畫焓濕圖，並回傳結構化結果。
@@ -202,10 +201,9 @@ class PsychrometricResultBuilder:
                                 float(state["Tdp"]) - 273.15, float(state["W"]))
         wet_bulb = ChartMarker(f"Twb {float(state['Twb']) - 273.15:.1f}",
                                float(state["Twb"]) - 273.15, float(state["Wss"]))
-        draw_psychrometric_chart(
-            self.chart_panel.figure, data,
+        self.chart_panel.draw(
+            data,
             markers=[point],
             guides=[ChartGuide(point, wet_bulb), ChartGuide(point, dew_point)],
-            title="",
         )
         self.chart_panel.refresh()

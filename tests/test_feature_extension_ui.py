@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from Flet_ui.flet_app import main as flet_main
-from Flet_ui.ui.components.figure_panel import FigurePanel
+from Flet_ui.ui.components.psychrometric_chart_panel import PsychrometricChartPanel
 from Flet_ui.ui_components.analysis_modules.psy_module import PsyModule
 from Flet_ui.ui_components.analysis_modules.result_formatting import ResultFormatter
 from Flet_ui.ui_components.unit.UnitConverter import UnitConverter
@@ -109,9 +109,12 @@ def test_air_process_analyses_render_metrics_and_chart(shell, analysis_key, expe
     assert view.result_panel.status == "success", view.result_panel.message
     assert expected_label in view.adapter.result_text
     assert result_view.chart_column.visible is True
-    assert isinstance(chart_host.content, FigurePanel)
-    axes = chart_host.content.figure.axes[0]
-    assert len(axes.lines) > 10
+    panel = chart_host.content
+    assert isinstance(panel, PsychrometricChartPanel)
+    assert panel.chart_box.visible is True
+    # 飽和線、等 RH 線、等焓線與過程線都是原生折線圖的資料序列。
+    assert len(panel.chart.data_series) > 10
+    assert panel.markers
 
 
 def test_air_process_invalid_field_names_the_field(shell) -> None:
@@ -318,9 +321,14 @@ def test_psychrometric_property_modes_use_structured_result_view(shell) -> None:
     assert [row.label for row in inputs.rows][:2] == ["乾球溫度", "濕球溫度"]
     assert inputs.highlighted is True
     assert "相對濕度" in [row.label for row in results.rows]
-    axes = tab.psy_module.result_builder.chart_panel.figure.axes[0]
-    assert any(text.get_text() == "Tdp 17.6" for text in axes.texts)
-    assert any(text.get_text() == "Twb 20.0" for text in axes.texts)
+    panel = tab.psy_module.result_builder.chart_panel
+    assert [marker.label for marker in panel.markers] == ["25.0 °C / 63.5%"]
+    assert [guide.end.label for guide in panel.guides] == ["Twb 20.0", "Tdp 17.6"]
+    guide_series = [series for series in panel.chart.data_series if series.dash_pattern == [4, 3]]
+    assert len(guide_series) == 2
+    assert guide_series[1].points[1].y == pytest.approx(guide_series[1].points[0].y)
+    legend_texts = [item.controls[1].value for item in panel.legend.controls]
+    assert "Tdp 17.6" in legend_texts and "Twb 20.0" in legend_texts
 
     assert view.process_card.visible is True
     assert view.process_body.visible is False
@@ -453,3 +461,27 @@ def test_every_analysis_view_uses_the_shared_calculation_layout(shell) -> None:
         assert view.workspace.input_column.col == INPUT_COLUMN, key
         assert view.workspace.result_column.col == RESULT_COLUMN, key
     assert shell.views["psychrometrics"].tool_selector.label_control.value == "已知參數組合"
+
+
+def test_native_psychrometric_chart_axes_follow_the_data_range(shell) -> None:
+    """原生線圖的座標範圍與刻度跟著線圖資料；未繪圖前只顯示提示。
+
+回傳：
+    無。"""
+    from chart.psychrometric import ChartMarker, build_psychrometric_chart_data
+
+    panel = PsychrometricChartPanel(height=300)
+    assert panel.placeholder.visible is True
+    assert panel.chart_box.visible is False
+
+    service = shell.views["psychrometrics"].psy_module.psy_calculator.service
+    data = build_psychrometric_chart_data(service, 0.0, dry_bulb_range_c=(-10.0, 50.0),
+                                          humidity_ratio_max=0.030)
+    panel.draw(data, markers=[ChartMarker("P", 30.0, 0.012)])
+
+    assert panel.chart_box.visible is True
+    assert (panel.chart.min_x, panel.chart.max_x) == (-10.0, 50.0)
+    assert panel.chart.max_y == pytest.approx(30.0)
+    assert [label.value for label in panel.chart.bottom_axis.labels] == [-10, 0, 10, 20, 30, 40, 50]
+    assert [label.value for label in panel.chart.right_axis.labels] == [0, 5, 10, 15, 20, 25, 30]
+    assert panel.legend.controls[0].controls[1].value == "P"

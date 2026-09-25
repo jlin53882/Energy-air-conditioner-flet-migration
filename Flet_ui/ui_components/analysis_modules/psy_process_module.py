@@ -1,7 +1,7 @@
 """空氣處理過程分析：混合、顯熱加熱／冷卻、冷卻除濕與送風量估算。
 
 本模組只負責表單、單位換算與結果呈現；計算委派給 `AirProcessService`，
-線圖曲線來自 `chart.psychrometric`，並在同一個 FigurePanel 上標示過程。
+線圖曲線來自 `chart.psychrometric`，並在同一個 PsychrometricChartPanel 上標示過程。
 """
 
 from __future__ import annotations
@@ -17,11 +17,10 @@ from application.models import (
     SensibleProcessRequest,
     SupplyAirflowRequest,
 )
-from chart.psychrometric import PsychrometricChartData, build_psychrometric_chart_data
+from chart.psychrometric import ChartMarker, PsychrometricChartData, build_psychrometric_chart_data
 
-from ...ui.components.figure_panel import FigurePanel
+from ...ui.components.psychrometric_chart_panel import PsychrometricChartPanel
 from ..unit.UnitConverter import UnitConverter
-from ..unit.thermo_draw.psychrometric_plot import ChartMarker, draw_psychrometric_chart
 from .base_analysis_module import BaseAnalysisModule
 from .result_formatting import ResultFormatter
 
@@ -42,7 +41,7 @@ class PsyProcessModule(BaseAnalysisModule):
     無。"""
         super().__init__(unit_converter, page, air_process_service=air_process_service)
         self.air = air_process_service
-        self.chart_panel = FigurePanel(placeholder="執行分析後，過程會標示在濕空氣線圖上")
+        self.chart_panel = PsychrometricChartPanel(placeholder="執行分析後，過程會標示在濕空氣線圖上")
         self._chart_cache: dict[float, PsychrometricChartData] = {}
         self.mixing_ui = self._build_form("mix", [
             ("氣流 A（例如外氣）", [("mix_a_tdb", "乾球溫度", "35", "T", "°C"),
@@ -167,8 +166,7 @@ class PsyProcessModule(BaseAnalysisModule):
 
 回傳：
     無。"""
-        draw_psychrometric_chart(self.chart_panel.figure, self._chart_data(altitude_m),
-                                 markers=markers, paths=paths)
+        self.chart_panel.draw(self._chart_data(altitude_m), markers=markers, paths=paths)
         self.chart_panel.refresh()
 
     # ======================================================

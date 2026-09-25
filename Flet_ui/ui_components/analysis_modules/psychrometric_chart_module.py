@@ -6,12 +6,11 @@ import flet as ft
 
 from application.air_processes import AirProcessService
 from application.models import AirStateInput
-from chart.psychrometric import build_psychrometric_chart_data
+from chart.psychrometric import ChartMarker, build_psychrometric_chart_data
 
-from ...ui.components.figure_panel import FigurePanel
+from ...ui.components.psychrometric_chart_panel import PsychrometricChartPanel
 from ...ui.theme import TOKENS
 from ..unit.UnitConverter import UnitConverter
-from ..unit.thermo_draw.psychrometric_plot import ChartMarker, draw_psychrometric_chart
 from .base_analysis_module import BaseAnalysisModule
 from .result_formatting import ResultFormatter
 
@@ -34,7 +33,7 @@ class PsychrometricChartModule(BaseAnalysisModule):
     無。"""
         super().__init__(unit_converter, page, air_process_service=air_process_service)
         self.air = air_process_service
-        self.chart_panel = FigurePanel(height=560, placeholder="按下「執行分析」繪製濕空氣線圖")
+        self.chart_panel = PsychrometricChartPanel(height=520, placeholder="按下「計算」繪製濕空氣線圖")
         self.connect_points_cb = ft.Checkbox(label="依序連接狀態點", value=True,
                                              tooltip="以線段依序連接各點，表示處理過程",
                                              active_color=TOKENS.primary)
@@ -97,8 +96,7 @@ class PsychrometricChartModule(BaseAnalysisModule):
         ]
         markers = [ChartMarker.from_state(str(index), state) for index, state in enumerate(states, 1)]
         paths = [markers] if self.connect_points_cb.value and len(markers) > 1 else []
-        draw_psychrometric_chart(
-            self.chart_panel.figure,
+        self.chart_panel.draw(
             build_psychrometric_chart_data(self.air.psychrometrics, altitude),
             markers=markers,
             paths=paths,

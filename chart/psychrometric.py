@@ -7,8 +7,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from domain.psychrometrics.service import PsychrometricService
 
@@ -36,6 +37,35 @@ class PsychrometricChartData:
     saturation: ChartCurve
     relative_humidity_lines: tuple[ChartCurve, ...]
     enthalpy_lines: tuple[ChartCurve, ...]
+
+
+@dataclass(frozen=True)
+class ChartMarker:
+    """線圖上的一個標註點（乾球溫度 °C、濕度比 kg/kg）。"""
+
+    label: str
+    dry_bulb_c: float
+    humidity_ratio: float
+
+    @classmethod
+    def from_state(cls, label: str, state: Mapping[str, Any]) -> "ChartMarker":
+        """由濕空氣服務回傳的狀態建立標註點。
+
+參數：
+    label: 標註文字。
+    state: 含 Tdb（K）與 W（kg/kg）的狀態。
+
+回傳：
+    ChartMarker。"""
+        return cls(label, float(state["Tdb"]) - 273.15, float(state["W"]))
+
+
+@dataclass(frozen=True)
+class ChartGuide:
+    """由狀態點延伸出的輔助線（例如到露點或濕球溫度）；終點標籤取自 end.label。"""
+
+    start: ChartMarker
+    end: ChartMarker
 
 
 def _linspace(start: float, stop: float, count: int) -> list[float]:
