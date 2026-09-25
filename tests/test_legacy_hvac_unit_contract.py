@@ -1,4 +1,4 @@
-"""舊版 HVAC 計算 API（compressor.py／exergy.py）的單位契約回歸測試。
+"""舊版 HVAC 計算 API（compressor.py／exergy.py／condenser_heat.py／throttling.py）的單位契約回歸測試。
 
 compressor.py 的舊版 API 以 h = kJ/kg、s = kJ/(kg·K)、ṁ = kg/s、T = K 輸入，
 功率與㶲率輸出為 kW；exergy.py 的公式是齊次式，輸出單位跟隨輸入單位。
@@ -19,12 +19,14 @@ from Flet_ui.ui_components.unit.hvac_calculations.compressor import (
     calculate_compressor_work,
     calculate_compressor_work_heat_transfer,
 )
+from Flet_ui.ui_components.unit.hvac_calculations.condenser_heat import exergy_efficiency_condenser
 from Flet_ui.ui_components.unit.hvac_calculations.exergy import (
     calculate_change_specific_exerpy1_2,
     calculate_change_specific_exerpy1_2_simple,
     calculate_specific_exerpy,
     calculate_specific_exerpy_flow,
 )
+from Flet_ui.ui_components.unit.hvac_calculations.throttling import calculate_throttling_value_exerpy
 
 # 壓縮機分析頁的預設輸入：ṁ = 0.1 kg/s、h 400 → 450 kJ/kg、s 1.7 → 1.8 kJ/(kg·K)、T0 = 25 °C。
 M_DOT = 0.1
@@ -101,3 +103,35 @@ def test_compressor_example_takes_si_states_and_returns_kw() -> None:
     assert ex_dest_kw == pytest.approx(expected_win_kw - expected_wrev_kw, rel=1e-9)
     # 量級檢查：0.01 m³/s 的 R134a 蒸氣壓縮功為數 kW，若誤用 W 會大 1000 倍。
     assert 1.0 < win_kw < 20.0
+
+
+def test_condenser_exergy_efficiency_uses_the_refrigerant_exergy_decrease() -> None:
+    """冷凝器㶲效率以冷媒㶲減少量 ṁ·(ex1 − ex2) 為分母，結果落在 0～1。
+
+回傳：
+    無。"""
+    # 冷媒在冷凝器中放熱：h 430 → 250 kJ/kg、s 1.75 → 1.17 kJ/(kg·K)。
+    m_dot, h1, h2, s1, s2 = 0.05, 430.0, 250.0, 1.75, 1.17
+    exergy_decrease_kw = m_dot * ((h1 - h2) - T0 * (s1 - s2))
+    assert exergy_decrease_kw == pytest.approx(0.35365)
+    efficiency = exergy_efficiency_condenser(m_dot, h1, h2, s1, s2, T0, Ex_dot_dest=0.1)
+    # 修正前分母正負號相反，會得到 1 + 0.1 / 0.35365 ≈ 1.28（大於 1）。
+    assert efficiency == pytest.approx(1.0 - 0.1 / exergy_decrease_kw)
+    assert 0.0 < efficiency < 1.0
+
+
+def test_throttling_exergy_destruction_is_in_watts() -> None:
+    """節流閥以 CoolProp SI（J/kg、J/(kg·K)）計算，㶲破壞率以 W 回傳，等於 ṁ·T0·(s2 − s1)。
+
+回傳：
+    無。"""
+    p1, p2, p0, t0, m_dot = 1.0e6, 0.2e6, 101.325e3, 298.15, 0.05
+    t2, ex_dest_w = calculate_throttling_value_exerpy(0.0, p1, p2, p0, t0, "R134a", m_dot)
+    h1 = CP.PropsSI("H", "P", p1, "Q", 0.0, "R134a")
+    s1 = CP.PropsSI("S", "P", p1, "Q", 0.0, "R134a")
+    s2 = CP.PropsSI("S", "P", p2, "H", h1, "R134a")
+    assert t2 == pytest.approx(CP.PropsSI("T", "P", p2, "H", h1, "R134a"))
+    # 節流前後焓相同，因此 ex1 − ex2 = T0·(s2 − s1)。
+    assert ex_dest_w == pytest.approx(m_dot * t0 * (s2 - s1), rel=1e-9)
+    # 量級檢查：數十 W；若誤當 kW 解讀會差 1000 倍。
+    assert 10.0 < ex_dest_w < 1000.0

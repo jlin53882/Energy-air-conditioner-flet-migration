@@ -185,12 +185,12 @@ def exergy_efficiency_condenser(m_dot_R, h1, h2, s1, s2, T0_dead, Q_dot_H=None, 
     計算冷凝器的㶲效率 (eta_ex,con)。適用於空冷式冷凝器 (圖 3.23a)。
 
     參數:
-    m_dot_R (float): 製冷劑 (R) 質量流量 (m_dot_1 或 m_dot_2, 假設 m_dot_1 = m_dot_2 = m_dot_R)
-    h1 (float): 製冷劑入口 (1) 比焓
-    h2 (float): 製冷劑出口 (2) 比焓
-    s1 (float): 製冷劑入口 (1) 比熵
-    s2 (float): 製冷劑出口 (2) 比熵
-    T0_dead (float): 參考環境溫度 (K 或 R)
+    m_dot_R (float): 製冷劑 (R) 質量流量 (kg/s，m_dot_1 或 m_dot_2, 假設 m_dot_1 = m_dot_2 = m_dot_R)
+    h1 (float): 製冷劑入口 (1) 比焓 (kJ/kg)
+    h2 (float): 製冷劑出口 (2) 比焓 (kJ/kg)
+    s1 (float): 製冷劑入口 (1) 比熵 (kJ/(kg·K))
+    s2 (float): 製冷劑出口 (2) 比熵 (kJ/(kg·K))
+    T0_dead (float): 參考環境溫度 (K)
     Q_dot_H (float, optional): 傳熱率。用於第一個計算公式。
     T (float, optional): 傳熱邊界溫度 (K 或 R)。用於第一個計算公式。
     Ex_dot_dest (float, optional): 㶲破壞率。用於第三個計算公式。
@@ -198,10 +198,11 @@ def exergy_efficiency_condenser(m_dot_R, h1, h2, s1, s2, T0_dead, Q_dot_H=None, 
     回傳:
     float: 冷凝器的㶲效率。
     """
-    # 㶲輸入 (Ex_dot_1 - Ex_dot_2) - 製冷劑㶲減少量
+    # 㶲輸入 (Ex_dot_1 - Ex_dot_2) - 製冷劑㶲減少量（kW）
     # 注意：根據比㶲公式 ex = (h - h0) - T0 * (s - s0)，
     # ex1 - ex2 = (h1 - h2) - T0 * (s1 - s2)
-    Ex_dot_decrease = m_dot_R * calculate_change_specific_exerpy1_2_simple(h1, h2, s1, s2, T0_dead)
+    # calculate_change_specific_exerpy1_2_simple 回傳 ex2 - ex1，因此取負號。
+    Ex_dot_decrease = -m_dot_R * calculate_change_specific_exerpy1_2_simple(h1, h2, s1, s2, T0_dead)
     
     
     if Ex_dot_decrease == 0:
