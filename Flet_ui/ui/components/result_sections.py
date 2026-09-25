@@ -84,7 +84,7 @@ def build_result_section_controls(
                             value,
                             accent=accent,
                             emphasis=only_one_item,
-                            col={"xs": 12} if only_one_item else {"xs": 12, "sm": 6, "xl": 4},
+                            col={"xs": 12} if only_one_item else {"xs": 12, "sm": 6},
                         )
                         for label, value in section.items
                     ],

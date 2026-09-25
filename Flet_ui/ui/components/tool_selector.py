@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 import flet as ft
 
-from ..theme import TOKENS
+from ..theme import TOKENS, chip_button_style
 
 
 class ToolSelector(ft.Row):
-    """以按鈕列呈現一組分析工具，只負責 key/label/selected/on_change/disabled。
+    """以膠囊按鈕列呈現一組分析工具，只負責 key/label/selected/on_change/disabled。
 
     ToolSelector 不知道任何 domain 計算；它只把 caller 提供的
     ``(key, label)`` 清單轉成可點擊按鈕，並在使用者選取時回呼 ``on_change``。
@@ -23,6 +23,8 @@ class ToolSelector(ft.Row):
         selected: str,
         on_change: Callable[[str], None],
         disabled: bool = False,
+        accent: str = TOKENS.primary,
+        tooltips: Mapping[str, str] | None = None,
     ) -> None:
         """建立工具選取按鈕列。
 
@@ -31,6 +33,8 @@ class ToolSelector(ft.Row):
             selected: 目前選取的 key。
             on_change: 使用者選取新工具時呼叫，帶入所選 key。
             disabled: 是否停用所有按鈕（例如尚無可用工具）。
+            accent: 選取狀態使用的強調色。
+            tooltips: 選用的 key 對應提示文字（例如按鈕顯示短標籤時的完整名稱）。
 
         回傳：
             無。
@@ -38,15 +42,22 @@ class ToolSelector(ft.Row):
         self._items = list(items)
         self._on_change = on_change
         self.selected_key = selected
+        self.accent = accent
         self._buttons: dict[str, ft.OutlinedButton] = {}
         for key, label in self._items:
             button = ft.OutlinedButton(
                 label,
                 disabled=disabled,
+                tooltip=(tooltips or {}).get(key),
                 on_click=(lambda _event, selected_key=key: self._handle_select(selected_key)),
             )
             self._buttons[key] = button
-        super().__init__(controls=list(self._buttons.values()), spacing=TOKENS.spacing_sm, wrap=True)
+        super().__init__(
+            controls=list(self._buttons.values()),
+            spacing=TOKENS.spacing_sm,
+            run_spacing=TOKENS.spacing_sm,
+            wrap=True,
+        )
         self._refresh_styles()
 
     def _handle_select(self, key: str) -> None:
@@ -91,9 +102,4 @@ class ToolSelector(ft.Row):
             無。
         """
         for key, button in self._buttons.items():
-            is_selected = key == self.selected_key
-            button.style = ft.ButtonStyle(
-                color=ft.Colors.WHITE if is_selected else ft.Colors.BLUE_GREY_800,
-                bgcolor=ft.Colors.BLUE_700 if is_selected else ft.Colors.WHITE,
-                side=ft.BorderSide(1, ft.Colors.BLUE_700 if is_selected else ft.Colors.BLUE_GREY_300),
-            )
+            button.style = chip_button_style(key == self.selected_key, self.accent)

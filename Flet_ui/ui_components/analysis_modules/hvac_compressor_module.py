@@ -7,6 +7,7 @@ import flet as ft
 # --- 導入核心服務與基底類別 ---
 # 導入所有分析模組的基礎類別，提供通用結構與服務容器
 from .base_analysis_module import BaseAnalysisModule 
+from ...ui.theme import TOKENS, style_text_field
 # 導入 HVAC 系統級分析器，處理計算邏輯
 from ..unit.HVACAnalyzer import HVACAnalyzer
 # 導入單位轉換器，處理國際單位制與英制之間的轉換
@@ -149,7 +150,14 @@ class CompressorModule(BaseAnalysisModule):
         self.cr_ui_container = ft.Container(
             content=ft.Column(
                 controls=[
-                    ft.Row([ft.Text("壓力類型:", weight=ft.FontWeight.BOLD), self.cr_pressure_type_toggle], alignment=ft.MainAxisAlignment.START),
+                    ft.Column(
+                        [
+                            ft.Text("壓力類型", size=TOKENS.body, weight=ft.FontWeight.W_500,
+                                    color=TOKENS.text_primary),
+                            self.cr_pressure_type_toggle,
+                        ],
+                        spacing=6,
+                    ),
                     self.all_entries["cr_atm_p"]["ui_row"],
                     self.all_entries["cr_pe"]["ui_row"],
                     self.all_entries["cr_pc"]["ui_row"],
@@ -737,31 +745,22 @@ class CompressorModule(BaseAnalysisModule):
         self.create_input_row("ce_t0", "死狀態溫度 (T0)", "298.15", "T", "K") # 25°C
         self.create_input_row("ce_v1_dot", "入口體積流率 (V1_dot)", "0.01", "VolumeFlow", "m³/s")
 
-        self.ce_substance_tf = ft.TextField(
-            label="工作流體 (Substance)",
-            value="R134a", # 預設值
-            width=200,
-            # 添加一些提示或限制 (可選)
+        self.ce_substance_tf = style_text_field(ft.TextField(
+            value="R134a",  # 預設值
+            expand=True,
+            height=TOKENS.input_height,
             hint_text="輸入如 R134a, Air, Water...",
-            text_align=ft.TextAlign.LEFT
-        )
-        # 將 TextField 包裝成與 create_input_row 相似的結構，便於佈局
-        self.ce_substance_row = ft.Row(
+            prefix_icon=ft.Icons.PROPANE_TANK_OUTLINED,
+            text_align=ft.TextAlign.LEFT,
+        ))
+        # 與 create_input_row 相同的「框外欄名 + 欄位」結構，讓整張表單對齊。
+        self.ce_substance_row = ft.Column(
             [
-                # 確保左側的文字標籤與其他 create_input_row 的標籤對齊
-                ft.Container(
-                    ft.Text(
-                        "工作流體:", 
-                        weight=ft.FontWeight.BOLD
-                    ),
-                    # 設定與 create_input_row 內部標籤相同的寬度，例如 150
-                    width=80, 
-                    alignment=ft.Alignment.CENTER_LEFT, # 靠左對齊
-                ),
-                self.ce_substance_tf, # 實際的輸入框
+                ft.Text("工作流體 (Substance)", size=TOKENS.body, weight=ft.FontWeight.W_500,
+                        color=TOKENS.text_primary),
+                self.ce_substance_tf,
             ],
-            # 讓整個 Row 靠左對齊
-            alignment=ft.MainAxisAlignment.START, 
+            spacing=6,
         )
 
         self.comp_example_ui_container = ft.Container(

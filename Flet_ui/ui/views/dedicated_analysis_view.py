@@ -11,9 +11,11 @@ from __future__ import annotations
 import flet as ft
 
 from ..analysis_module_adapter import AnalysisModuleAdapter
+from ..analysis_presentation import presentation_for
 from ..components.analysis_workspace import AnalysisWorkspace
 from ..components.tool_selector import ToolSelector
 from ..state import WorkspaceState
+from ..theme import TOKENS
 
 
 class DedicatedAnalysisView(ft.Column):
@@ -32,6 +34,7 @@ class DedicatedAnalysisView(ft.Column):
         subtitle: str,
         modules: list[object],
         workspace_state: WorkspaceState | None = None,
+        accent: str = TOKENS.primary,
     ) -> None:
         """組合 tool selector、輸入堆疊與結果面板。
 
@@ -40,6 +43,7 @@ class DedicatedAnalysisView(ft.Column):
             subtitle: 頁面副標題。
             modules: 此分類使用的既有分析模組實例清單。
             workspace_state: 選用的共用工作區狀態；用於讀取全域輸出單位。
+            accent: 此分類使用的強調色（通常取自導覽分類色）。
 
         回傳：
             無。
@@ -53,11 +57,15 @@ class DedicatedAnalysisView(ft.Column):
             self.adapter.output_unit_system = workspace_state.output_unit_system
 
         tool_items = self.adapter.tool_items()
+        # 按鈕顯示 analysis_presentation 的短標籤，完整名稱放在提示文字；
+        # dispatch 仍只使用 key。
         self.tool_selector = ToolSelector(
-            items=tool_items,
+            items=[(key, self._short_label(key, label)) for key, label in tool_items],
             selected=self.adapter.active_key,
             on_change=self._handle_tool_change,
             disabled=len(tool_items) <= 1,
+            accent=accent,
+            tooltips=dict(tool_items),
         )
 
         seen_ui_ids: set[int] = set()
@@ -77,8 +85,40 @@ class DedicatedAnalysisView(ft.Column):
             result_panel=self.adapter.result_panel,
             on_calculate=self._handle_calculate,
             show_execute_button=self.adapter.active_definition.show_execute_button,
+            show_tool_selector=len(tool_items) > 1,
+            accent=accent,
         )
         self.controls = [self.workspace]
+        self._sync_presentation()
+
+    @staticmethod
+    def _short_label(key: str, label: str) -> str:
+        """回傳工具按鈕使用的短標籤；未定義時沿用完整名稱。
+
+        參數：
+            key: 分析定義 key。
+            label: 分析完整名稱。
+
+        回傳：
+            str：按鈕顯示文字。
+        """
+        presentation = presentation_for(key)
+        return presentation.short_label if presentation and presentation.short_label else label
+
+    def _sync_presentation(self) -> None:
+        """依目前選取的分析更新輸入卡片說明與結果區。
+
+        回傳：
+            無。
+        """
+        definition = self.adapter.active_definition
+        presentation = presentation_for(definition.key)
+        self.workspace.show_analysis(
+            definition.label,
+            presentation.summary if presentation else "",
+            presentation.formula if presentation and presentation.formula else "",
+        )
+        self.workspace.show_result(self.adapter.result_text)
 
     @property
     def active_key(self) -> str:
@@ -119,6 +159,7 @@ class DedicatedAnalysisView(ft.Column):
         self.adapter.select(key)
         self.workspace.set_action_bar_visible(self.adapter.active_definition.show_execute_button)
         self._on_tool_selected(key)
+        self._sync_presentation()
         self._refresh()
 
     def _on_tool_selected(self, key: str) -> None:
@@ -141,6 +182,7 @@ class DedicatedAnalysisView(ft.Column):
             無。
         """
         self.adapter.calculate()
+        self.workspace.show_result(self.adapter.result_text)
         self._refresh()
 
     def perform_calculation(self, event: ft.ControlEvent | None) -> None:
@@ -164,6 +206,7 @@ class DedicatedAnalysisView(ft.Column):
             無。
         """
         self.adapter.set_output_unit_system(unit_system)
+        self.workspace.show_result(self.adapter.result_text)
         self._refresh()
 
     def _refresh(self) -> None:

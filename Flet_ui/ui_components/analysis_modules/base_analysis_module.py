@@ -3,6 +3,7 @@
 
 import flet as ft
 from ..unit.UnitConverter import UnitConverter
+from ...ui.theme import TOKENS, style_dropdown, style_text_field
 
 class BaseAnalysisModule:
     """
@@ -84,34 +85,42 @@ class BaseAnalysisModule:
 
         self._last_units[key] = final_default_unit
 
-        label_control = ft.Text(label, size=14)
-        val_tf = ft.TextField(
+        label_control = ft.Text(
+            label, size=TOKENS.body, weight=ft.FontWeight.W_500, color=TOKENS.text_primary
+        )
+        val_tf = style_text_field(ft.TextField(
             value=str(default_val),
             keyboard_type=ft.KeyboardType.NUMBER,
-            expand=True
-        )
+            expand=True,
+            height=TOKENS.input_height,
+            hint_text="輸入數值",
+        ))
 
-        unit_label_control = ft.Text("單位", size=12, color=ft.Colors.BLUE_GREY_600)
-        unit_dd = ft.Dropdown(
+        unit_label_control = ft.Text("單位", size=TOKENS.caption, color=TOKENS.text_muted)
+        unit_dd = style_dropdown(ft.Dropdown(
             value=final_default_unit,
             options=[ft.dropdown.Option(u) for u in units],
-            width=120,
+            width=124,
+            height=TOKENS.input_height,
             disabled=(prop_code == "RH" or prop_code == "Q")
-        )
+        ))
 
         value_column = ft.Column(
             controls=[label_control, val_tf],
-            spacing=4,
+            spacing=6,
             expand=True
         )
         unit_column = ft.Column(
             controls=[unit_label_control, unit_dd],
-            spacing=4,
-            width=120
+            spacing=6,
+            width=124,
+            horizontal_alignment=ft.CrossAxisAlignment.START,
         )
         input_row = ft.Row(
             controls=[value_column, unit_column],
-            alignment=ft.MainAxisAlignment.START
+            alignment=ft.MainAxisAlignment.START,
+            spacing=TOKENS.spacing_sm + 2,
+            vertical_alignment=ft.CrossAxisAlignment.END,
         )
 
         self.all_entries[key] = {

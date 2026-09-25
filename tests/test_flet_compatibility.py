@@ -721,7 +721,7 @@ def test_route_switching_retains_valid_result_and_invalidates_on_tool_switch() -
     evaporator_view = shell.views["evaporator"]
     evaporator_view.workspace.action_bar.content.on_click(SimpleNamespace())
     assert evaporator_view.adapter.result_panel.status == "success"
-    evaporator_result_a = evaporator_view.adapter.result_panel.message
+    evaporator_result_a = evaporator_view.adapter.result_text
 
     shell.navigate("condenser")
     condenser_view = shell.views["condenser"]
@@ -730,7 +730,7 @@ def test_route_switching_retains_valid_result_and_invalidates_on_tool_switch() -
 
     shell.navigate("evaporator")
     assert evaporator_view.adapter.result_panel.status == "success"
-    assert evaporator_view.adapter.result_panel.message == evaporator_result_a
+    assert evaporator_view.adapter.result_text == evaporator_result_a
 
     # 切換 tool 必須清空目前畫面的舊結果（select() 已設 status="empty"）；
     # evaporator 目前只有單一 tool，因此改用可切換的 psychrometrics 驗證。
