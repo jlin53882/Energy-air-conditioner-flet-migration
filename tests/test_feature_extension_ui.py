@@ -336,8 +336,14 @@ def test_psychrometric_property_modes_use_structured_result_view(shell) -> None:
     guide_series = [series for series in panel.chart.data_series if series.dash_pattern == [4, 3]]
     assert len(guide_series) == 2
     assert guide_series[1].points[1].y == pytest.approx(guide_series[1].points[0].y)
-    legend_texts = [item.controls[1].value for item in panel.legend.controls]
-    assert "Tdp 17.6" in legend_texts and "Twb 20.0" in legend_texts
+    # 讀值直接標在圖上：模擬圖表回報尺寸後，狀態點、輔助線與曲線標籤都應放置且互不重疊。
+    assert panel.label_layer.controls == []
+    panel._on_chart_resize(SimpleNamespace(width=420, height=360))
+    assert panel.placed_labels[:3] == ["25.0 °C / 63.5%", "Twb 20.0", "Tdp 17.6"]
+    assert "100%" in panel.placed_labels
+    assert len(panel.label_layer.controls) == len(panel.placed_labels)
+    marker_x, marker_y = panel.to_screen(25.0, panel.markers[0].humidity_ratio * 1000)
+    assert 0 < marker_x < 420 - 34 - 22 and 0 < marker_y < 360 - 24 - 22
 
     assert view.process_card.visible is True
     assert view.process_body.visible is False
