@@ -92,34 +92,41 @@ def calculate_compressor_exerpy_destruction(mass_flow_rate, h1,h2, s1, s2 ,T0_de
 
 
 def calculate_compressor_exergetic_efficiency_ratio(mass_flow_rate, h1,h2, s1, s2 ,T0_dead,ho_dead, s0_dead):
-    """計算壓縮機的㶲效率 (Wrev / Win)。
+    """以可逆功法計算壓縮機的㶲效率：η_ex = W_rev / W_in。
+
+W_rev 由 calculate_compressor_reversible_work 以進出口狀態直接計算
+（ṁ · [(h2 − h1) − T0 · (s2 − s1)]），不經由㶲破壞率推導。死狀態的焓與熵
+在進出口㶲差中互相抵消，不影響結果；保留 ho_dead、s0_dead 參數是為了與
+calculate_compressor_exergetic_efficiency_loss 使用相同的輸入。理論上
+W_rev = W_in − X_dest，因此結果應與損失法相同，可互相驗證。
 
 參數：
-    mass_flow_rate (未指定型別): 函數輸入值。
-    h1 (未指定型別): 函數輸入值。
-    h2 (未指定型別): 函數輸入值。
-    s1 (未指定型別): 函數輸入值。
-    s2 (未指定型別): 函數輸入值。
-    T0_dead (未指定型別): 函數輸入值。
-    ho_dead (未指定型別): 函數輸入值。
-    s0_dead (未指定型別): 函數輸入值。
+    mass_flow_rate: 質量流率（kg/s）。
+    h1: 壓縮機入口比焓（kJ/kg）。
+    h2: 壓縮機出口比焓（kJ/kg）。
+    s1: 壓縮機入口比熵（kJ/(kg·K)）。
+    s2: 壓縮機出口比熵（kJ/(kg·K)）。
+    T0_dead: 死狀態溫度（K）。
+    ho_dead: 死狀態比焓（kJ/kg）；不影響結果。
+    s0_dead: 死狀態比熵（kJ/(kg·K)）；不影響結果。
 
 回傳：
-    未指定型別：函數計算或處理後的結果。"""
-    Wrev=calculate_compressor_exerpy_destruction(mass_flow_rate, h1,h2, s1, s2 ,T0_dead,ho_dead, s0_dead)
-    #print("Wrev:",Wrev)
+    㶲效率（無單位比值）。
+
+引發：
+    ValueError：輸入功不為正、可逆功為負，或效率超出合理範圍時。"""
     Win=calculate_compressor_work(mass_flow_rate, h1,h2)
-    #print("Win:",Win)
     if Win <= 0:
         raise ValueError("實際輸入功 (Win) 必須大於零。")
+    Wrev=calculate_compressor_reversible_work(mass_flow_rate, h1, h2, s1, s2, T0_dead)
     if Wrev < 0:
         raise ValueError("可逆功 (Wrev) 必須大於或等於零。")
-        
-    efficiency = 1-(Wrev / Win)
-    
+
+    efficiency = Wrev / Win
+
     if efficiency < 0 or efficiency > 1.05:
         raise ValueError(f"計算出的效率 ({efficiency:.4f}) 不在合理範圍。")
-        
+
     return efficiency
 
 

@@ -70,8 +70,8 @@ ANALYSIS_PRESENTATION: dict[str, AnalysisPresentation] = {
         "效能損失",
     ),
     "compressor.exergy_efficiency_ratio": AnalysisPresentation(
-        "以死狀態為基準評估壓縮機的㶲（Exergy）效率。",
-        None,
+        "以可逆功相對於實際輸入功計算㶲（Exergy）效率；理論上與效能損失法結果相同，可互相驗證。",
+        "η_ex = W_rev / W_in，W_rev = ṁ · [(h2 − h1) − T0 · (s2 − s1)]",
         "Exergy 效率",
     ),
     "compressor.combined_example": AnalysisPresentation(

@@ -1,10 +1,16 @@
-"""壓縮機分析：空白或無效欄位以欄名提示。"""
+"""壓縮機分析：欄位錯誤提示與㶲效率兩種算法的一致性。"""
 
 from __future__ import annotations
 
 import pytest
 
 from Flet_ui.flet_app import main as flet_main
+from Flet_ui.ui_components.unit.hvac_calculations.compressor import (
+    calculate_compressor_exergetic_efficiency_loss,
+    calculate_compressor_exergetic_efficiency_ratio,
+    calculate_compressor_reversible_work,
+    calculate_compressor_work,
+)
 
 
 class DummyPage:
@@ -104,3 +110,38 @@ def test_every_compressor_analysis_still_calculates_with_defaults(compressor_vie
             assert "請輸入「入口壓力 (Inlet Pressor)」" in compressor_view.result_panel.message
         else:
             assert compressor_view.result_panel.status == "success", definition.key
+
+
+@pytest.mark.parametrize(
+    ("mass_flow", "h1", "h2", "s1", "s2", "t0"),
+    [
+        (0.1, 400.0, 450.0, 1.70, 1.80, 298.15),
+        (0.35, 410.0, 452.0, 1.75, 1.78, 293.15),
+        (2.0, 250.0, 290.0, 1.10, 1.16, 303.15),
+    ],
+)
+def test_exergy_efficiency_ratio_uses_reversible_work(mass_flow, h1, h2, s1, s2, t0) -> None:
+    """可逆功法直接以 W_rev / W_in 計算，結果與損失法相同，且不受死狀態焓熵影響。
+
+回傳：
+    無。"""
+    expected = (calculate_compressor_reversible_work(mass_flow, h1, h2, s1, s2, t0)
+                / calculate_compressor_work(mass_flow, h1, h2))
+    ratio = calculate_compressor_exergetic_efficiency_ratio(mass_flow, h1, h2, s1, s2, t0, 400.0, 1.7)
+    loss = calculate_compressor_exergetic_efficiency_loss(mass_flow, h1, h2, s1, s2, t0, 400.0, 1.7)
+    assert ratio == pytest.approx(expected)
+    assert ratio == pytest.approx(loss)
+    assert calculate_compressor_exergetic_efficiency_ratio(
+        mass_flow, h1, h2, s1, s2, t0, 120.0, 0.4
+    ) == pytest.approx(ratio)
+
+
+def test_exergy_efficiency_ratio_rejects_invalid_work() -> None:
+    """輸入功不為正或可逆功為負時明確報錯。
+
+回傳：
+    無。"""
+    with pytest.raises(ValueError, match="Win"):
+        calculate_compressor_exergetic_efficiency_ratio(0.1, 450.0, 400.0, 1.7, 1.8, 298.15, 400.0, 1.7)
+    with pytest.raises(ValueError, match="Wrev"):
+        calculate_compressor_exergetic_efficiency_ratio(0.1, 400.0, 410.0, 1.7, 1.8, 298.15, 400.0, 1.7)
