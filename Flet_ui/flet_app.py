@@ -82,13 +82,19 @@ def main(page: ft.Page) -> None:
         property_query_service=property_query_service,
     )
     evaporator_module = EvaporatorModule(unit_converter=unit_converter, page=page, analyzer=hvac_analyzer)
+    # 冷凝器㶲分析與冷凍循環共用同一個 application service。
+    refrigeration_service = RefrigerationService(state_calculator.state_service)
     condenser_module = CondenserModule(
-        unit_converter=unit_converter, page=page, analyzer=hvac_analyzer, state_calculator=state_calculator
+        unit_converter=unit_converter,
+        page=page,
+        analyzer=hvac_analyzer,
+        state_calculator=state_calculator,
+        refrigeration_service=refrigeration_service,
     )
     cycle_module = RefrigerationCycleModule(
         unit_converter=unit_converter,
         page=page,
-        refrigeration_service=RefrigerationService(state_calculator.state_service),
+        refrigeration_service=refrigeration_service,
     )
     psy_module = PsyModule(unit_converter=unit_converter, page=page, psy_calculator=psy_calculator)
     # 空氣處理與濕空氣線圖共用同一個 application service。

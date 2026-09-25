@@ -102,3 +102,16 @@ class SuperheatCheckRequest:
     fluid: str
     pressure_pa: float
     measured_temperature_k: float
+
+
+@dataclass(frozen=True)
+class CondenserExergyRequest:
+    """以冷凝壓力與冷媒進出口溫度分析冷凝器㶲平衡；傳熱邊界溫度必須明確指定。"""
+
+    fluid: str
+    pressure_pa: float
+    inlet_temperature_k: float
+    outlet_temperature_k: float
+    mass_flow_kg_s: float
+    dead_state_temperature_k: float
+    boundary_temperature_k: float

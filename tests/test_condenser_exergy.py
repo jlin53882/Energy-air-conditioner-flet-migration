@@ -148,3 +148,108 @@ def test_balance_rejects_heat_gain_and_cold_refrigerant() -> None:
     # 平均放熱溫度 180/0.64 ≈ 281 K，低於 T0。
     with pytest.raises(ValueError, match="第二定律|Exergy 減少量"):
         condenser_exergy_balance(0.05, 430e3, 250e3, 1810.0, 1170.0, T0, boundary_temperature_k=T0)
+
+
+class _DummyPage:
+    """提供建構工作區時所需的 page API。"""
+
+    def __init__(self) -> None:
+        self.overlay = []
+        self.controls = []
+        self.width = 1440
+
+    def update(self) -> None:
+        """在沒有 live Flet session 的情況下接受 updates。
+
+回傳：
+    無。"""
+
+    def add(self, *controls) -> None:
+        """收集 page entry point 新增的 controls。
+
+參數：
+    controls: 新增的控制項。
+
+回傳：
+    無。"""
+        self.controls.extend(controls)
+
+
+@pytest.fixture(scope="module")
+def condenser_view():
+    """建構完整工作區並回傳冷凝器分析頁。
+
+回傳：
+    CondenserView。"""
+    from Flet_ui.flet_app import main as flet_main
+
+    page = _DummyPage()
+    flet_main(page)
+    return page.controls[0].views["condenser"]
+
+
+def _result_lines(view) -> dict[str, str]:
+    """把結果文字轉成「名稱 → 數值」對照。
+
+參數：
+    view: 冷凝器分析頁。
+
+回傳：
+    dict。"""
+    lines = {}
+    for line in (view.adapter.result_text or "").splitlines():
+        label, separator, value = line.partition(": ")
+        if separator:
+            lines[label] = value
+    return lines
+
+
+def test_condenser_exergy_analysis_defaults_to_heat_rejected_to_ambient(condenser_view) -> None:
+    """預設「排到環境」：η = 0、㶲破壞率等於冷媒 Exergy 減少量，並顯示關鍵數值與溫度範圍。
+
+回傳：
+    無。"""
+    module = condenser_view.adapter.modules[0]
+    condenser_view._handle_tool_change("condenser.exergy")
+    assert module.all_entries["cx_t_b"]["ui_row"].visible is False
+    condenser_view.perform_calculation(None)
+    assert condenser_view.result_panel.status == "success"
+    lines = _result_lines(condenser_view)
+    assert lines["Exergy 效率 η"] == "0.0 %"
+    assert lines["Exergy 破壞率 X_dest"] == lines["冷媒 Exergy 減少量"] == "0.474 kW"
+    assert lines["放熱量 Q_H"] == "9.627 kW"
+    assert lines["傳熱邊界"] == "排到環境（T_b = T0）"
+    assert lines["冷媒平均放熱溫度"] == "40.45 °C"
+    kpis = [tile.label_control.value for tile in condenser_view.workspace.result_view.kpi_row.controls]
+    assert kpis == ["Exergy 破壞率 X_dest", "Exergy 效率 η", "放熱量 Q_H", "熵產生率 S_gen"]
+
+
+def test_condenser_exergy_analysis_with_a_heat_sink_temperature(condenser_view) -> None:
+    """指定放熱對象溫度時計算熱帶走的㶲；高於冷媒平均放熱溫度時以第二定律說明拒絕。
+
+回傳：
+    無。"""
+    module = condenser_view.adapter.modules[0]
+    condenser_view._handle_tool_change("condenser.exergy")
+    module.cx_boundary.selected = ["custom"]
+    module.on_boundary_change(None)
+    field = module.all_entries["cx_t_b"]["val"]
+    original = field.value
+    try:
+        assert module.all_entries["cx_t_b"]["ui_row"].visible is True
+        field.value = "35"
+        condenser_view.perform_calculation(None)
+        assert condenser_view.result_panel.status == "success"
+        lines = _result_lines(condenser_view)
+        # Ex_Q = 9.627 × (1 − 298.15 / 308.15) ≈ 0.312 kW，η ≈ 0.312 / 0.474 ≈ 65.9 %。
+        assert lines["熱帶走的 Exergy Ex_Q"] == "0.312 kW"
+        assert lines["Exergy 效率 η"] == "65.9 %"
+
+        field.value = "60"
+        condenser_view.perform_calculation(None)
+        assert condenser_view.result_panel.status == "error"
+        assert "第二定律" in condenser_view.result_panel.message
+    finally:
+        field.value = original
+        module.cx_boundary.selected = ["ambient"]
+        module.on_boundary_change(None)

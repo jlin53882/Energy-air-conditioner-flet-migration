@@ -38,7 +38,7 @@ ROUTES = (
     ),
     WorkspaceRoute(
         "condenser", "冷凝器", "冷凍系統", "DEVICE_THERMOSTAT_OUTLINED",
-        description="以進出口焓值與質量流率計算冷凝器放熱率。",
+        description="冷凝器放熱率，以及能量、熵與 Exergy 平衡分析。",
     ),
     WorkspaceRoute(
         "refrigeration_cycle", "冷凍循環", "冷凍系統", "LOOP",
