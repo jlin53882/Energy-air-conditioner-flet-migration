@@ -365,8 +365,9 @@ class PsychrometricChartPanel(ft.Column):
         """依目前尺寸重建圖上的文字標籤。
 
 依重要性放置：狀態點名稱、輔助線讀值（濕球／露點）、飽和線、等相對濕度線、
-等焓線。放置前先估算文字範圍，與已放置的標籤重疊時略過，因此重要標籤一定
-出現，曲線密集處只省略次要的曲線數值。
+等焓線。放置前先估算文字範圍，依序嘗試候選位置，取第一個不與已放置標籤重疊者。
+狀態點與濕球／露點為必要標籤：所有候選位置都重疊時仍放在第一個候選位置，
+不會消失；曲線數值為次要標籤，所有候選位置都重疊時略過，避免曲線密集處擁擠。
 
 回傳：
     無。"""
@@ -380,8 +381,9 @@ class PsychrometricChartPanel(ft.Column):
         labels: list[ft.Control] = []
 
         def place(content: ft.Control, text: str, size: float, x: float, y: float, *,
-                  dx: float, dy: float, align_right: bool, padding: float = 0) -> None:
-            """把文字放在 (x, y) 附近；與已放置的標籤重疊時略過。
+                  candidates: Sequence[tuple[float, float, bool]], padding: float = 0,
+                  mandatory: bool = False) -> None:
+            """把文字放在 (x, y) 附近第一個不與已放置標籤重疊的候選位置。
 
 參數：
     content: 要放置的控制項。
@@ -389,21 +391,27 @@ class PsychrometricChartPanel(ft.Column):
     size: 字級。
     x: 像素 x。
     y: 像素 y。
-    dx: 水平位移（往外的距離）。
-    dy: 垂直位移。
-    align_right: True 表示文字右緣對齊錨點、往左延伸。
+    candidates: 依偏好排序的 (dx, dy, align_right)：dx 為往外的水平距離、
+        dy 為垂直位移，align_right 為 True 表示文字右緣對齊錨點、往左延伸。
     padding: 控制項左右內距。
+    mandatory: 必要標籤在所有候選位置都重疊時仍放在第一個候選位置；
+        次要標籤則略過。
 
 回傳：
     無。"""
             text_width = _estimate_text_width(text, size) + 2 * padding
-            left = x - dx - text_width if align_right else x + dx
-            box = (left, y + dy, left + text_width, y + dy + size * 1.4)
-            if any(_overlaps(box, other) for other in occupied):
-                return
+            boxes = []
+            for dx, dy, align_right in candidates:
+                left = x - dx - text_width if align_right else x + dx
+                boxes.append((left, y + dy, left + text_width, y + dy + size * 1.4))
+            box = next((box for box in boxes if not any(_overlaps(box, other) for other in occupied)), None)
+            if box is None:
+                if not mandatory:
+                    return
+                box = boxes[0]
             occupied.append(box)
             self.placed_labels.append(text)
-            labels.append(ft.Container(content, left=left, top=y + dy))
+            labels.append(ft.Container(content, left=box[0], top=box[1]))
 
         def curve_label(value: str, color: str, x: float, y: float, *, at_right_edge: bool) -> None:
             """放置曲線數值：右緣結束的曲線標在端點左上，上緣結束的標在端點左下。
@@ -419,9 +427,10 @@ class PsychrometricChartPanel(ft.Column):
     無。"""
             size = TOKENS.overline
             text = ft.Text(value, size=size, color=color, font_family=TOKENS.mono_font)
-            place(text, value, size, x, y, dx=3, dy=-15 if at_right_edge else 3, align_right=True)
+            place(text, value, size, x, y, candidates=[(3, -15 if at_right_edge else 3, True)])
 
-        # 1. 狀態點名稱：標在點的右下方；位於右半部時改往左延伸，避免超出圖框。
+        # 1. 狀態點名稱（必要）：優先標在點的右下方，位於右半部時優先往左延伸，
+        #    避免超出圖框；與其他標籤重疊時依序改到上方或另一側。
         for marker in self.markers:
             point = self.to_screen(marker.dry_bulb_c, marker.humidity_ratio * 1000)
             if point is None:
@@ -434,16 +443,23 @@ class PsychrometricChartPanel(ft.Column):
                 padding=ft.Padding.symmetric(horizontal=4, vertical=1),
                 border_radius=ft.BorderRadius.all(4),
             )
-            place(badge, marker.label, size, *point, dx=8, dy=6,
-                  align_right=point[0] > plot_width / 2, padding=4)
-        # 2. 輔助線終點：濕球溫度、露點讀值標在點的左上方。
+            toward_left = point[0] > plot_width / 2
+            above = -(size * 1.4 + 6)
+            place(badge, marker.label, size, *point, padding=4, mandatory=True, candidates=[
+                (8, 6, toward_left), (8, above, toward_left),
+                (8, 6, not toward_left), (8, above, not toward_left),
+            ])
+        # 2. 輔助線終點（必要）：濕球溫度、露點讀值優先標在點的左上方，
+        #    重疊時依序改到右上、左下、右下。
         for guide in self.guides:
             point = self.to_screen(guide.end.dry_bulb_c, guide.end.humidity_ratio * 1000)
             if point:
                 size = TOKENS.caption
                 text = ft.Text(guide.end.label, size=size, color=TOKENS.highlight,
                                weight=ft.FontWeight.W_600, font_family=TOKENS.mono_font)
-                place(text, guide.end.label, size, *point, dx=6, dy=-20, align_right=True)
+                place(text, guide.end.label, size, *point, mandatory=True, candidates=[
+                    (6, -20, True), (6, -20, False), (6, 6, True), (6, 6, False),
+                ])
         # 3–4. 飽和線與等相對濕度線：數值標在線的末端（圖框右緣或上緣）。
         for curve in (self.data.saturation, *reversed(self.data.relative_humidity_lines)):
             if not curve.dry_bulb_c:
@@ -462,7 +478,7 @@ class PsychrometricChartPanel(ft.Column):
                 value = curve.label.split()[0]
                 size = TOKENS.overline
                 text = ft.Text(value, size=size, color=ENTHALPY_LABEL_COLOR, font_family=TOKENS.mono_font)
-                place(text, value, size, *point, dx=4, dy=-16, align_right=True)
+                place(text, value, size, *point, candidates=[(4, -16, True)])
         self.label_layer.controls = labels
 
     def refresh(self) -> None:

@@ -478,6 +478,40 @@ def test_every_analysis_view_uses_the_shared_calculation_layout(shell) -> None:
     assert shell.views["psychrometrics"].tool_selector.label_control.value == "已知參數組合"
 
 
+def test_psychrometric_chart_keeps_important_labels_when_they_collide(shell) -> None:
+    """狀態點與濕球／露點標籤互相碰撞時改放候選位置，仍全部顯示；曲線數值可略過。
+
+回傳：
+    無。"""
+    from chart.psychrometric import ChartGuide, ChartMarker, build_psychrometric_chart_data
+
+    service = shell.views["psychrometrics"].psy_module.psy_calculator.service
+    data = build_psychrometric_chart_data(service, 0.0, dry_bulb_range_c=(-10.0, 50.0),
+                                          humidity_ratio_max=0.030)
+    panel = PsychrometricChartPanel(height=300)
+    p1, p2 = ChartMarker("P1", 25.0, 0.01000), ChartMarker("P2", 25.1, 0.01005)
+    panel.draw(data, markers=[p1, p2])
+    panel._on_chart_resize(SimpleNamespace(width=420, height=360))
+    # 兩點幾乎重合，第二個標籤原本的位置一定與第一個重疊。
+    assert "P1" in panel.placed_labels and "P2" in panel.placed_labels
+    first, second = panel.label_layer.controls[:2]
+    assert (first.left, first.top) != (second.left, second.top)
+
+    # 候選位置都用完時，必要標籤仍放在第一個候選位置，不會消失。
+    crowded = [ChartMarker(f"S{index}", 25.0, 0.010) for index in range(6)]
+    guides = [ChartGuide(p1, ChartMarker("Twb 20.0", 20.0, 0.010)),
+              ChartGuide(p1, ChartMarker("Tdp 17.6", 20.0, 0.010))]
+    panel.draw(data, markers=crowded, guides=guides)
+    assert panel.placed_labels[:8] == [f"S{index}" for index in range(6)] + ["Twb 20.0", "Tdp 17.6"]
+
+    # 次要的曲線數值在窄圖上可以略過一部分，但必要標籤仍在。
+    panel.draw(data, markers=[p1, p2])
+    panel._on_chart_resize(SimpleNamespace(width=180, height=160))
+    secondary = [curve.label for curve in data.relative_humidity_lines]
+    assert "P1" in panel.placed_labels and "P2" in panel.placed_labels
+    assert not set(secondary) <= set(panel.placed_labels)
+
+
 def test_native_psychrometric_chart_axes_follow_the_data_range(shell) -> None:
     """原生線圖的座標範圍與刻度跟著線圖資料；未繪圖前只顯示提示。
 
