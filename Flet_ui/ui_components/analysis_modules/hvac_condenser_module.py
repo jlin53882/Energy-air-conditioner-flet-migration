@@ -108,11 +108,35 @@ class CondenserModule(BaseAnalysisModule):
         self.cx_boundary = ft.SegmentedButton(
             allow_empty_selection=False,
             segments=[
-                ft.Segment(value=BOUNDARY_AMBIENT, label=ft.Text("整體排熱至環境（T_b = T0）")),
+                ft.Segment(value=BOUNDARY_AMBIENT, label=ft.Text("整體排熱至環境")),
                 ft.Segment(value=BOUNDARY_CUSTOM, label=ft.Text("指定等效傳熱邊界溫度")),
             ],
             selected=[BOUNDARY_AMBIENT],
+            # 不顯示勾選圖示，讓選項文字在窄欄中不必折成多行；選取狀態仍以底色表示。
+            show_selected_icon=False,
             on_change=self.on_boundary_change,
+        )
+        # 說明文字預設收起，點標題右側的「?」才展開，避免表單過長。
+        self.cx_boundary_help_button = ft.IconButton(
+            ft.Icons.HELP_OUTLINE,
+            icon_size=18,
+            icon_color=TOKENS.text_secondary,
+            tooltip="什麼是等效傳熱邊界溫度？",
+            on_click=self.toggle_boundary_help,
+        )
+        self.cx_boundary_help = ft.Container(
+            content=ft.Column([
+                ft.Text("T_b 是熱量穿越所選控制邊界 (control boundary) 時的等效溫度，不一定等於外氣或"
+                        "熱水的 bulk temperature。", size=TOKENS.caption, color=TOKENS.text_secondary),
+                ft.Text("• 整體排熱至環境：分析邊界涵蓋冷凝器直到最終向環境排熱的整體系統，T_b = T0，"
+                        "熱不帶走 Exergy（η = 0）。", size=TOKENS.caption, color=TOKENS.text_secondary),
+                ft.Text("• 指定等效傳熱邊界溫度：只分析冷凝器本體時，輸入該邊界對應的等效溫度，"
+                        "需介於 T0 與冷媒平均放熱溫度之間。", size=TOKENS.caption, color=TOKENS.text_secondary),
+            ], spacing=4),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+            bgcolor=TOKENS.surface_variant,
+            border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
+            visible=False,
         )
         rows = [
             ("cx_p", "冷凝壓力（絕對）", "1000", "P", "kPa"),
@@ -135,19 +159,33 @@ class CondenserModule(BaseAnalysisModule):
             self.section_label("Exergy 分析基準"),
             self.all_entries["cx_t0"]["ui_row"],
             ft.Column([
-                ft.Text("等效傳熱邊界溫度", size=TOKENS.body, weight=ft.FontWeight.W_500,
-                        color=TOKENS.text_primary),
+                ft.Row([
+                    ft.Text("等效傳熱邊界溫度", size=TOKENS.body, weight=ft.FontWeight.W_500,
+                            color=TOKENS.text_primary, expand=True),
+                    self.cx_boundary_help_button,
+                ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                self.cx_boundary_help,
                 self.cx_boundary,
-                ft.Text("T_b 是熱量穿越所選控制邊界 (control boundary) 的等效溫度，不一定等於外氣或"
-                        "熱水的 bulk temperature。分析邊界涵蓋冷凝器直到最終向環境排熱的整體系統時，"
-                        "T_b = T0，熱不帶走 Exergy（η = 0）；只分析冷凝器本體時，請指定對應的等效傳熱"
-                        "邊界溫度，需介於 T0 與冷媒平均放熱溫度之間。",
-                        size=TOKENS.caption, color=TOKENS.text_muted),
             ], spacing=6),
             self.all_entries["cx_t_b"]["ui_row"],
         ]
         self.all_entries["cx_t_b"]["ui_row"].visible = False
         return ft.Container(content=ft.Column(controls, spacing=12), visible=False)
+
+    def toggle_boundary_help(self, _event: ft.ControlEvent | None) -> None:
+        """展開或收起等效傳熱邊界溫度的說明。
+
+參數：
+    _event: Flet 點擊事件；此處不需讀取內容。
+
+回傳：
+    無。"""
+        self.cx_boundary_help.visible = not self.cx_boundary_help.visible
+        try:
+            self.cx_boundary_help.update()
+        except RuntimeError:
+            # Flet 1 在控制項附加到 Page 之前會拒絕更新。
+            pass
 
     def _boundary_is_custom(self) -> bool:
         """回傳是否使用指定的等效傳熱邊界溫度。

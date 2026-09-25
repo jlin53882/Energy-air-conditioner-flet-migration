@@ -222,8 +222,17 @@ def test_condenser_exergy_analysis_defaults_to_heat_rejected_to_ambient(condense
     assert lines["等效傳熱邊界溫度 T_b"] == "25.00 °C"
     # 選項與欄位使用「等效傳熱邊界溫度」，不描述成外部熱匯的溫度。
     segment_labels = [segment.label.value for segment in module.cx_boundary.segments]
-    assert segment_labels == ["整體排熱至環境（T_b = T0）", "指定等效傳熱邊界溫度"]
+    assert segment_labels == ["整體排熱至環境", "指定等效傳熱邊界溫度"]
     assert module.all_entries["cx_t_b"]["label_control"].value == "等效傳熱邊界溫度 T_b"
+    # 說明預設收起，點標題右側的「?」展開，再點一次收起。
+    assert module.cx_boundary_help.visible is False
+    module.toggle_boundary_help(None)
+    help_text = " ".join(text.value for text in module.cx_boundary_help.content.controls)
+    assert module.cx_boundary_help.visible is True
+    assert "不一定等於外氣或熱水的 bulk temperature" in help_text
+    assert "T_b = T0" in help_text
+    module.toggle_boundary_help(None)
+    assert module.cx_boundary_help.visible is False
     assert lines["冷媒平均放熱溫度"] == "40.45 °C"
     kpis = [tile.label_control.value for tile in condenser_view.workspace.result_view.kpi_row.controls]
     assert kpis == ["Exergy 破壞率 X_dest", "Exergy 效率 η", "放熱量 Q_H", "熵產生率 S_gen"]
