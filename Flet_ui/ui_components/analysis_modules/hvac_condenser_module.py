@@ -3,6 +3,7 @@
 import flet as ft
 from application.models import CondenserExergyRequest
 from application.refrigeration import RefrigerationService
+from domain.refrigeration import coolant_mean_temperature_k
 
 from ...ui.theme import TOKENS
 from .base_analysis_module import BaseAnalysisModule
@@ -15,6 +16,9 @@ from ..unit.ThermoStateCalculator import ThermoStateCalculator
 # 或指定熱量穿越所選控制邊界時的等效傳熱邊界溫度。
 BOUNDARY_AMBIENT = "ambient"
 BOUNDARY_CUSTOM = "custom"
+# 指定模式下 T_b 的來源：直接輸入，或由冷卻介質進出口溫度計算熱力學平均溫度。
+BOUNDARY_SOURCE_DIRECT = "direct"
+BOUNDARY_SOURCE_COOLANT = "coolant"
 
 
 class CondenserModule(BaseAnalysisModule):
@@ -116,6 +120,17 @@ class CondenserModule(BaseAnalysisModule):
             show_selected_icon=False,
             on_change=self.on_boundary_change,
         )
+        self.cx_boundary_source = ft.SegmentedButton(
+            allow_empty_selection=False,
+            segments=[
+                ft.Segment(value=BOUNDARY_SOURCE_DIRECT, label=ft.Text("直接輸入 T_b")),
+                ft.Segment(value=BOUNDARY_SOURCE_COOLANT, label=ft.Text("由冷卻介質溫度計算")),
+            ],
+            selected=[BOUNDARY_SOURCE_DIRECT],
+            show_selected_icon=False,
+            on_change=self.on_boundary_change,
+            visible=False,
+        )
         # 說明文字預設收起，點標題右側的「?」才展開，避免表單過長。
         self.cx_boundary_help_button = ft.IconButton(
             ft.Icons.HELP_OUTLINE,
@@ -132,6 +147,10 @@ class CondenserModule(BaseAnalysisModule):
                         "熱不帶走 Exergy（η = 0）。", size=TOKENS.caption, color=TOKENS.text_secondary),
                 ft.Text("• 指定等效傳熱邊界溫度：只分析冷凝器本體時，輸入該邊界對應的等效溫度，"
                         "需介於 T0 與冷媒平均放熱溫度之間。", size=TOKENS.caption, color=TOKENS.text_secondary),
+                ft.Text("• 由冷卻介質溫度計算：輸入冷卻水、熱回收熱水或空冷空氣的進出口溫度，以"
+                        "T_b = (T_出 − T_入) / ln(T_出 / T_入)（絕對溫度）計算，此時 η 即熱交換器的"
+                        " Exergy 效率。適用於無相變的冷卻介質，不適用於蒸發式冷凝器。",
+                        size=TOKENS.caption, color=TOKENS.text_secondary),
             ], spacing=4),
             padding=ft.Padding.symmetric(horizontal=12, vertical=8),
             bgcolor=TOKENS.surface_variant,
@@ -145,6 +164,8 @@ class CondenserModule(BaseAnalysisModule):
             ("cx_m_dot", "冷媒質量流率", "0.05", "MassFlow", "kg/s"),
             ("cx_t0", "死狀態（環境）溫度 T0", "25", "T", "°C"),
             ("cx_t_b", "等效傳熱邊界溫度 T_b", "35", "T", "°C"),
+            ("cx_c_in", "冷卻介質入口溫度", "30", "T", "°C"),
+            ("cx_c_out", "冷卻介質出口溫度", "35", "T", "°C"),
         ]
         for key, label, default, prop_code, unit in rows:
             self.create_input_row(key, label, default, prop_code, unit)
@@ -167,9 +188,12 @@ class CondenserModule(BaseAnalysisModule):
                 self.cx_boundary_help,
                 self.cx_boundary,
             ], spacing=6),
+            self.cx_boundary_source,
             self.all_entries["cx_t_b"]["ui_row"],
+            self.all_entries["cx_c_in"]["ui_row"],
+            self.all_entries["cx_c_out"]["ui_row"],
         ]
-        self.all_entries["cx_t_b"]["ui_row"].visible = False
+        self._refresh_boundary_rows()
         return ft.Container(content=ft.Column(controls, spacing=12), visible=False)
 
     def toggle_boundary_help(self, _event: ft.ControlEvent | None) -> None:
@@ -194,15 +218,34 @@ class CondenserModule(BaseAnalysisModule):
     True 表示使用指定溫度；False 表示分析邊界涵蓋到整體排熱至環境（T_b = T0）。"""
         return BOUNDARY_CUSTOM in self.cx_boundary.selected
 
+    def _boundary_from_coolant(self) -> bool:
+        """回傳指定模式下是否由冷卻介質進出口溫度計算 T_b。
+
+回傳：
+    True 表示由冷卻介質溫度計算；False 表示直接輸入 T_b。"""
+        return BOUNDARY_SOURCE_COOLANT in self.cx_boundary_source.selected
+
+    def _refresh_boundary_rows(self) -> None:
+        """依傳熱邊界設定顯示對應的欄位：指定模式才顯示來源選項，再依來源顯示 T_b 或冷卻介質溫度。
+
+回傳：
+    無。"""
+        custom = self._boundary_is_custom()
+        from_coolant = custom and self._boundary_from_coolant()
+        self.cx_boundary_source.visible = custom
+        self.all_entries["cx_t_b"]["ui_row"].visible = custom and not from_coolant
+        self.all_entries["cx_c_in"]["ui_row"].visible = from_coolant
+        self.all_entries["cx_c_out"]["ui_row"].visible = from_coolant
+
     def on_boundary_change(self, _event: ft.ControlEvent | None) -> None:
-        """切換傳熱邊界設定時，只在指定溫度模式顯示等效傳熱邊界溫度欄位。
+        """切換傳熱邊界設定或 T_b 來源時，更新顯示的欄位。
 
 參數：
     _event: Flet 變更事件；此處不需讀取內容。
 
 回傳：
     無。"""
-        self.all_entries["cx_t_b"]["ui_row"].visible = self._boundary_is_custom()
+        self._refresh_boundary_rows()
         try:
             self.exergy_ui.update()
         except RuntimeError:
@@ -218,7 +261,14 @@ class CondenserModule(BaseAnalysisModule):
 回傳：
     格式化結果文字。"""
         dead_state_k = self.read_si("cx_t0")
-        boundary_k = self.read_si("cx_t_b") if self._boundary_is_custom() else dead_state_k
+        from_coolant = self._boundary_is_custom() and self._boundary_from_coolant()
+        if not self._boundary_is_custom():
+            boundary_k, boundary_label = dead_state_k, "整體排熱至環境（T_b = T0）"
+        elif from_coolant:
+            boundary_k = coolant_mean_temperature_k(self.read_si("cx_c_in"), self.read_si("cx_c_out"))
+            boundary_label = "由冷卻介質溫度計算"
+        else:
+            boundary_k, boundary_label = self.read_si("cx_t_b"), "指定等效傳熱邊界溫度"
         result = self.refrigeration.analyze_condenser_exergy(CondenserExergyRequest(
             fluid=self.read_text("cx_fluid"),
             pressure_pa=self.read_si("cx_p"),
@@ -238,8 +288,11 @@ class CondenserModule(BaseAnalysisModule):
         formatter.add("熱帶走的 Exergy Ex_Q", "Power", balance.heat_exergy_w, 3)
         formatter.add("熵產生率 S_gen", "EntropyFlow", balance.entropy_generation_w_k, 5)
         formatter.section("溫度")
-        formatter.add_text("傳熱邊界", "指定等效傳熱邊界溫度" if self._boundary_is_custom() else "整體排熱至環境（T_b = T0）")
+        formatter.add_text("傳熱邊界", boundary_label)
         formatter.add("等效傳熱邊界溫度 T_b", "T", result.boundary_temperature_k, 2)
+        if from_coolant:
+            formatter.add("冷卻介質入口溫度", "T", self.read_si("cx_c_in"), 2)
+            formatter.add("冷卻介質出口溫度", "T", self.read_si("cx_c_out"), 2)
         formatter.add("冷媒平均放熱溫度", "T", balance.mean_heat_rejection_temperature_k, 2)
         formatter.add("露點（飽和蒸氣）", "T", result.dew_point_k, 2)
         formatter.add("泡點（飽和液體）", "T", result.bubble_point_k, 2)

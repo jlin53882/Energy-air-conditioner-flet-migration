@@ -25,6 +25,7 @@ T_b 沒有預設值，必須由呼叫端依所選控制邊界明確指定。T_b 
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from domain.thermodynamics.reference_state import ReferenceStatePolicy
@@ -33,6 +34,33 @@ from .states import CycleState, ThermodynamicStateProvider, query_state
 
 # 判斷熵產生是否為負時容許的相對浮點誤差。
 _ENTROPY_TOLERANCE = 1e-9
+
+
+def coolant_mean_temperature_k(inlet_temperature_k: float, outlet_temperature_k: float) -> float:
+    """由冷卻介質進出口溫度計算熱力學平均溫度，作為冷凝器的等效傳熱邊界溫度。
+
+冷卻介質（冷卻水、熱回收熱水或空冷空氣）由 T_in 被加熱到 T_out，比熱視為定值時：
+Q = ṁ·cp·(T_out − T_in)、ΔS = ṁ·cp·ln(T_out / T_in)，因此
+T_b = Q / ΔS = (T_out − T_in) / ln(T_out / T_in)，與流率和比熱無關。
+以此 T_b 計算的 Ex_Q = Q·(1 − T0/T_b) 等於冷卻介質獲得的㶲，對應的 η 即熱交換器㶲效率。
+適用於無相變、壓降可忽略且對外無明顯散熱的冷卻介質；不適用於蒸發式冷凝器。
+
+參數：
+    inlet_temperature_k: 冷卻介質入口溫度（K）。
+    outlet_temperature_k: 冷卻介質出口溫度（K），不可低於入口溫度。
+
+回傳：
+    熱力學平均溫度（K）；進出口溫度相同時即為該溫度。
+
+引發：
+    ValueError：溫度不為正，或出口溫度低於入口溫度（介質沒有被加熱）時。"""
+    if inlet_temperature_k <= 0 or outlet_temperature_k <= 0:
+        raise ValueError("冷卻介質溫度必須是大於 0 的絕對溫度。")
+    if outlet_temperature_k < inlet_temperature_k:
+        raise ValueError("冷卻介質出口溫度不可低於入口溫度（冷卻介質應被加熱）。")
+    if math.isclose(outlet_temperature_k, inlet_temperature_k, rel_tol=1e-12, abs_tol=0.0):
+        return inlet_temperature_k
+    return (outlet_temperature_k - inlet_temperature_k) / math.log(outlet_temperature_k / inlet_temperature_k)
 
 
 @dataclass(frozen=True)

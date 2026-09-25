@@ -5,6 +5,7 @@ from .condenser_exergy import (
     CondenserExergyResult,
     analyze_condenser_exergy,
     condenser_exergy_balance,
+    coolant_mean_temperature_k,
 )
 from .saturation import SaturationCheckResult, evaluate_superheat_subcooling
 from .states import CycleState, ThermodynamicStateProvider
@@ -24,6 +25,7 @@ __all__ = [
     "VaporCompressionResult",
     "analyze_condenser_exergy",
     "condenser_exergy_balance",
+    "coolant_mean_temperature_k",
     "evaluate_superheat_subcooling",
     "solve_vapor_compression_cycle",
 ]

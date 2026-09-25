@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from domain.refrigeration import analyze_condenser_exergy, condenser_exergy_balance
+import math
+
+from domain.refrigeration import (
+    analyze_condenser_exergy,
+    condenser_exergy_balance,
+    coolant_mean_temperature_k,
+)
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units.converter import CanonicalUnitConverter
 
@@ -150,6 +156,46 @@ def test_balance_rejects_heat_gain_and_cold_refrigerant() -> None:
         condenser_exergy_balance(0.05, 430e3, 250e3, 1810.0, 1170.0, T0, boundary_temperature_k=T0)
 
 
+
+def test_coolant_mean_temperature_is_the_thermodynamic_mean() -> None:
+    """冷卻介質 30 → 35 °C 的熱力學平均溫度為 32.49 °C；進出口相同時即為該溫度。
+
+回傳：
+    無。"""
+    t_in, t_out = 303.15, 308.15
+    assert coolant_mean_temperature_k(t_in, t_out) == pytest.approx((t_out - t_in) / math.log(t_out / t_in))
+    assert coolant_mean_temperature_k(t_in, t_out) - 273.15 == pytest.approx(32.493, abs=1e-3)
+    assert coolant_mean_temperature_k(t_in, t_in) == t_in
+
+
+def test_coolant_boundary_gives_the_heat_exchanger_exergy_efficiency(provider) -> None:
+    """以冷卻介質平均溫度為 T_b 時，Ex_Q 等於冷卻介質實際獲得的㶲（與流率、比熱無關）。
+
+回傳：
+    無。"""
+    t_in, t_out = 303.15, 308.15
+    balance = _analyze(provider, coolant_mean_temperature_k(t_in, t_out)).balance
+    # 以水的比熱另算：冷卻水流率由能量平衡決定，㶲增加 = ṁ·cp·[(T_out − T_in) − T0·ln(T_out/T_in)]。
+    cp_water = 4180.0
+    water_flow = balance.heat_rejection_w / (cp_water * (t_out - t_in))
+    water_exergy_gain = water_flow * cp_water * ((t_out - t_in) - T0 * math.log(t_out / t_in))
+    assert balance.heat_exergy_w == pytest.approx(water_exergy_gain)
+    assert balance.exergy_efficiency == pytest.approx(0.498, abs=1e-3)
+
+
+@pytest.mark.parametrize(
+    ("t_in", "t_out", "message"),
+    [(308.15, 303.15, "不可低於入口溫度"), (0.0, 303.15, "絕對溫度"), (303.15, -1.0, "絕對溫度")],
+)
+def test_coolant_mean_temperature_rejects_invalid_inputs(t_in, t_out, message) -> None:
+    """冷卻介質沒有被加熱或溫度不為正時拒絕。
+
+回傳：
+    無。"""
+    with pytest.raises(ValueError, match=message):
+        coolant_mean_temperature_k(t_in, t_out)
+
+
 class _DummyPage:
     """提供建構工作區時所需的 page API。"""
 
@@ -268,3 +314,41 @@ def test_condenser_exergy_analysis_with_a_heat_sink_temperature(condenser_view) 
         field.value = original
         module.cx_boundary.selected = ["ambient"]
         module.on_boundary_change(None)
+
+
+def test_condenser_exergy_analysis_from_coolant_temperatures(condenser_view) -> None:
+    """「由冷卻介質溫度計算」：只顯示冷卻介質欄位，T_b 由進出口溫度計算；熱水 40 → 45 °C 違反第二定律。
+
+回傳：
+    無。"""
+    module = condenser_view.adapter.modules[0]
+    condenser_view._handle_tool_change("condenser.exergy")
+    assert module.cx_boundary_source.visible is False
+    module.cx_boundary.selected = ["custom"]
+    module.cx_boundary_source.selected = ["coolant"]
+    module.on_boundary_change(None)
+    entries = module.all_entries
+    try:
+        assert module.cx_boundary_source.visible is True
+        assert entries["cx_t_b"]["ui_row"].visible is False
+        assert entries["cx_c_in"]["ui_row"].visible is True and entries["cx_c_out"]["ui_row"].visible is True
+        condenser_view.perform_calculation(None)
+        assert condenser_view.result_panel.status == "success"
+        lines = _result_lines(condenser_view)
+        assert lines["傳熱邊界"] == "由冷卻介質溫度計算"
+        assert lines["等效傳熱邊界溫度 T_b"] == "32.49 °C"
+        assert lines["冷卻介質入口溫度"] == "30.00 °C"
+        assert lines["冷卻介質出口溫度"] == "35.00 °C"
+        assert lines["Exergy 效率 η"] == "49.8 %"
+
+        entries["cx_c_in"]["val"].value, entries["cx_c_out"]["val"].value = "40", "45"
+        condenser_view.perform_calculation(None)
+        assert condenser_view.result_panel.status == "error"
+        assert "第二定律" in condenser_view.result_panel.message
+    finally:
+        entries["cx_c_in"]["val"].value, entries["cx_c_out"]["val"].value = "30", "35"
+        module.cx_boundary.selected = ["ambient"]
+        module.cx_boundary_source.selected = ["direct"]
+        module.on_boundary_change(None)
+    assert module.cx_boundary_source.visible is False
+    assert entries["cx_c_in"]["ui_row"].visible is False
