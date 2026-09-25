@@ -60,7 +60,7 @@ PR #6 已合併，以上項目皆可直接進行。PR #6 帶入的內容一併�
 
 - 狀態點的 `reference_state` 取自產生它的那一頁（各頁各自選擇，見
   [`state-invalidation.md`](state-invalidation.md)）。
-- 由既有 `domain/refrigeration/states.py` 的 `CycleState` 推廣，不另建平行模型；
+- 由既有 `domain/refrigeration/states.py` 的 `CycleState` 推廣（已完成，`CycleState` 移除），不另建平行模型；
   目前的使用者 `vapor_compression.py`、`condenser_exergy.py` 一併遷移。
 - 欄位：`fluid`、`reference_state`（必填）、P、T、h、s、ρ、Q、`source`（enum）、
   理想氣體旗標；`v`、`phase` 由其他欄位推導。
@@ -71,6 +71,13 @@ PR #6 已合併，以上項目皆可直接進行。PR #6 帶入的內容一併�
 - 基礎 Settings：預設冷媒、預設 reference state、單位系統、大氣壓力／海拔、
   錶壓／絕對壓預設。
 - 只做 domain / application / infrastructure，不接 UI。
+
+**結果**：`domain/state_points/`（`ThermoStatePoint`、`AirStatePoint`、`StatePoint` protocol、
+`StateSource`、基準防護 `enthalpy_difference`／`entropy_difference`、`to_dict`／`from_dict`）、
+`domain/schema.py`、`application/settings.py`（`WorkspaceSettings`、`SettingsService`）、
+`infrastructure/storage/JsonDocumentStore`。`CycleState` 已移除，冷凍循環與冷凝器 Exergy
+改用 `ThermoStatePoint`，冷凍效果與冷凝器㶲平衡的差值經基準防護。依本階段範圍不接 UI，
+因此 `AirStatePoint`、Settings 與儲存層目前只有測試使用，第一批正式使用者為 #9／#10。
 
 ### 階段 2 — 狀態點工具
 
