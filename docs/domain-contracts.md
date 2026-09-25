@@ -26,6 +26,17 @@ Adapter 可以接受 display unit 並建立 request。Canonical unit converter �
 
 對已 canonicalized 的 core quantity，unknown unit 必須視為錯誤。系統必須明確回報 failure，不得假設 input 已是 SI，也不得默默回傳原值。
 
+單位換算的權責：
+
+- `domain.units.CanonicalUnitConverter` 是核心熱力性質（`P`、`T`、`H`、`S`、`D`、`V`、`U`）換算定義的唯一來源。
+- Flet 的 `UnitConverter` 是通道層的顯示換算器：核心性質一律委派給 canonical converter；功率、流量、溫差、RH、效率、面積、風速、濕度比等非核心量由它註冊。它不是 domain authority，domain 程式碼不得依賴它。
+- 通道層同樣必須 fail fast：未註冊的 property 或 unit 一律引發 `ValueError`，不得做恆等換算。新的顯示單位必須明確註冊並提供雙向換算；需要相同尺度時沿用既有定義（例如錶壓單位沿用對應絕對壓力單位的換算因子），不得在其他模組另建第三套換算常數。
+- 溫差 `DeltaT` 沒有零點偏移（1 K = 1 °C 差 = 1.8 °F 差），不可用溫度 `T` 的換算處理。
+
+### 錶壓力
+
+錶壓力（相對大氣壓力的壓差）只存在於通道層。Flet 以獨立的 `PGauge` 量表示，單位標示為錶壓（`Pag`、`kPag`、`MPag`、`barg`、`psig`），與同尺度的絕對單位（`Pa`、`kPa`、`MPa`、`bar`、`psia`）一一對應；絕對壓力模式不得出現錶壓單位，錶壓模式不得出現 `psia` 等絕對單位。通道層以 `UnitConverter.gauge_to_absolute_pa()` 把錶壓 Pa 加上大氣絕對壓力，得到絕對 Pa 後才建立 application request；大氣壓力或換算後的絕對壓力不是正值時明確報錯。Application 與 domain 只接受絕對壓力 Pa，不認識錶壓單位。
+
 ## 3. Relative humidity semantics
 
 `RH` 在 domain 內使用 `0.0` 至 `1.0` 的 fraction。Adapter 的 display unit `%` 使用 `0` 至 `100` 的 percentage；輸入必須透過 `convert_to_si("RH", value, "%")` 轉為 fraction，輸出必須透過 `convert_from_si("RH", value, "%")` 轉回 percentage。`Q` 的 quality semantics 不受此規則影響。
@@ -83,7 +94,7 @@ Flet 與 Telegram 負責 label、display unit、string 以及 message/control re
 
 `domain/refrigeration/` 透過 `ThermodynamicStateProvider` 協定（由 `ThermodynamicStateService.calculate_state_si` 實作）取得 canonical SI 狀態，不直接呼叫 CoolProp，也不自行修改 reference state。
 
-- `solve_vapor_compression_cycle`：單級蒸氣壓縮循環。蒸發壓力取蒸發溫度的露點（Q = 1），冷凝壓力取冷凝溫度的泡點（Q = 0）；壓縮以等熵效率修正，節流為等焓。只有提供冷凍能力時才回傳質量流率、功率與吸入體積流量，不推估未提供的系統量。
+- `solve_vapor_compression_cycle`：單級蒸氣壓縮循環。蒸發壓力取蒸發溫度的露點（Q = 1），冷凝壓力取冷凝溫度的泡點（Q = 0）；壓縮以等熵效率修正，節流為等焓。只有提供冷凍能力時才回傳質量流率、功率與吸入體積流量，不推估未提供的系統量。結果的 `reference_state` 是求解時實際使用的 policy code；reference-state policy 只在 application（`RefrigerationService`）解析一次，繪製同一循環的圖表必須使用這個值，不得再以 `Auto` 重新解析。
 - `evaluate_superheat_subcooling`：以量測絕對壓力與管溫判斷過熱蒸氣、過冷液體或兩相，過熱度以露點、過冷度以泡點為基準，並回報非共沸冷媒的溫度滑移。
 
 狀態服務無法計算的狀態（例如高於臨界壓力）必須轉為明確的 `ValueError`，不得回傳部分結果。

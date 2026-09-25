@@ -69,6 +69,8 @@ channel adapters / entrypoints
 
 `ThermodynamicStateService` 在轉接器邊界接受顯示單位中的已知物性，將其轉換為 canonical SI，執行 CoolProp 或理想氣體計算，並回傳中立的數值結果。相容性外觀可以保留通道專用行為，但在契約已完成整合的地方，必須將 canonical quantities 委派給共用服務。
 
+核心熱力性質的單位換算以 `domain.units.CanonicalUnitConverter` 為準；各通道的換算器（例如 Flet 的 `UnitConverter`）只負責顯示單位，核心性質必須委派給它，並對未註冊的性質或單位明確報錯。錶壓力等通道專屬語意在通道層換成絕對 SI 後才進入 application／domain（見 `docs/domain-contracts.md`）。
+
 ## 6. HVAC 邊界
 
 共用的 HVAC 方程式位於 `domain/hvac/` 下，使用 canonical SI 輸入與輸出。Flet 與 Telegram 模組在該邊界周圍轉換通道值與呈現方式；不得為共用公式引入第二套實作。
