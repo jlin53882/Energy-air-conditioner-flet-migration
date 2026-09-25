@@ -60,6 +60,9 @@ def _curve_series(curve: ChartCurve, *, color: str, width: float,
                   dash: list[int] | None = None) -> fch.LineChartData:
     """把一條曲線轉成不顯示提示框的折線。
 
+以直線段連接計算取樣點（每條曲線預設 61 點，已足夠平滑），不使用 Bézier
+平滑，避免畫面在取樣點之間呈現不屬於濕空氣計算結果的曲線形狀。
+
 參數：
     curve: 曲線資料（y 為 kg/kg）。
     color: 線條顏色。
@@ -76,8 +79,7 @@ def _curve_series(curve: ChartCurve, *, color: str, width: float,
         color=color,
         stroke_width=width,
         dash_pattern=dash,
-        curved=True,
-        prevent_curve_over_shooting=True,
+        curved=False,
     )
 
 

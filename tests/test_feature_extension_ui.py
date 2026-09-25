@@ -494,3 +494,5 @@ def test_native_psychrometric_chart_axes_follow_the_data_range(shell) -> None:
     assert [label.value for label in panel.chart.bottom_axis.labels] == [-10, 0, 10, 20, 30, 40, 50]
     assert [label.value for label in panel.chart.right_axis.labels] == [0, 5, 10, 15, 20, 25, 30]
     assert panel.legend.controls[0].controls[1].value == "P"
+    # 曲線以直線段連接計算取樣點，不做 Bézier 平滑。
+    assert not any(series.curved for series in panel.chart.data_series)
