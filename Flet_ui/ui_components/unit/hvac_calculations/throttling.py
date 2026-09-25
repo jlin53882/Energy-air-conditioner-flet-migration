@@ -3,8 +3,7 @@
 
 import CoolProp.CoolProp as CP
 # 從兄弟模組導入依賴項
-from .common import calculate_Sgen_flow
-from .exergy import calculate_specific_exerpy,calculate_change_specific_exerpy1_2
+from .exergy import calculate_change_specific_exerpy1_2
 
 
 def calculate_throttling_value( h1, h2):
@@ -70,8 +69,6 @@ def calculate_throttling_value_exerpy(x1, P1,P2,P0_dead, T0_dead, substance: str
     h0_dead= CP.PropsSI('H', 'P', P0_dead, 'T', T0_dead, substance)
     s0_dead= CP.PropsSI('S', 'P', P0_dead, 'T', T0_dead, substance)
     
-    # 計算熵增
-    Sgen_flow=calculate_Sgen_flow(m_dot,s1,s2)
     # specific exergy 計算
 
     """

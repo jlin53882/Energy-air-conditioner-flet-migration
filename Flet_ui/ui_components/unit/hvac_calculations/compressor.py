@@ -3,14 +3,14 @@
 
 import CoolProp.CoolProp as CP
 from domain.thermodynamics.reference_state import ReferenceStateService
-
-_REFERENCE_STATE = ReferenceStateService()
 from domain.hvac.basic import (
     calculate_compression_ratio_si,
     calculate_compressor_work_si,
 )
 # 從兄弟模組導入依賴項
 from .exergy import calculate_specific_exerpy,calculate_change_specific_exerpy1_2
+
+_REFERENCE_STATE = ReferenceStateService()
 
 #壓縮機相關計算方程式
 def calculate_compressor_work(mass_flow_rate, h1, h2):

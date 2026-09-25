@@ -9,7 +9,7 @@ import matplotlib
 if not str(matplotlib.get_backend()).startswith("module://flet_charts"):
     matplotlib.use("svg")
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter, ScalarFormatter
+from matplotlib.ticker import FuncFormatter
 import CoolProp.CoolProp as CP
 import numpy as np
 from functools import lru_cache
@@ -71,7 +71,7 @@ def check_coolprop_fluid(fluid_name):
         with _REFERENCE_STATE.calculation_scope(fluid_name):
             CP.PropsSI('Tcrit', fluid_name)
         return True, "驗證成功"
-    except ValueError as e:
+    except ValueError:
         # CoolProp 通常會引發 ValueError (例如 "Unable to load fluid [...]")
         return False, "找不到此流體"
     except Exception as e:
@@ -257,13 +257,15 @@ def _generate_thermo_diagram_unlocked(fluid, diagram, state_points_si, unit_conv
         return fig
 
     # 臨界與三相資料
+    # 只有臨界溫度會用到；臨界壓力與三相點仍一併查詢，任一項查不到時沿用
+    # 原本的後備行為（臨界溫度視為 NaN）。
     try:
-        Pcrit = CP.PropsSI("pcrit", fluid)
+        CP.PropsSI("pcrit", fluid)
         Tcrit = CP.PropsSI("Tcrit", fluid)
-        Ptriple = CP.PropsSI("ptriple", fluid)
-        Ttriple = CP.PropsSI("Ttriple", fluid)
+        CP.PropsSI("ptriple", fluid)
+        CP.PropsSI("Ttriple", fluid)
     except Exception:
-        Pcrit, Tcrit, Ptriple, Ttriple = np.nan, np.nan, 1000, 100
+        Tcrit = np.nan
 
     # 定義通用格式 (小數優先)
     log_fmt = FuncFormatter(lambda x, pos: f"{x:g}")

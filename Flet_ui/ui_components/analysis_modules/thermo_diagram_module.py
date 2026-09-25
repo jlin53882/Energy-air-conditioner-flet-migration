@@ -387,7 +387,8 @@ class ThermoDiagramModule(BaseAnalysisModule):
         if not fluid_name:
             self.fluid_check_result.value = "請輸入冷媒名稱"
             self.fluid_check_result.color = "red"
-            if self.parent: self.page.update()
+            if self.parent:
+                self.page.update()
             return
 
         is_valid, msg = check_coolprop_fluid(fluid_name)
@@ -399,7 +400,8 @@ class ThermoDiagramModule(BaseAnalysisModule):
             self.fluid_check_result.value = f"'{fluid_name}' 無效: {msg}"
             self.fluid_check_result.color = "red"
         
-        if self.parent: self.page.update()
+        if self.parent:
+            self.page.update()
 
     # ======================================================
     # 1b. UI 模式切換 (無變更)
@@ -439,7 +441,8 @@ class ThermoDiagramModule(BaseAnalysisModule):
             self.all_entries["td_V"]["ui_row"].visible = True
             
         
-        if self.parent: self.page.update()
+        if self.parent:
+            self.page.update()
 
     # ======================================================
     # 2️⃣ 繪圖邏輯：事件觸發
@@ -461,7 +464,8 @@ class ThermoDiagramModule(BaseAnalysisModule):
         self.result_text.value = "繪製中..."
         self.result_text.color = "blue"
         self.plot_btn.disabled = True
-        if self.parent: self.page.update()
+        if self.parent:
+            self.page.update()
 
         try:
             result_str = self.calculate_thermo_diagram(use_imperial=False)
@@ -476,7 +480,8 @@ class ThermoDiagramModule(BaseAnalysisModule):
 
         finally:
             self.plot_btn.disabled = False
-            if self.parent: self.page.update()
+            if self.parent:
+                self.page.update()
 
     def _on_plot_click(self, e):
         """使用者按下 [繪圖] 按鈕時的既有事件簽章；轉交給 public perform_plot()。
@@ -509,12 +514,14 @@ class ThermoDiagramModule(BaseAnalysisModule):
             if not is_valid:
                 self.fluid_check_result.value = f"'{fluid}' 無效: {msg}"
                 self.fluid_check_result.color = "red"
-                if self.parent: self.page.update()
+                if self.parent:
+                    self.page.update()
                 raise ValueError(f"冷媒 '{fluid}' 無效: {msg}")
             else:
                 self.fluid_check_result.value = f"'{fluid}' 驗證成功"
                 self.fluid_check_result.color = "green"
-                if self.parent: self.page.update()
+                if self.parent:
+                    self.page.update()
             # --- 驗證結束 ---
 
             # 取得 UI 選項
@@ -625,7 +632,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
             if point_count == 0:
                  return f"成功繪製 {fluid} 的 {diagram} 圖 (無狀態點)。"
             if input_mode == "Compressor":
-                return f"成功繪製壓縮機分析 (3 個點)。"
+                return "成功繪製壓縮機分析 (3 個點)。"
             else:
                 return f"成功繪製 {fluid} 的 {diagram} 圖 ({point_count} 個點)。"
 

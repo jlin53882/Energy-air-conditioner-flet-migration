@@ -220,7 +220,8 @@ class UnitConverter:
         cmap["E"]["from_si"]["kJ"] = lambda x: x * 1e-3
         
         # 濕度比 (W), SI: kg/kg
-        if "W" not in cmap: cmap["W"] = {"to_si": {}, "from_si": {}} # 確保 W 存在
+        if "W" not in cmap:
+            cmap["W"] = {"to_si": {}, "from_si": {}} # 確保 W 存在
         cmap["W"]["to_si"]["g/kg"] = lambda x: x / 1000.0
         cmap["W"]["from_si"]["g/kg"] = lambda x: x * 1000.0
         cmap["W"]["to_si"]["lbm/lbm"] = lambda x: x
@@ -229,7 +230,8 @@ class UnitConverter:
         cmap["W"]["from_si"]["gr/lbm"] = lambda x: x * 7000.0
 
         # 面積 (Area), SI: m²
-        if "Area" not in cmap: cmap["Area"] = {"to_si": {}, "from_si": {}}
+        if "Area" not in cmap:
+            cmap["Area"] = {"to_si": {}, "from_si": {}}
         cmap["Area"]["to_si"]["cm²"] = lambda x: x * 1e-4
         cmap["Area"]["from_si"]["cm²"] = lambda x: x * 1e4
         cmap["Area"]["to_si"]["mm²"] = lambda x: x * 1e-6
@@ -240,14 +242,16 @@ class UnitConverter:
         cmap["Area"]["from_si"]["in²"] = lambda x: x / 0.00064516
         
         # 速度 (Velocity), SI: m/s
-        if "Velocity" not in cmap: cmap["Velocity"] = {"to_si": {}, "from_si": {}}
+        if "Velocity" not in cmap:
+            cmap["Velocity"] = {"to_si": {}, "from_si": {}}
         cmap["Velocity"]["to_si"]["ft/s"] = lambda x: x * 0.3048
         cmap["Velocity"]["from_si"]["ft/s"] = lambda x: x / 0.3048
         cmap["Velocity"]["to_si"]["ft/min"] = lambda x: x * 0.00508 # (0.3048 / 60)
         cmap["Velocity"]["from_si"]["ft/min"] = lambda x: x / 0.00508
 
         # 體積流率 (VolumeFlow), SI: m³/s
-        if "VolumeFlow" not in cmap: cmap["VolumeFlow"] = {"to_si": {}, "from_si": {}}
+        if "VolumeFlow" not in cmap:
+            cmap["VolumeFlow"] = {"to_si": {}, "from_si": {}}
         # m³/h (正確)
         cmap["VolumeFlow"]["to_si"]["m³/h"] = lambda x: x / 3600.0
         cmap["VolumeFlow"]["from_si"]["m³/h"] = lambda x: x * 3600.0
@@ -267,14 +271,16 @@ class UnitConverter:
         cmap["VolumeFlow"]["from_si"]["ft³/min"] = lambda x: x / 0.000471947        
         
         # 熵流率 (EntropyFlow), SI: W/K
-        if "EntropyFlow" not in cmap: cmap["EntropyFlow"] = {"to_si": {}, "from_si": {}}
+        if "EntropyFlow" not in cmap:
+            cmap["EntropyFlow"] = {"to_si": {}, "from_si": {}}
         cmap["EntropyFlow"]["to_si"]["kW/K"] = lambda x: x * 1e3
         cmap["EntropyFlow"]["from_si"]["kW/K"] = lambda x: x * 1e-3
         cmap["EntropyFlow"]["to_si"]["Btu/(h.R)"] = lambda x: x * 0.527528
         cmap["EntropyFlow"]["from_si"]["Btu/(h.R)"] = lambda x: x / 0.527528
 
         # **效率 (Eff), SI: 小數 (無單位)**
-        if "Eff" not in cmap: cmap["Eff"] = {"to_si": {}, "from_si": {}}
+        if "Eff" not in cmap:
+            cmap["Eff"] = {"to_si": {}, "from_si": {}}
         # 顯示: % (例如 80) -> SI: 小數 (例如 0.8)
         cmap["Eff"]["to_si"]["%"] = lambda x: x / 100.0 
         # SI: 小數 (例如 0.8) -> 顯示: % (例如 80)
@@ -282,7 +288,8 @@ class UnitConverter:
 
 
         # **相對濕度 (RH), SI: 小數 (無單位)**
-        if "RH" not in cmap: cmap["RH"] = {"to_si": {}, "from_si": {}}
+        if "RH" not in cmap:
+            cmap["RH"] = {"to_si": {}, "from_si": {}}
         # 顯示: % (例如 80) -> SI: 小數 (例如 0.8)
         cmap["RH"]["to_si"]["%"] = lambda x: x / 100.0 
         # SI: 小數 (例如 0.8) -> 顯示: % (例如 80)

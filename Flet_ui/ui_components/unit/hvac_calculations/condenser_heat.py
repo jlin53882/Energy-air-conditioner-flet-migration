@@ -1,6 +1,6 @@
 # 職責：冷凝器計算
 #condenser_heat_rate.py
-from .exergy import calculate_specific_exerpy,calculate_change_specific_exerpy1_2_simple
+from .exergy import calculate_change_specific_exerpy1_2_simple
 from domain.hvac.basic import calculate_condenser_heat_rate_si
 import CoolProp.CoolProp as CP
 from domain.thermodynamics.reference_state import ReferenceStateService
@@ -265,19 +265,11 @@ def _calculate_condenser_example_air_unlocked(m_dot_R, P1, P2, T1, T2,P0_dead, T
     h2 = h2_j_kg / 1000.0
     s2 = s2_j_kgk / 1000.0
 
-    #state reference (死狀態/環境狀態的熱力學性質計算)
-    # 這是計算比㶲（比㶲）時的參考狀態
-    h0_dead_j_kg=CP.PropsSI('H', 'P', P0_dead, 'T', T0_dead, substance)
-    s0_dead_j_kgk=CP.PropsSI('S', 'P', P0_dead, 'T', T0_dead, substance)
-
-    h0_dead = h0_dead_j_kg / 1000.0
-    s0_dead = s0_dead_j_kgk / 1000.0
-
-    # 計算 exerpy state 1（計算入口狀態的比㶲）
-    ex1=calculate_specific_exerpy(h1,s1,T0_dead,h0_dead,s0_dead)
-
-    # 計算 exerpy state 2（計算出口狀態的比㶲）
-    ex2=calculate_specific_exerpy(h2,s2,T0_dead,h0_dead,s0_dead)
+    #state reference (死狀態/環境狀態)
+    # 本函式的輸出不需要死狀態的比焓與比熵；仍查詢一次，讓無法求得的死狀態
+    # 輸入與原本一樣直接引發錯誤。
+    CP.PropsSI('H', 'P', P0_dead, 'T', T0_dead, substance)
+    CP.PropsSI('S', 'P', P0_dead, 'T', T0_dead, substance)
 
     Q_dot_H= calculate_condenser_heat_rate(m_dot_R, h1, h2)
     eta_ex=exergy_efficiency_condenser(m_dot_R, h1, h2, s1, s2, T0_dead)

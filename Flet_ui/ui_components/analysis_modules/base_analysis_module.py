@@ -369,7 +369,8 @@ class BaseAnalysisModule:
 
                 for item_key in sync_group:
                     controls = self.all_entries.get(item_key)
-                    if not controls: continue
+                    if not controls:
+                        continue
                     
                     val_tf = controls["val"]
                     unit_dd = controls["unit"]
