@@ -15,12 +15,7 @@ from domain.refrigeration.saturation import REGION_SUBCOOLED, REGION_SUPERHEATED
 
 from ...ui.components.figure_panel import FigurePanel
 from ...ui.theme import TOKENS
-from ..unit.UnitConverter import (
-    ABSOLUTE_TO_GAUGE_UNIT,
-    GAUGE_PRESSURE,
-    GAUGE_TO_ABSOLUTE_UNIT,
-    UnitConverter,
-)
+from ..unit.UnitConverter import GAUGE_PRESSURE, UnitConverter
 from ..unit.thermo_draw.coolprop_utils import generate_thermo_diagram
 from .base_analysis_module import BaseAnalysisModule
 from .result_formatting import ResultFormatter
@@ -148,9 +143,8 @@ class RefrigerationCycleModule(BaseAnalysisModule):
         """切換錶壓力／絕對壓力：量測壓力改用對應語意的單位，並維持相同的實際壓力。
 
 錶壓力模式使用錶壓單位（kPag、psig…）並顯示大氣壓力欄位；絕對壓力模式使用
-絕對單位（kPa、psia…）。切換時以「錶壓 + 大氣壓力 = 絕對壓力」換算數值，
-讓欄位代表的實際絕對壓力不變；量測壓力空白或無法解析時只切換單位。
-大氣壓力無法解析而無法換算時，維持原模式並在大氣壓力欄位提示。
+絕對單位（kPa、psia…）。大氣壓力無法解析而無法換算時，維持原模式並在大氣壓力
+欄位提示（換算規則見 ``BaseAnalysisModule.switch_pressure_basis``）。
 
 參數：
     _event: Flet 事件；初始化時為 None。
@@ -158,48 +152,13 @@ class RefrigerationCycleModule(BaseAnalysisModule):
 回傳：
     無。"""
         to_gauge = self._pressure_is_gauge()
-        entry = self.all_entries["sh_p"]
-        target_prop = GAUGE_PRESSURE if to_gauge else "P"
-        if entry["prop_code"] != target_prop and not self._convert_pressure_mode(to_gauge):
+        if not self.switch_pressure_basis(["sh_p"], "sh_atm", to_gauge):
             self.sh_pressure_type.selected = ["Absolute" if to_gauge else "Gauge"]
         self.all_entries["sh_atm"]["ui_row"].visible = self._pressure_is_gauge()
         try:
             self.superheat_ui.update()
         except RuntimeError:
             pass
-
-    def _convert_pressure_mode(self, to_gauge: bool) -> bool:
-        """把量測壓力欄位換成另一種壓力語意，數值換算為相同的實際壓力。
-
-參數：
-    to_gauge: True 表示由絕對壓力改為錶壓力。
-
-回傳：
-    True 表示已切換；大氣壓力無效而無法換算時回傳 False（不做任何變更）。"""
-        entry = self.all_entries["sh_p"]
-        atm_entry = self.all_entries["sh_atm"]
-        old_unit = entry["unit"].value
-        new_unit = ABSOLUTE_TO_GAUGE_UNIT[old_unit] if to_gauge else GAUGE_TO_ABSOLUTE_UNIT[old_unit]
-        new_prop = GAUGE_PRESSURE if to_gauge else "P"
-        try:
-            value = float((entry["val"].value or "").strip())
-        except ValueError:
-            value = None
-        if value is not None:
-            try:
-                atmospheric_pa = self.read_si("sh_atm")
-                if atmospheric_pa <= 0:
-                    raise ValueError("大氣壓力必須大於 0。")
-            except ValueError:
-                atm_entry["val"].error_text = "請輸入有效的大氣壓力，才能在錶壓與絕對壓力間換算"
-                return False
-            current_si = self.unit_converter.convert_to_si(entry["prop_code"], value, old_unit)
-            absolute_pa = current_si if to_gauge else current_si + atmospheric_pa
-            new_si = absolute_pa - atmospheric_pa if to_gauge else absolute_pa
-            entry["val"].value = f"{self.unit_converter.convert_from_si(new_prop, new_si, new_unit):.7g}"
-        atm_entry["val"].error_text = None
-        self.retarget_input_row("sh_p", new_prop, new_unit)
-        return True
 
     # ======================================================
     # 計算
@@ -288,9 +247,7 @@ class RefrigerationCycleModule(BaseAnalysisModule):
 回傳：
     格式化結果文字。"""
         # 錶壓力只在通道層處理：application／domain 一律收到絕對壓力 Pa。
-        pressure = self.read_si("sh_p")
-        if self.all_entries["sh_p"]["prop_code"] == GAUGE_PRESSURE:
-            pressure = self.unit_converter.gauge_to_absolute_pa(pressure, self.read_si("sh_atm"))
+        pressure = self.read_absolute_pressure_pa("sh_p", "sh_atm")
         result = self.refrigeration.check_superheat(SuperheatCheckRequest(
             fluid=self.read_text("sh_fluid"),
             pressure_pa=pressure,

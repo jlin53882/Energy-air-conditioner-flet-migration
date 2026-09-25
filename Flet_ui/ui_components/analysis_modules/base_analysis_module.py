@@ -4,7 +4,12 @@
 from math import isfinite
 
 import flet as ft
-from ..unit.UnitConverter import UnitConverter
+from ..unit.UnitConverter import (
+    ABSOLUTE_TO_GAUGE_UNIT,
+    GAUGE_PRESSURE,
+    GAUGE_TO_ABSOLUTE_UNIT,
+    UnitConverter,
+)
 from ...ui.theme import TOKENS, mono_style, style_text_field
 
 class BaseAnalysisModule:
@@ -310,6 +315,73 @@ class BaseAnalysisModule:
         entry["unit"].value = unit_code
         self._last_units[key] = unit_code
         entry["unit"].on_select = self._create_unit_sync_handler(prop_code, [key])
+
+    def switch_pressure_basis(self, keys: list[str], atm_key: str, to_gauge: bool) -> bool:
+        """把壓力輸入列在錶壓力與絕對壓力之間切換，數值換算為同一個實際壓力。
+
+錶壓力使用錶壓單位（kPag、psig…），絕對壓力使用同尺度的絕對單位（kPa、psia…）；
+換算依「錶壓 + 大氣壓力 = 絕對壓力」。空白或無法解析的數值只切換單位，留給計算時
+以欄名提示。任一列需要換算而大氣壓力無法解析時，不做任何變更並在大氣壓力欄位提示
+（見 ``docs/hvac-ui-domain-contract.md``）。
+
+參數：
+    keys: 要切換的壓力輸入列識別鍵。
+    atm_key: 大氣壓力（絕對）輸入列識別鍵。
+    to_gauge: True 表示改為錶壓力，False 表示改為絕對壓力。
+
+回傳：
+    True 表示已切換（或本來就是目標基準）；大氣壓力無效而無法換算時回傳 False。"""
+        new_prop = GAUGE_PRESSURE if to_gauge else "P"
+        unit_map = ABSOLUTE_TO_GAUGE_UNIT if to_gauge else GAUGE_TO_ABSOLUTE_UNIT
+        pending = [key for key in keys if self.all_entries[key]["prop_code"] != new_prop]
+        values: dict[str, float] = {}
+        for key in pending:
+            try:
+                value = float((self.all_entries[key]["val"].value or "").strip())
+            except ValueError:
+                continue
+            if isfinite(value):
+                values[key] = value
+        atm_entry = self.all_entries[atm_key]
+        atmospheric_pa = 0.0
+        if values:
+            try:
+                atmospheric_pa = self.read_si(atm_key)
+                if atmospheric_pa <= 0:
+                    raise ValueError("大氣壓力必須大於 0。")
+            except ValueError:
+                atm_entry["val"].error_text = "請輸入有效的大氣壓力，才能在錶壓與絕對壓力間換算"
+                return False
+        for key in pending:
+            entry = self.all_entries[key]
+            old_unit = entry["unit"].value
+            new_unit = unit_map[old_unit]
+            if key in values:
+                current_si = self.unit_converter.convert_to_si(entry["prop_code"], values[key], old_unit)
+                new_si = current_si - atmospheric_pa if to_gauge else current_si + atmospheric_pa
+                entry["val"].value = f"{self.unit_converter.convert_from_si(new_prop, new_si, new_unit):.7g}"
+            self.retarget_input_row(key, new_prop, new_unit)
+        atm_entry["val"].error_text = None
+        return True
+
+    def read_absolute_pressure_pa(self, key: str, atm_key: str) -> float:
+        """讀取壓力輸入列並換成絕對壓力 Pa；錶壓力模式時加上大氣壓力。
+
+錶壓力只存在於通道層，application／domain 一律收到絕對壓力。
+
+參數：
+    key: 壓力輸入列識別鍵。
+    atm_key: 大氣壓力（絕對）輸入列識別鍵；只有錶壓力模式才會讀取。
+
+回傳：
+    絕對壓力（Pa）。
+
+引發：
+    ValueError：欄位無效，或大氣壓力、換算後的絕對壓力不是正值時。"""
+        pressure_pa = self.read_si(key)
+        if self.all_entries[key]["prop_code"] == GAUGE_PRESSURE:
+            pressure_pa = self.unit_converter.gauge_to_absolute_pa(pressure_pa, self.read_si(atm_key))
+        return pressure_pa
 
     def bind_multi_value_unit_sync(self, keys: list[str]) -> None:
         """讓逗號分隔多筆數值的輸入列在切換單位時逐筆換算。

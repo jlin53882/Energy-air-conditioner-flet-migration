@@ -166,29 +166,34 @@ class CompressorModule(BaseAnalysisModule):
         )
 
     def calculate_cr(self, use_imperial: bool) -> str:
-        pe_val = self.read_float("cr_pe")
-        pe_unit = self.all_entries["cr_pe"]["unit"].value
-        pc_val = self.read_float("cr_pc")
-        pc_unit = self.all_entries["cr_pc"]["unit"].value
-        
-        pe_pa = self.unit_converter.convert_to_si("P", pe_val, pe_unit) 
-        pc_pa = self.unit_converter.convert_to_si("P", pc_val, pc_unit)
+        """以吸入與排出絕對壓力計算壓縮比；錶壓力模式時先加上大氣壓力。
 
-        atm_p_si = 0.0
-        if "Gauge" in self.cr_pressure_type_toggle.selected:
-            atm_p_val = self.read_float("cr_atm_p")
-            atm_p_unit = self.all_entries["cr_atm_p"]["unit"].value
-            atm_p_si = self.unit_converter.convert_to_si("P", atm_p_val, atm_p_unit)
-        
-        pe_abs_pa = pe_pa + atm_p_si
-        pc_abs_pa = pc_pa + atm_p_si
-        
+參數：
+    use_imperial: 是否以英制輸出（壓縮比無單位，不影響結果）。
+
+回傳：
+    格式化結果文字。"""
+        pe_abs_pa = self.read_absolute_pressure_pa("cr_pe", "cr_atm_p")
+        pc_abs_pa = self.read_absolute_pressure_pa("cr_pc", "cr_atm_p")
         cr = self.compression_ratio_service.calculate(
             CompressionRatioRequest(pe_abs_pa, pc_abs_pa)
         )
         return f"壓縮比 (CR): {cr:.4f} (無單位)"
-    
+
     def on_pressure_type_change(self, e):
+        """切換錶壓力／絕對壓力：入口與出口壓力改用對應語意的單位，並維持相同的實際壓力。
+
+大氣壓力無法解析而無法換算時，維持原模式並在大氣壓力欄位提示（換算規則見
+``BaseAnalysisModule.switch_pressure_basis``）。
+
+參數：
+    e: Flet 事件；初始化或測試時可為 None。
+
+回傳：
+    無。"""
+        to_gauge = "Gauge" in self.cr_pressure_type_toggle.selected
+        if not self.switch_pressure_basis(["cr_pe", "cr_pc"], "cr_atm_p", to_gauge):
+            self.cr_pressure_type_toggle.selected = ["Absolute" if to_gauge else "Gauge"]
         is_gauge = "Gauge" in self.cr_pressure_type_toggle.selected
         self.all_entries["cr_atm_p"]["ui_row"].visible = is_gauge
         try:
@@ -891,13 +896,12 @@ class CompressorModule(BaseAnalysisModule):
     # --- 12. 單位同步 (此模組共用) [已擴充] ---
     def _setup_unit_sync(self):
         # 壓力 (P)
-        cr_sync_group = ["cr_pe", "cr_pc", "cr_atm_p","ce_p1", "ce_p2", "ce_p0"]
-        self.all_entries["cr_pe"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
-        self.all_entries["cr_pc"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
-        self.all_entries["cr_atm_p"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
-        self.all_entries["ce_p1"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
-        self.all_entries["ce_p2"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
-        self.all_entries["ce_p0"]["unit"].on_select = self._create_unit_sync_handler("P", cr_sync_group)
+        # 壓縮比的壓力列可在錶壓／絕對壓間切換（性質代碼會改變），因此各自獨立
+        # 換算，不與其他分析的絕對壓力列共用同步群組。
+        self.bind_independent_unit_sync(["cr_pe", "cr_pc", "cr_atm_p"])
+        ce_sync_group = ["ce_p1", "ce_p2", "ce_p0"]
+        for key in ce_sync_group:
+            self.all_entries[key]["unit"].on_select = self._create_unit_sync_handler("P", ce_sync_group)
 
         
         # 焓 (H)
