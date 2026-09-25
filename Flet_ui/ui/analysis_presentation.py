@@ -70,8 +70,8 @@ ANALYSIS_PRESENTATION: dict[str, AnalysisPresentation] = {
         "效能損失",
     ),
     "compressor.exergy_efficiency_ratio": AnalysisPresentation(
-        "以死狀態為基準評估壓縮機的㶲（Exergy）效率。",
-        None,
+        "以可逆功相對於實際輸入功計算㶲（Exergy）效率；理論上與效能損失法結果相同，可互相驗證。",
+        "η_ex = W_rev / W_in，W_rev = ṁ · [(h2 − h1) − T0 · (s2 − s1)]",
         "Exergy 效率",
     ),
     "compressor.combined_example": AnalysisPresentation(
@@ -88,6 +88,12 @@ ANALYSIS_PRESENTATION: dict[str, AnalysisPresentation] = {
         "冷媒在冷凝器中放出的熱量（入口焓減出口焓）。",
         "Q_c = m · (h1 − h2)",
         "放熱率",
+    ),
+    "condenser.exergy": AnalysisPresentation(
+        "以冷凝壓力與冷媒進出口溫度計算放熱量、熵產生與 Exergy 破壞；等效傳熱邊界溫度（熱量穿越所選控制邊界的溫度）決定熱帶走多少 Exergy。",
+        "X_dest = ṁ·(ex1 − ex2) − Q_H·(1 − T0/T_b) = T0·S_gen，η = Q_H·(1 − T0/T_b) / [ṁ·(ex1 − ex2)]",
+        "Exergy 分析",
+        key_metrics=("Exergy 破壞率 X_dest", "Exergy 效率 η", "放熱量 Q_H", "熵產生率 S_gen"),
     ),
     "psychrometrics.tdb_twb": AnalysisPresentation(
         "依海拔推算大氣壓力，再以乾球與濕球溫度求得濕空氣完整性質（ASHRAE 模型）。",

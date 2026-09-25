@@ -33,7 +33,6 @@ from .hvac_calculations.heat_exchanger import (
 )
 from .hvac_calculations.condenser_heat import (
     calculate_condenser_heat_rate,
-    calculate_condenser_example_air
 
 )    
 
@@ -76,7 +75,6 @@ class HVACAnalyzer:
 
     #--- 冷凝器計算方程式 ---
     calculate_condenser_heat_rate = staticmethod(calculate_condenser_heat_rate)
-    calculate_condenser_example_air= staticmethod(calculate_condenser_example_air)
 
     
     # --- 節流閥相關函數 ---

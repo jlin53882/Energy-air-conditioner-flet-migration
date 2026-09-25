@@ -156,9 +156,8 @@ class PsyModule(BaseAnalysisModule):
 
 回傳：
     無。"""
-        entry = self.all_entries["psy_alt"]
         try:
-            altitude_m = self.unit_converter.convert_to_si("L", float(entry["val"].value), entry["unit"].value)
+            altitude_m = self.read_si("psy_alt")
             pressure_kpa = self.psy_calculator.calculate_pressure_from_altitude(altitude_m) / 1000.0
             self.pressure_hint.value = f"→ 大氣壓力 {pressure_kpa:.3f} kPa"
         except (TypeError, ValueError):
@@ -228,9 +227,9 @@ class PsyModule(BaseAnalysisModule):
         """
         mode_key = self._resolve_mode_key(mode_key)
         # 1. 讀取通用值和單位
-        alt_val = float(self.all_entries["psy_alt"]["val"].value)
+        alt_val = self.read_float("psy_alt")
         alt_unit = self.all_entries["psy_alt"]["unit"].value
-        tdb_val = float(self.all_entries["psy_tdb"]["val"].value)
+        tdb_val = self.read_float("psy_tdb")
         tdb_unit = self.all_entries["psy_tdb"]["unit"].value
 
         # 2. 轉換為 SI (m 和 K)
@@ -241,13 +240,13 @@ class PsyModule(BaseAnalysisModule):
         
         # 3. 根據正規化後的 mode_key 決定計算路徑；label 不參與判斷。
         if mode_key == self.MODE_TDB_TWB:
-            twb_val = float(self.all_entries["psy_twb"]["val"].value)
+            twb_val = self.read_float("psy_twb")
             twb_unit = self.all_entries["psy_twb"]["unit"].value
             twb_k = self.unit_converter.convert_to_si("T", twb_val, twb_unit)
             psy_results = self.psy_calculator.calculate_from_tdb_twb(tdb_k, twb_k, alt_m)
 
         elif mode_key == self.MODE_TDB_RH:
-            rh_val = float(self.all_entries["psy_rh"]["val"].value)
+            rh_val = self.read_float("psy_rh")
             rh_si = self.unit_converter.convert_to_si("RH", rh_val, "%") 
             psy_results = self.psy_calculator.calculate_from_tdb_rh(tdb_k, rh_si, alt_m)
 

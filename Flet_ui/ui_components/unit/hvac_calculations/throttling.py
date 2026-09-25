@@ -32,7 +32,7 @@ def calculate_throttling_value_exerpy(x1, P1,P2,P0_dead, T0_dead, substance: str
     :param T0_dead: 參考狀態溫度 (K)
     :param substance: 流體名稱 (例如： 'R134a', 'Water')
     :param m_dot: 質量流率 (kg/s)
-    :return: (Sgen_flow (W/K), Ex_destruction (W)) 
+    :return: (T2 節流後溫度 (K), Ex_destruction 㶲破壞率 (W))
     """
     # CoolProp 函式 PropsSI('Output','Input1','Value1','Input2','Value2','Fluid') 用來查詢特定狀態下的性質。
     #定義單位:
@@ -61,7 +61,7 @@ def calculate_throttling_value_exerpy(x1, P1,P2,P0_dead, T0_dead, substance: str
     """
     # 計算節流後的焓值和熵值 h2, s2
     h2=h1 # 節流過程中焓值保持不變
-    s2 = CP.PropsSI('S', 'P', P2, 'H', h2, substance) #kJ/(kg K)
+    s2 = CP.PropsSI('S', 'P', P2, 'H', h2, substance) # J/(kg·K)（CoolProp SI）
     T2= CP.PropsSI('T', 'P', P2, 'H', h2, substance) 
 
     # 參考狀態：dead state
@@ -80,5 +80,5 @@ def calculate_throttling_value_exerpy(x1, P1,P2,P0_dead, T0_dead, substance: str
     """
     #Ex_destruction_flow= m_dot*(exerpy_specific_1-exerpy_specific_2)
     Ex_destruction_flow= m_dot*calculate_change_specific_exerpy1_2(h1,h2,s1,s2,T0_dead,h0_dead,s0_dead)
-  # 計算比焓值損失 KW
+  # 㶲破壞率 (W，CoolProp SI 的 J/kg × kg/s)
     return T2, Ex_destruction_flow
