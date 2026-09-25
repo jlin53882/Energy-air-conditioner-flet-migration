@@ -3,6 +3,10 @@
 曲線資料來自 `chart.psychrometric.build_psychrometric_chart_data`，標註點與輔助線
 使用 `ChartMarker`／`ChartGuide`；本元件只負責呈現，圖面固定使用 °C 與 g/kg 乾空氣。
 文字由介面本身繪製，因此不依賴系統的中文字型，顏色也與工作區主題一致。
+
+圖表不回應滑鼠：背景參考線橫跨整張圖，滑鼠經過時套件會在每條線上各標出一個點，
+而且只要同時碰到背景線，標註點的提示框也不會出現。因此標註點的名稱與座標
+直接列在圖下方的圖例，不依賴滑鼠提示。
 """
 
 from __future__ import annotations
@@ -58,7 +62,7 @@ def _axis_labels(low: float, high: float, step: int) -> list[fch.ChartAxisLabel]
 
 def _curve_series(curve: ChartCurve, *, color: str, width: float,
                   dash: list[int] | None = None) -> fch.LineChartData:
-    """把一條曲線轉成不顯示提示框的折線。
+    """把一條背景參考曲線轉成折線。
 
 以直線段連接計算取樣點（每條曲線預設 61 點，已足夠平滑），不使用 Bézier
 平滑，避免畫面在取樣點之間呈現不屬於濕空氣計算結果的曲線形狀。
@@ -73,7 +77,7 @@ def _curve_series(curve: ChartCurve, *, color: str, width: float,
     LineChartData。"""
     return fch.LineChartData(
         points=[
-            fch.LineChartDataPoint(x, w * 1000, show_tooltip=False)
+            fch.LineChartDataPoint(x, w * 1000)
             for x, w in zip(curve.dry_bulb_c, curve.humidity_ratio)
         ],
         color=color,
@@ -84,7 +88,7 @@ def _curve_series(curve: ChartCurve, *, color: str, width: float,
 
 
 def _point(marker: ChartMarker, shape: fch.ChartCirclePoint | None) -> fch.LineChartDataPoint:
-    """建立帶提示文字的標註點。
+    """建立標註點。
 
 參數：
     marker: 標註點。
@@ -96,8 +100,18 @@ def _point(marker: ChartMarker, shape: fch.ChartCirclePoint | None) -> fch.LineC
         marker.dry_bulb_c,
         marker.humidity_ratio * 1000,
         point=shape if shape is not None else False,
-        tooltip=f"{marker.label}\n{marker.dry_bulb_c:.1f} °C · {marker.humidity_ratio * 1000:.2f} g/kg",
     )
+
+
+def marker_caption(marker: ChartMarker) -> str:
+    """回傳圖例使用的標註點文字：名稱與座標（乾球溫度、濕度比）。
+
+參數：
+    marker: 標註點。
+
+回傳：
+    例如「1 入口  25.0 °C · 11.20 g/kg」。"""
+    return f"{marker.label}  {marker.dry_bulb_c:.1f} °C · {marker.humidity_ratio * 1000:.2f} g/kg"
 
 
 def _legend_item(swatch: ft.Control, text: str) -> ft.Row:
@@ -162,8 +176,7 @@ class PsychrometricChartPanel(ft.Column):
     無。"""
         self.chart = fch.LineChart(
             expand=True,
-            interactive=True,
-            tooltip=fch.LineChartTooltip(bgcolor=TOKENS.text_primary, max_width=220),
+            interactive=False,
         )
         self.chart_box = ft.Container(content=self.chart, height=height, visible=False,
                                       padding=ft.Padding.only(top=8, right=4))
@@ -254,7 +267,7 @@ class PsychrometricChartPanel(ft.Column):
         self.chart.top_axis = fch.ChartAxis(show_labels=False, label_size=0)
 
         rh_labels = "／".join(curve.label for curve in data.relative_humidity_lines)
-        legend: list[ft.Control] = [_legend_item(_dot(True, TOKENS.highlight), marker.label)
+        legend: list[ft.Control] = [_legend_item(_dot(True, TOKENS.highlight), marker_caption(marker))
                                     for marker in self.markers]
         legend += [_legend_item(_dot(False, TOKENS.highlight), guide.end.label) for guide in self.guides]
         legend += [

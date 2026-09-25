@@ -493,6 +493,8 @@ def test_native_psychrometric_chart_axes_follow_the_data_range(shell) -> None:
     assert panel.chart.max_y == pytest.approx(30.0)
     assert [label.value for label in panel.chart.bottom_axis.labels] == [-10, 0, 10, 20, 30, 40, 50]
     assert [label.value for label in panel.chart.right_axis.labels] == [0, 5, 10, 15, 20, 25, 30]
-    assert panel.legend.controls[0].controls[1].value == "P"
+    # 圖表不回應滑鼠（避免游標經過時在每條背景線上標點）；標註點座標直接列在圖例。
+    assert panel.chart.interactive is False
+    assert panel.legend.controls[0].controls[1].value == "P  30.0 °C · 12.00 g/kg"
     # 曲線以直線段連接計算取樣點，不做 Bézier 平滑。
     assert not any(series.curved for series in panel.chart.data_series)
