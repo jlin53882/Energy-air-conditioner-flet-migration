@@ -10,18 +10,25 @@
 import flet as ft
 
 from .ui.app_shell import AppShell
-from .ui.theme import TOKENS, workspace_theme
+from .ui.theme import MONO_FONT_URL, TOKENS, workspace_theme
 from .ui.state import WorkspaceState
 from .ui.views.home_view import HomeView
 from .ui.views.compressor_view import CompressorView
 from .ui.views.evaporator_view import EvaporatorView
 from .ui.views.condenser_view import CondenserView
+from .ui.views.refrigeration_cycle_view import RefrigerationCycleView
 from .ui.views.psychrometrics_view import PsychrometricsView
+from .ui.views.air_process_view import AirProcessView
+from .ui.views.psychrometric_chart_view import PsychrometricChartView
 from .ui.views.thermo_diagram_view import ThermoDiagramView
+from .ui.views.unit_converter_view import UnitConverterView
 from .ui_components.analysis_modules.hvac_compressor_module import CompressorModule
 from .ui_components.analysis_modules.hvac_condenser_module import CondenserModule
 from .ui_components.analysis_modules.hvac_evaporator_module import EvaporatorModule
 from .ui_components.analysis_modules.psy_module import PsyModule
+from .ui_components.analysis_modules.psy_process_module import PsyProcessModule
+from .ui_components.analysis_modules.psychrometric_chart_module import PsychrometricChartModule
+from .ui_components.analysis_modules.refrigeration_cycle_module import RefrigerationCycleModule
 from .ui_components.analysis_modules.thermo_diagram_module import ThermoDiagramModule
 from .ui_components.property_tab import PropertyTab
 from .ui_components.unit.HVACAnalyzer import HVACAnalyzer
@@ -29,7 +36,9 @@ from .ui_components.unit.PropertyFormatter import PropertyFormatter
 from .ui_components.unit.PsychrometricCalculator import PsychrometricCalculator
 from .ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
 from .ui_components.unit.UnitConverter import UnitConverter
+from application.air_processes import AirProcessService
 from application.property_queries import PropertyQueryService
+from application.refrigeration import RefrigerationService
 
 
 def main(page: ft.Page) -> None:
@@ -46,6 +55,7 @@ def main(page: ft.Page) -> None:
     page.theme_mode = ft.ThemeMode.LIGHT
     page.theme = workspace_theme()
     page.bgcolor = TOKENS.background
+    page.fonts = {TOKENS.mono_font: MONO_FONT_URL}
 
     unit_converter = UnitConverter()
     workspace_state = WorkspaceState()
@@ -75,39 +85,45 @@ def main(page: ft.Page) -> None:
     condenser_module = CondenserModule(
         unit_converter=unit_converter, page=page, analyzer=hvac_analyzer, state_calculator=state_calculator
     )
+    cycle_module = RefrigerationCycleModule(
+        unit_converter=unit_converter,
+        page=page,
+        refrigeration_service=RefrigerationService(state_calculator.state_service),
+    )
     psy_module = PsyModule(unit_converter=unit_converter, page=page, psy_calculator=psy_calculator)
+    # 空氣處理與濕空氣線圖共用同一個 application service。
+    air_process_service = AirProcessService(psy_calculator.service)
+    air_process_module = PsyProcessModule(
+        unit_converter=unit_converter, page=page, air_process_service=air_process_service
+    )
+    psychrometric_chart_module = PsychrometricChartModule(
+        unit_converter=unit_converter, page=page, air_process_service=air_process_service
+    )
     diagram_module = ThermoDiagramModule(unit_converter, page, hvac_analyzer, state_calculator)
 
     compressor_view = CompressorView(compressor_module, workspace_state=workspace_state)
     evaporator_view = EvaporatorView(evaporator_module, workspace_state=workspace_state)
     condenser_view = CondenserView(condenser_module, workspace_state=workspace_state)
+    cycle_view = RefrigerationCycleView(cycle_module, workspace_state=workspace_state)
     psychrometrics_view = PsychrometricsView(psy_module, workspace_state=workspace_state)
+    air_process_view = AirProcessView(air_process_module, workspace_state=workspace_state)
+    psychrometric_chart_view = PsychrometricChartView(
+        psychrometric_chart_module, workspace_state=workspace_state
+    )
     diagram_view = ThermoDiagramView(diagram_module)
 
-    shell_ref: dict[str, AppShell] = {}
-    home_view = HomeView(lambda route_key: shell_ref["shell"].navigate(route_key))
-    views = {
-        "home": home_view,
-        "thermo_properties": property_view,
+    analysis_views = {
         "compressor": compressor_view,
         "evaporator": evaporator_view,
         "condenser": condenser_view,
+        "refrigeration_cycle": cycle_view,
         "psychrometrics": psychrometrics_view,
-        "ph_chart": diagram_view,
-        "ts_chart": diagram_view,
+        "air_processes": air_process_view,
+        "psychrometric_chart": psychrometric_chart_view,
     }
-
-    def on_unit_system_change(unit_system: str) -> None:
-        """更新全域輸出偏好並重新呈現各 dedicated view，不改寫輸入欄位單位。
-
-參數：
-    unit_system: 要套用的輸出單位系統。
-
-回傳：
-    無。"""
-        property_view.set_output_unit_system(unit_system)
-        for view in (compressor_view, evaporator_view, condenser_view, psychrometrics_view):
-            view.set_output_unit_system(unit_system)
+    # 首頁統計只使用各 dedicated view 實際註冊的分析定義數量。
+    analysis_counts = {key: len(view.adapter.definitions) for key, view in analysis_views.items()}
+    shell_ref: dict[str, AppShell] = {}
 
     def choose_fluid(fluid: str) -> None:
         """將常用冷媒捷徑套用至熱力性質工作區。
@@ -121,11 +137,43 @@ def main(page: ft.Page) -> None:
         property_view.fluid_tf.value = fluid
         property_view.on_fluid_change(None)
 
+    home_view = HomeView(
+        lambda route_key: shell_ref["shell"].navigate(route_key),
+        analysis_counts=analysis_counts,
+        total_analyses=sum(analysis_counts.values()),
+        on_fluid=choose_fluid,
+    )
+    views = {
+        "home": home_view,
+        "thermo_properties": property_view,
+        "compressor": compressor_view,
+        "evaporator": evaporator_view,
+        "condenser": condenser_view,
+        "refrigeration_cycle": cycle_view,
+        "psychrometrics": psychrometrics_view,
+        "air_processes": air_process_view,
+        "ph_chart": diagram_view,
+        "ts_chart": diagram_view,
+        "psychrometric_chart": psychrometric_chart_view,
+        "unit_converter": UnitConverterView(unit_converter),
+    }
+
+    def on_unit_system_change(unit_system: str) -> None:
+        """更新全域輸出偏好並重新呈現各 dedicated view，不改寫輸入欄位單位。
+
+參數：
+    unit_system: 要套用的輸出單位系統。
+
+回傳：
+    無。"""
+        property_view.set_output_unit_system(unit_system)
+        for view in analysis_views.values():
+            view.set_output_unit_system(unit_system)
+
     shell = AppShell(
         page,
         views,
         on_unit_system_change=on_unit_system_change,
-        on_fluid_shortcut=choose_fluid,
         state=workspace_state,
     )
     shell_ref["shell"] = shell

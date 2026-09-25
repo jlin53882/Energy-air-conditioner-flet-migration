@@ -18,6 +18,14 @@ class PsychrometricCalculator:
     無。"""
         self._service = service or PsychrometricService(LegacyPsychrometricModelAdapter())
 
+    @property
+    def service(self) -> PsychrometricService:
+        """回傳被包裝的共用濕空氣服務，供組合根注入其他 application service。
+
+回傳：
+    PsychrometricService。"""
+        return self._service
+
     def calculate_pressure_from_altitude(self, altitude_m):
         """回傳以 pascal 為單位的大氣壓力。
 

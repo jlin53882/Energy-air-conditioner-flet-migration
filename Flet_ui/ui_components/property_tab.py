@@ -19,7 +19,15 @@ from domain.thermodynamics.fluid_policy import resolve_reference_state_policy
 from ..ui.components.engineering_card import EngineeringCard
 from ..ui.components.quantity_input import QuantityInput
 from ..ui.components.result_panel import ResultPanel
-from ..ui.theme import TOKENS
+from ..ui.theme import (
+    TOKENS,
+    card_shadow,
+    chip_button_style,
+    primary_button_style,
+    secondary_button_style,
+    style_dropdown,
+    style_text_field,
+)
 from ..ui.state import WorkspaceState
 
 # PropertyTab 繼承自 ft.Column，使其可以直接作為 Flet UI 中的一個垂直佈局容器。
@@ -100,7 +108,7 @@ class PropertyTab(ft.Column):
         self.reference_state_helper = ft.Text(
             self.ref_state_descriptions["ASHRAE"],
             size=TOKENS.caption,
-            color=ft.Colors.BLUE_GREY_600,
+            color=TOKENS.text_secondary,
         )
         
         # 2. 性質輸入區塊 (Property Input Block)
@@ -184,10 +192,18 @@ class PropertyTab(ft.Column):
 
 
     def _build_workspace_controls(self) -> list[ft.Control]:
-        """以響應式欄位排列已知性質，並隱藏尚未支援的第三條件入口。
+        """建立雙欄工作區：左側為設定與已知條件，右側為結果；底部操作列固定。
+
+窄視窗時兩欄會依序堆疊。第三條件列維持隱藏，直到求解器支援第三個限制條件。
 
 回傳：
-    無。"""
+    由可捲動內容區與固定操作列組成的控制項清單。"""
+        for control in (self.mode_dd, self.ref_state_dd, self.mass_unit_dd):
+            style_dropdown(control)
+        for control in (self.fluid_tf, self.mass_tf):
+            style_text_field(control)
+        self.fluid_tf.prefix_icon = ft.Icons.PROPANE_TANK_OUTLINED
+        self.mass_tf.hint_text = "例如 1.0"
         self.quantity_inputs = []
         condition_rows = []
         for index, row in enumerate(self.input_rows):
@@ -200,27 +216,44 @@ class PropertyTab(ft.Column):
                 unit_control=row["unit"],
             )
             self.quantity_inputs.append(quantity)
-            row["prop"].width = 190
+            style_dropdown(row["prop"])
+            row["prop"].width = None
             row["prop"].height = TOKENS.input_height
             row["val"].height = TOKENS.input_height
             row["unit"].height = TOKENS.input_height
-            property_column = ft.Column(
-                [
-                    ft.Text("性質", size=TOKENS.body, weight=ft.FontWeight.W_500),
-                    row["prop"],
-                ],
-                spacing=TOKENS.spacing_xs,
-                tight=True,
-            )
+            # 性質選單已顯示欄名，因此隱藏數量元件的重複標籤；欄位錯誤仍顯示在數值下方。
+            quantity.label_control.visible = False
+            row["prop"].expand = True
             condition_rows.append(
-                ft.ResponsiveRow(
-                    [
-                        ft.Container(content=property_column, col={"xs": 12, "md": 4}),
-                        ft.Container(content=quantity.control, col={"xs": 12, "md": 8}),
-                    ],
-                    spacing=TOKENS.spacing_md,
-                    run_spacing=TOKENS.spacing_sm,
-                    vertical_alignment=ft.CrossAxisAlignment.START,
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Row(
+                                [
+                                    ft.Container(
+                                        content=ft.Text(str(index + 1), size=TOKENS.caption,
+                                                        weight=ft.FontWeight.W_700,
+                                                        color=ft.Colors.WHITE),
+                                        width=24,
+                                        height=24,
+                                        alignment=ft.Alignment.CENTER,
+                                        bgcolor=TOKENS.primary,
+                                        border_radius=ft.BorderRadius.all(TOKENS.radius_pill),
+                                        tooltip=f"已知性質 {index + 1}",
+                                    ),
+                                    row["prop"],
+                                ],
+                                spacing=TOKENS.spacing_sm + 4,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                            ft.Container(content=quantity.control, padding=ft.Padding.only(left=36)),
+                        ],
+                        spacing=TOKENS.spacing_sm,
+                    ),
+                    padding=TOKENS.spacing_md,
+                    bgcolor=TOKENS.surface_variant,
+                    border=ft.Border.all(1, TOKENS.border),
+                    border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
                 )
             )
         self.input_rows[2]["prop"].visible = False
@@ -228,88 +261,205 @@ class PropertyTab(ft.Column):
         self.input_rows[2]["unit"].visible = False
         condition_rows[2].visible = False
         self.condition_rows = condition_rows
+        self._preset_pairs = (("P", "T"), ("P", "H"), ("P", "S"), ("P", "Q"), ("T", "Q"))
         self.preset_buttons = ft.Row(
             [
-                ft.OutlinedButton(label, on_click=lambda _event, pair=pair: self._apply_property_preset(pair))
-                for label, pair in (("P + T", ("P", "T")), ("P + H", ("P", "H")),
-                                    ("P + S", ("P", "S")), ("P + Q", ("P", "Q")),
-                                    ("T + Q", ("T", "Q")))
-            ], spacing=TOKENS.spacing_sm, wrap=True
+                ft.OutlinedButton(
+                    f"{first} + {second}",
+                    on_click=lambda _event, pair=(first, second): self._apply_property_preset(pair),
+                    tooltip=f"將已知條件設為 {self.prop_names_map[first].split(',', 1)[0]}"
+                            f" 與 {self.prop_names_map[second].split(',', 1)[0]}",
+                )
+                for first, second in self._preset_pairs
+            ],
+            spacing=TOKENS.spacing_sm,
+            run_spacing=TOKENS.spacing_sm,
+            wrap=True,
         )
-        self.extensive_toggle = ft.Checkbox(
-            label="計算廣延性質", value=False, on_change=self._toggle_extensive
+        self._refresh_preset_selection()
+        self.extensive_toggle = ft.Switch(
+            label="計算廣延性質（總焓、總熵、總體積…）",
+            value=False,
+            on_change=self._toggle_extensive,
+            active_color=TOKENS.primary,
         )
         self.extensive_section = ft.Container(
-            content=ft.Row([self.mass_tf, self.mass_unit_dd], spacing=TOKENS.spacing_sm),
+            content=ft.Column(
+                [
+                    ft.Text("總質量", size=TOKENS.body, weight=ft.FontWeight.W_500,
+                            color=TOKENS.text_primary),
+                    ft.Row([self.mass_tf, self.mass_unit_dd], spacing=TOKENS.spacing_sm),
+                ],
+                spacing=6,
+            ),
             visible=False,
         )
         self.result_panel = ResultPanel()
-        self.raw_output = ft.Text("", selectable=True, visible=False)
+        self.raw_output = ft.Text(
+            "", selectable=True, visible=False, font_family=TOKENS.mono_font,
+            size=TOKENS.caption + 1, color=TOKENS.text_primary,
+        )
+        self.result_text.size = TOKENS.caption + 1
+        self.result_text.color = TOKENS.text_secondary
         self.details_button = ft.TextButton(
-            "查看詳細結果", on_click=self._toggle_raw_output, disabled=True
+            "查看詳細結果", icon=ft.Icons.UNFOLD_MORE, on_click=self._toggle_raw_output, disabled=True
         )
         self.copy_result_button = ft.OutlinedButton(
-            "複製結果", icon=ft.Icons.CONTENT_COPY, on_click=self._copy_result, disabled=True
+            "複製結果", icon=ft.Icons.CONTENT_COPY, on_click=self._copy_result, disabled=True,
+            style=secondary_button_style(),
         )
         configuration = EngineeringCard(
             "計算設定",
-            ft.ResponsiveRow([
-                ft.Container(content=self.mode_dd, col={"xs": 12, "md": 4}),
-                ft.Container(content=self.fluid_tf, col={"xs": 12, "md": 4}),
-                ft.Container(
-                    content=ft.Column([self.ref_state_dd, self.reference_state_helper],
-                                      spacing=TOKENS.spacing_xs),
-                    col={"xs": 12, "md": 4},
-                ),
-            ], spacing=TOKENS.spacing_md, run_spacing=TOKENS.spacing_md),
-            "選擇計算引擎、物質與 reference state。",
+            ft.Column(
+                [
+                    ft.ResponsiveRow([
+                        ft.Container(content=self.mode_dd, col={"xs": 12, "md": 4}),
+                        ft.Container(content=self.fluid_tf, col={"xs": 12, "md": 4}),
+                        ft.Container(
+                            content=ft.Column([self.ref_state_dd, self.reference_state_helper],
+                                              spacing=TOKENS.spacing_xs),
+                            col={"xs": 12, "md": 4},
+                        ),
+                    ], spacing=TOKENS.spacing_md, run_spacing=TOKENS.spacing_md,
+                        vertical_alignment=ft.CrossAxisAlignment.START),
+                    self.ideal_gas_cb,
+                ],
+                spacing=TOKENS.spacing_sm,
+            ),
+            "選擇計算引擎、物質與參考狀態（Reference State）。",
+            icon=ft.Icons.SETTINGS_OUTLINED,
         )
         conditions = EngineeringCard(
-            "已知條件（至少兩個）",
+            "已知條件（兩個獨立性質）",
             ft.Column([
-                self.preset_buttons,
-                ft.Column(self.condition_rows, spacing=TOKENS.spacing_md),
-                ft.Text(
-                    "目前狀態查詢只接受兩個獨立性質；混合物組成、流速或高程等第三條件尚未支援，"
-                    "因此暫不提供新增入口。",
-                    size=TOKENS.caption,
-                    color=ft.Colors.BLUE_GREY_600,
+                ft.Column(
+                    [
+                        ft.Text("常用組合", size=TOKENS.caption, color=TOKENS.text_muted,
+                                weight=ft.FontWeight.W_600),
+                        self.preset_buttons,
+                    ],
+                    spacing=6,
+                ),
+                ft.Column(self.condition_rows, spacing=TOKENS.spacing_sm + 4),
+                ft.Row(
+                    [
+                        ft.Icon(ft.Icons.INFO_OUTLINE, size=14, color=TOKENS.text_muted),
+                        ft.Text(
+                            "目前狀態查詢只接受兩個獨立性質；混合物組成、流速或高程等第三條件尚未支援，"
+                            "因此暫不提供新增入口。",
+                            size=TOKENS.caption,
+                            color=TOKENS.text_muted,
+                            expand=True,
+                        ),
+                    ],
+                    spacing=6,
+                    vertical_alignment=ft.CrossAxisAlignment.START,
                 ),
             ], spacing=TOKENS.spacing_md),
+            icon=ft.Icons.TUNE,
         )
         extensive = EngineeringCard(
             "廣延性質",
             ft.Column([self.extensive_toggle, self.extensive_section], spacing=TOKENS.spacing_sm),
-            "需要總質量時才輸入。",
+            "需要總量時才開啟並輸入總質量。",
+            icon=ft.Icons.SCALE_OUTLINED,
+        )
+        self.result_summary_box = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("輸入摘要", size=TOKENS.overline, weight=ft.FontWeight.W_600,
+                            color=TOKENS.text_muted),
+                    self.result_text,
+                ],
+                spacing=4,
+            ),
+            padding=TOKENS.spacing_sm + 4,
+            bgcolor=TOKENS.surface_variant,
+            border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
+        )
+        self.raw_output_box = ft.Container(
+            content=self.raw_output,
+            padding=TOKENS.spacing_sm + 4,
+            bgcolor=TOKENS.surface_muted,
+            border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
         )
         results = EngineeringCard(
             "計算結果",
             ft.Column([
                 self.result_panel,
-                self.result_text,
-                ft.Row([self.details_button, self.copy_result_button]),
-                self.raw_output,
-            ], spacing=TOKENS.spacing_sm),
+                self.result_summary_box,
+                ft.Row([self.details_button, ft.Container(expand=True), self.copy_result_button],
+                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                self.raw_output_box,
+            ], spacing=TOKENS.spacing_sm + 4),
+            "結果由 CoolProp 查詢服務提供；切換輸出單位不會重新查詢。",
+            icon=ft.Icons.INSIGHTS_OUTLINED,
+            accent=TOKENS.accent,
         )
+        self.results_card = results
+        self._sync_result_boxes()
         scroll_area = ft.Column(
-            [configuration, conditions, extensive, results],
+            [
+                configuration,
+                ft.ResponsiveRow(
+                    [
+                        ft.Column(
+                            [conditions, extensive],
+                            spacing=TOKENS.spacing_md,
+                            col={"xs": 12, "lg": 6},
+                        ),
+                        ft.Column([results], spacing=TOKENS.spacing_md, col={"xs": 12, "lg": 6}),
+                    ],
+                    spacing=TOKENS.spacing_md,
+                    run_spacing=TOKENS.spacing_md,
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                ),
+            ],
             spacing=TOKENS.spacing_md,
             expand=True,
             scroll=ft.ScrollMode.AUTO,
         )
+        self.calculate_button = ft.Button(
+            "執行計算", icon=ft.Icons.CALCULATE_OUTLINED,
+            on_click=self.perform_calculation, height=TOKENS.button_height,
+            style=primary_button_style(),
+        )
         self.action_bar = ft.Container(
             content=ft.Row([
-                ft.TextButton("重設", icon=ft.Icons.RESTART_ALT, on_click=self._reset_inputs),
+                ft.OutlinedButton("重設", icon=ft.Icons.RESTART_ALT, on_click=self._reset_inputs,
+                                  style=secondary_button_style()),
                 ft.Container(expand=True),
-                ft.Text("Ctrl + Enter 執行", size=TOKENS.caption, color=ft.Colors.BLUE_GREY_600),
-                ft.Button("執行計算", icon=ft.Icons.CALCULATE_OUTLINED,
-                          on_click=self.perform_calculation, height=TOKENS.button_height),
-            ], spacing=TOKENS.spacing_md),
-            padding=ft.Padding.symmetric(horizontal=TOKENS.spacing_lg, vertical=TOKENS.spacing_sm),
+                ft.Text("Ctrl + Enter 執行", size=TOKENS.caption, color=TOKENS.text_muted),
+                self.calculate_button,
+            ], spacing=TOKENS.spacing_md, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=ft.Padding.symmetric(horizontal=TOKENS.spacing_lg, vertical=TOKENS.spacing_sm + 4),
+            margin=ft.Margin.only(top=TOKENS.spacing_md),
             bgcolor=TOKENS.surface,
-            border=ft.Border.only(top=ft.BorderSide(1, TOKENS.border)),
+            border=ft.Border.all(1, TOKENS.border),
+            border_radius=ft.BorderRadius.all(TOKENS.radius_md),
+            shadow=card_shadow(),
         )
         return [scroll_area, self.action_bar]
+
+    def _sync_result_boxes(self) -> None:
+        """讓摘要與詳細文字外框的可見性跟隨其文字控制項。
+
+回傳：
+    無。"""
+        if hasattr(self, "result_summary_box"):
+            self.result_summary_box.visible = bool(self.result_text.visible)
+            self.raw_output_box.visible = bool(self.raw_output.visible)
+
+    def _refresh_preset_selection(self) -> None:
+        """以目前前兩列的性質組合標示相符的常用組合按鈕。
+
+回傳：
+    無。"""
+        if not hasattr(self, "preset_buttons"):
+            return
+        current = tuple(self.get_prop_code(row["prop"].value) for row in self.input_rows[:2])
+        for button, pair in zip(self.preset_buttons.controls, self._preset_pairs):
+            button.style = chip_button_style(current == pair)
 
     def _apply_property_preset(self, property_codes: tuple[str, str]) -> None:
         """套用性質組合、更新單位選項，並使舊計算結果失效。
@@ -455,10 +605,12 @@ class PropertyTab(ft.Column):
         self.raw_output.value = ""
         self.raw_output.visible = False
         self.details_button.text = "查看詳細結果"
+        self.details_button.icon = ft.Icons.UNFOLD_MORE
         self.details_button.disabled = True
         self.copy_result_button.disabled = True
         self.result_panel.metrics = {}
         self.result_panel.metadata = {}
+        self._sync_result_boxes()
 
     def _mark_calculated_result_stale(self) -> None:
         """清除不再對應目前語意輸入的結果與快取。
@@ -485,6 +637,10 @@ class PropertyTab(ft.Column):
             return
         self.raw_output.visible = not self.raw_output.visible
         self.details_button.text = "隱藏詳細結果" if self.raw_output.visible else "查看詳細結果"
+        self.details_button.icon = (
+            ft.Icons.UNFOLD_LESS if self.raw_output.visible else ft.Icons.UNFOLD_MORE
+        )
+        self._sync_result_boxes()
         try:
             self.update()
         except RuntimeError:
@@ -598,6 +754,7 @@ class PropertyTab(ft.Column):
         self.result_text.visible = True
         self.details_button.disabled = False
         self.copy_result_button.disabled = False
+        self._sync_result_boxes()
 
     def _format_result_metrics(self, si_results: dict[str, object], use_imperial: bool) -> dict[str, str]:
         """將計算結果中可用的數值格式化為結果卡片指標。
@@ -756,6 +913,7 @@ class PropertyTab(ft.Column):
             if hasattr(self, "quantity_inputs"):
                 self.quantity_inputs[row_index].set_error(None)
         self._last_prop_codes[row_index] = prop_code
+        self._refresh_preset_selection()
         if hasattr(self, "quantity_inputs") and prop_code:
             row_label = self.prop_names_map[prop_code].split(",", 1)[0]
             quantity = self.quantity_inputs[row_index]

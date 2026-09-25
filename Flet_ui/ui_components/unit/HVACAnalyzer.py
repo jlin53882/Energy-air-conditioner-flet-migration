@@ -7,8 +7,6 @@
 # 實際的函數，並將它們作為靜態方法附加到 HVACAnalyzer 類別上，
 # 以確保對舊程式碼的 100% 向後兼容性。
 
-import CoolProp.CoolProp as CP # 保留導入，以防萬一
-
 # 從拆分的模組中導入所有計算函數
 from .hvac_calculations.common import (
     calculate_steady_flow_variable,

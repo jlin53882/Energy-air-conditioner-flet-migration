@@ -15,6 +15,9 @@ from .components.result_panel import ResultPanel
 
 logger = logging.getLogger(__name__)
 
+# 既有模組以這些前綴的文字回報未完成的計算，呈現為錯誤而非結果指標。
+_FAILED_RESULT_PREFIXES = ("計算錯誤", "計算失敗")
+
 
 class AnalysisModuleAdapter:
     """擁有單一 category 的 active tool、計算 dispatch 與結果呈現狀態。
@@ -57,6 +60,7 @@ class AnalysisModuleAdapter:
         self._by_key = {definition.key: definition for definition in self.definitions}
         self.active_key = self.definitions[0].key
         self.result_panel = ResultPanel()
+        self.result_text: str | None = None
         self._has_calculated_result = False
         self.output_unit_system = "SI"
         self._sync_visibility()
@@ -86,6 +90,7 @@ class AnalysisModuleAdapter:
             raise KeyError(f"Unknown analysis key: {key}")
         self.active_key = key
         self._has_calculated_result = False
+        self.result_text = None
         self.result_panel.set_status("empty", "尚未執行分析", "請完成必要輸入後執行計算。")
         self._sync_visibility()
 
@@ -106,7 +111,9 @@ class AnalysisModuleAdapter:
         """執行目前選取分析的計算，並以 ResultPanel 呈現狀態。
 
         既有模組目前只能可靠提供 formatted text（而非結構化 metrics）；
-        依 PR #4 規格，此處只呈現 status + primary text，不假造 metric。
+        依 PR #4 規格，此處只保存 status 與原始文字（``result_text``），
+        指標卡片由呈現層從文字投影，不假造 metric。以「計算錯誤」或
+        「計算失敗」開頭的模組文字代表未完成計算，改以錯誤狀態呈現。
 
         ``AnalysisDefinition.calculate`` 一律是統一的
         ``Callable[[bool], str]``；任何模組專屬的呼叫慣例（例如 PsyModule
@@ -121,15 +128,36 @@ class AnalysisModuleAdapter:
         use_imperial = self.output_unit_system == "Imperial"
         try:
             result_string = definition.calculate(use_imperial)
-            self.result_panel.set_status("success", "計算完成", result_string)
-            self._has_calculated_result = True
         except ValueError as ve:
-            self.result_panel.set_error(f"輸入/計算錯誤: {ve}")
-            self._has_calculated_result = False
+            self._record_failure(f"輸入/計算錯誤: {ve}")
+            return
         except Exception as err:
             logger.exception("Unexpected error during analysis calculation")
-            self.result_panel.set_error(f"計算錯誤: {err}")
+            self._record_failure(f"計算錯誤: {err}")
+            return
+        self.result_text = result_string
+        stripped = result_string.strip()
+        if stripped.startswith(_FAILED_RESULT_PREFIXES):
+            self.result_panel.set_error(stripped)
             self._has_calculated_result = False
+            return
+        self.result_panel.set_status(
+            "success", "計算完成", f"{definition.label} · 輸出 {self.output_unit_system}"
+        )
+        self._has_calculated_result = True
+
+    def _record_failure(self, message: str) -> None:
+        """以錯誤狀態記錄計算失敗，並清除先前的結果文字。
+
+        參數：
+            message: 面向使用者的錯誤摘要。
+
+        回傳：
+            無。
+        """
+        self.result_text = None
+        self.result_panel.set_error(message)
+        self._has_calculated_result = False
 
     def set_output_unit_system(self, unit_system: str) -> None:
         """更新輸出單位偏好，並視需要以新單位重新格式化既有結果。

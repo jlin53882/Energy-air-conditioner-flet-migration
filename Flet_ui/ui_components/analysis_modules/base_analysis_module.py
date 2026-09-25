@@ -1,8 +1,11 @@
 # ui_components/analysis_modules/base_analysis_module.py
 # (新介面 - 支援功能群組)
 
+from math import isfinite
+
 import flet as ft
 from ..unit.UnitConverter import UnitConverter
+from ...ui.theme import TOKENS, mono_style, style_text_field
 
 class BaseAnalysisModule:
     """
@@ -84,35 +87,66 @@ class BaseAnalysisModule:
 
         self._last_units[key] = final_default_unit
 
-        label_control = ft.Text(label, size=14)
+        label_control = ft.Text(
+            label, size=TOKENS.body, weight=ft.FontWeight.W_500, color=TOKENS.text_secondary
+        )
+        # 數值與單位合成同一個外框：單位選單放在欄位尾端，仍可逐欄切換。
         val_tf = ft.TextField(
             value=str(default_val),
             keyboard_type=ft.KeyboardType.NUMBER,
-            expand=True
+            expand=True,
+            hint_text="輸入數值",
+            border=ft.InputBorder.NONE,
+            text_size=TOKENS.body + 1,
+            text_style=mono_style(),
+            cursor_color=TOKENS.primary,
+            content_padding=ft.Padding.symmetric(horizontal=14, vertical=12),
         )
-
-        unit_label_control = ft.Text("單位", size=12, color=ft.Colors.BLUE_GREY_600)
         unit_dd = ft.Dropdown(
             value=final_default_unit,
             options=[ft.dropdown.Option(u) for u in units],
-            width=120,
-            disabled=(prop_code == "RH" or prop_code == "Q")
+            width=96,
+            border=ft.InputBorder.NONE,
+            text_size=TOKENS.body - 1,
+            text_align=ft.TextAlign.RIGHT,
+            color=TOKENS.text_muted,
+            trailing_icon=ft.Icon(ft.Icons.EXPAND_MORE, size=16, color=TOKENS.text_muted),
+            selected_trailing_icon=ft.Icon(ft.Icons.EXPAND_LESS, size=16, color=TOKENS.text_muted),
+            content_padding=ft.Padding.only(left=4, right=0),
+            disabled=(prop_code == "RH" or prop_code == "Q"),
+        )
+        field_box = ft.Container(
+            content=ft.Row(
+                controls=[val_tf, unit_dd],
+                spacing=0,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            height=TOKENS.input_height,
+            bgcolor=TOKENS.surface,
+            border=ft.Border.all(1, TOKENS.border_strong),
+            border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
         )
 
-        value_column = ft.Column(
-            controls=[label_control, val_tf],
-            spacing=4,
-            expand=True
-        )
-        unit_column = ft.Column(
-            controls=[unit_label_control, unit_dd],
-            spacing=4,
-            width=120
-        )
-        input_row = ft.Row(
-            controls=[value_column, unit_column],
-            alignment=ft.MainAxisAlignment.START
-        )
+        def set_focused(focused: bool) -> None:
+            """以外框顏色與粗細標示目前聚焦的欄位。
+
+            參數：
+                focused: 欄位是否取得焦點。
+
+            回傳：
+                無。
+            """
+            field_box.border = ft.Border.all(
+                2 if focused else 1, TOKENS.primary if focused else TOKENS.border_strong
+            )
+            try:
+                field_box.update()
+            except RuntimeError:
+                pass
+
+        val_tf.on_focus = lambda _event: set_focused(True)
+        val_tf.on_blur = lambda _event: set_focused(False)
+        input_row = ft.Column(controls=[label_control, field_box], spacing=6)
 
         self.all_entries[key] = {
             "val": val_tf,
@@ -120,9 +154,201 @@ class BaseAnalysisModule:
             "ui_row": input_row,
             "prop_code": prop_code,
             "label_control": label_control,
-            "unit_label_control": unit_label_control,
+            "field_box": field_box,
         }
         return self.all_entries[key] # 返回字典
+
+    def create_text_row(self, key: str, label: str, default_val: str, hint: str = "") -> ft.TextField:
+        """建立框外欄名的文字輸入列（例如流體名稱），儲存在 ``self.text_entries``。
+
+參數：
+    key: 此輸入在模組中的識別鍵。
+    label: 欄位名稱。
+    default_val: 預設文字。
+    hint: 選用的提示文字。
+
+回傳：
+    建立的 TextField；外層列控制項可由 ``self.text_entries[key]["ui_row"]`` 取得。"""
+        field = style_text_field(ft.TextField(
+            value=default_val,
+            hint_text=hint or None,
+            expand=True,
+            height=TOKENS.input_height,
+        ))
+        label_control = ft.Text(label, size=TOKENS.body, weight=ft.FontWeight.W_500,
+                                color=TOKENS.text_primary)
+        if not hasattr(self, "text_entries"):
+            self.text_entries = {}
+        self.text_entries[key] = {
+            "val": field,
+            "label_control": label_control,
+            "ui_row": ft.Column([label_control, field], spacing=6),
+        }
+        return field
+
+    def read_text(self, key: str) -> str:
+        """讀取文字輸入列，空白時以欄名提示錯誤。
+
+參數：
+    key: create_text_row 使用的識別鍵。
+
+回傳：
+    去除前後空白的文字。
+
+引發：
+    ValueError：欄位空白時。"""
+        entry = self.text_entries[key]
+        text = (entry["val"].value or "").strip()
+        if not text:
+            raise ValueError(f"請輸入「{entry['label_control'].value}」。")
+        return text
+
+    def read_si(self, key: str) -> float:
+        """讀取一個輸入列並換算為 canonical SI；無效數值以欄名提示錯誤。
+
+參數：
+    key: create_input_row 使用的識別鍵。
+
+回傳：
+    SI 數值。
+
+引發：
+    ValueError：欄位空白或不是有限數字時。"""
+        entry = self.all_entries[key]
+        label = entry["label_control"].value
+        raw_value = (entry["val"].value or "").strip()
+        try:
+            value = float(raw_value)
+        except ValueError:
+            raise ValueError(f"「{label}」請輸入有效數值。") from None
+        if not isfinite(value):
+            raise ValueError(f"「{label}」必須是有限數字。")
+        return self.unit_converter.convert_to_si(entry["prop_code"], value, entry["unit"].value)
+
+    def read_si_list(self, key: str) -> list[float]:
+        """讀取以逗號分隔的多筆數值並換算為 SI。
+
+參數：
+    key: create_input_row 使用的識別鍵。
+
+回傳：
+    SI 數值清單（至少一筆）。
+
+引發：
+    ValueError：沒有數值或任一筆不是有限數字時。"""
+        entry = self.all_entries[key]
+        label = entry["label_control"].value
+        values = []
+        for raw_value in (entry["val"].value or "").split(","):
+            raw_value = raw_value.strip()
+            if not raw_value:
+                continue
+            try:
+                value = float(raw_value)
+            except ValueError:
+                raise ValueError(f"「{label}」包含無效數值：{raw_value}") from None
+            if not isfinite(value):
+                raise ValueError(f"「{label}」必須是有限數字。")
+            values.append(self.unit_converter.convert_to_si(entry["prop_code"], value, entry["unit"].value))
+        if not values:
+            raise ValueError(f"「{label}」請至少輸入一筆數值。")
+        return values
+
+    def bind_independent_unit_sync(self, keys: list[str]) -> None:
+        """讓每個輸入列的單位選單獨立換算自己的數值。
+
+參數：
+    keys: 要綁定的輸入列識別鍵。
+
+回傳：
+    無。"""
+        for key in keys:
+            entry = self.all_entries[key]
+            entry["unit"].on_select = self._create_unit_sync_handler(entry["prop_code"], [key])
+
+    def retarget_input_row(self, key: str, prop_code: str, unit_code: str) -> None:
+        """把一個獨立換算的輸入列改為另一個物理量（例如錶壓力 ↔ 絕對壓力）。
+
+只更新性質代碼、單位選項、目前單位與單位換算處理器；數值由呼叫端決定如何
+換算，本方法不改動欄位數值。
+
+參數：
+    key: create_input_row 使用的識別鍵。
+    prop_code: 新的 UnitConverter 性質代碼。
+    unit_code: 新的目前單位，必須是該性質已註冊的單位。
+
+回傳：
+    無。
+
+引發：
+    ValueError：單位不屬於該性質時。"""
+        units = self.unit_converter.get_available_units(prop_code)
+        if unit_code not in units:
+            raise ValueError(f"Unknown unit '{unit_code}' for property '{prop_code}'")
+        entry = self.all_entries[key]
+        entry["prop_code"] = prop_code
+        entry["unit"].options = [ft.dropdown.Option(unit) for unit in units]
+        entry["unit"].value = unit_code
+        self._last_units[key] = unit_code
+        entry["unit"].on_select = self._create_unit_sync_handler(prop_code, [key])
+
+    def bind_multi_value_unit_sync(self, keys: list[str]) -> None:
+        """讓逗號分隔多筆數值的輸入列在切換單位時逐筆換算。
+
+無法解析的片段保持原樣，由計算時的驗證提示使用者。
+
+參數：
+    keys: 要綁定的輸入列識別鍵。
+
+回傳：
+    無。"""
+        for key in keys:
+            entry = self.all_entries[key]
+
+            def on_select(event, key=key, entry=entry) -> None:
+                """逐筆換算數值並記錄新單位。
+
+參數：
+    event: 單位選單的 Flet 事件。
+    key: 輸入列識別鍵。
+    entry: 輸入列控制項。
+
+回傳：
+    無。"""
+                old_unit = self._last_units.get(key)
+                new_unit = entry["unit"].value
+                if old_unit and new_unit and old_unit != new_unit:
+                    converted = []
+                    for part in (entry["val"].value or "").split(","):
+                        text = part.strip()
+                        try:
+                            value_si = self.unit_converter.convert_to_si(entry["prop_code"], float(text), old_unit)
+                            converted.append(f"{self.unit_converter.convert_from_si(entry['prop_code'], value_si, new_unit):.6g}")
+                        except ValueError:
+                            converted.append(text)
+                    entry["val"].value = ", ".join(item for item in converted if item)
+                self._last_units[key] = new_unit
+                try:
+                    entry["val"].update()
+                except RuntimeError:
+                    pass
+
+            entry["unit"].on_select = on_select
+
+    @staticmethod
+    def section_label(text: str) -> ft.Control:
+        """建立表單中的小節標題。
+
+參數：
+    text: 小節名稱。
+
+回傳：
+    小節標題控制項。"""
+        return ft.Container(
+            content=ft.Text(text, size=TOKENS.caption, weight=ft.FontWeight.W_600,
+                            color=TOKENS.text_muted),
+            padding=ft.Padding.only(top=TOKENS.spacing_xs),
+        )
 
     def _create_unit_sync_handler(self, prop_code, sync_group):
         """建立單位同步處理器
@@ -143,7 +369,8 @@ class BaseAnalysisModule:
 
                 for item_key in sync_group:
                     controls = self.all_entries.get(item_key)
-                    if not controls: continue
+                    if not controls:
+                        continue
                     
                     val_tf = controls["val"]
                     unit_dd = controls["unit"]

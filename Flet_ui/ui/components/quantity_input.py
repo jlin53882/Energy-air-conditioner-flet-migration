@@ -2,7 +2,7 @@
 
 import flet as ft
 
-from ..theme import TOKENS
+from ..theme import TOKENS, style_dropdown, style_text_field
 
 
 class QuantityInput:
@@ -36,17 +36,24 @@ class QuantityInput:
             expand=True,
         )
         self.unit_control = unit_control or ft.Dropdown(width=118, height=TOKENS.input_height)
+        style_text_field(self.value_control)
+        style_dropdown(self.unit_control)
+        self.value_control.hint_text = self.value_control.hint_text or "輸入數值"
         self.helper_text = helper_text
-        self.label_control = ft.Text(label, size=TOKENS.body, weight=ft.FontWeight.W_500)
-        self.error_control = ft.Text("", size=TOKENS.caption, color=TOKENS.error, visible=False)
+        self.label_control = ft.Text(
+            label, size=TOKENS.body, weight=ft.FontWeight.W_500, color=TOKENS.text_primary
+        )
+        self.error_control = ft.Text(
+            "", size=TOKENS.caption, color=TOKENS.error, visible=False
+        )
         content: list[ft.Control] = [
             self.label_control,
             ft.Row([self.value_control, self.unit_control], spacing=TOKENS.spacing_sm),
             self.error_control,
         ]
         if helper_text:
-            content.append(ft.Text(helper_text, size=TOKENS.caption, color=ft.Colors.BLUE_GREY_600))
-        self.control = ft.Column(content, spacing=TOKENS.spacing_xs, tight=True, expand=True)
+            content.append(ft.Text(helper_text, size=TOKENS.caption, color=TOKENS.text_muted))
+        self.control = ft.Column(content, spacing=6, tight=True, expand=True)
 
     def set_error(self, message: str | None) -> None:
         """在欄位旁顯示驗證訊息，避免錯誤只出現在全域提示中。

@@ -43,16 +43,17 @@ def test_navigation_uses_stable_route_ids_and_exposes_existing_calculators() -> 
     } <= route_ids
 
 
-def test_app_shell_owns_sidebar_top_bar_workspace_and_context_panel() -> None:
+def test_app_shell_owns_sidebar_top_bar_and_workspace() -> None:
     """確認應用程式外殼包含必要的導覽與工作區區域。
+
+    原本的右側情境面板已移除（常用冷媒捷徑移到首頁、快捷鍵提示在頂端列），
+    讓計算頁取得完整寬度。
 
 回傳：
     無。"""
     shell = _module("Flet_ui.ui.app_shell")
     assert hasattr(shell, "AppShell")
-    assert {"sidebar", "top_bar", "workspace", "context_panel"} <= set(
-        shell.AppShell.REGIONS
-    )
+    assert {"sidebar", "top_bar", "workspace"} <= set(shell.AppShell.REGIONS)
 
 
 def test_shared_quantity_input_keeps_value_and_unit_semantically_together() -> None:

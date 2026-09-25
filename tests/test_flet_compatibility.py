@@ -57,6 +57,25 @@ class DummyPage:
     無。"""
 
 
+def _control_tree_contains(root: object, target: object) -> bool:
+    """深度搜尋 Flet 控制項樹，判斷目標控制項是否位於 root 之下。
+
+參數：
+    root: 搜尋起點控制項。
+    target: 要尋找的控制項實例。
+
+回傳：
+    target 為 root 本身或其子孫控制項時回傳 True。"""
+    if root is target:
+        return True
+    children = []
+    content = getattr(root, "content", None)
+    if content is not None and not isinstance(content, str):
+        children.append(content)
+    children.extend(getattr(root, "controls", None) or [])
+    return any(_control_tree_contains(child, target) for child in children)
+
+
 def test_flet_1_api_surface_is_available() -> None:
     """確認已遷移 APIs 存在，且已移除 APIs 未被引用。
 
@@ -193,11 +212,11 @@ def test_shared_analysis_input_labels_are_outside_field_borders() -> None:
         for key in entry_keys:
             entry = modules[module_name].all_entries[key]
             input_row = entry["ui_row"]
-            assert entry["label_control"] in input_row.controls[0].controls
-            assert entry["val"] in input_row.controls[0].controls
+            # 欄名在外框之上；數值與單位選單合成同一個外框，單位位於欄位尾端。
+            assert input_row.controls[0] is entry["label_control"]
+            assert input_row.controls[1] is entry["field_box"]
+            assert entry["field_box"].content.controls == [entry["val"], entry["unit"]]
             assert entry["val"].label is None
-            assert entry["unit_label_control"] in input_row.controls[1].controls
-            assert entry["unit"] in input_row.controls[1].controls
             assert entry["unit"].label is None
 
     for module_name, key in (
@@ -597,7 +616,6 @@ def test_app_shell_replaces_top_level_tabs_and_exposes_implemented_routes() -> N
     assert shell.sidebar is not None
     assert shell.top_bar is not None
     assert shell.workspace is not None
-    assert shell.context_panel is not None
     assert {"thermo_properties", "compressor", "evaporator", "condenser",
             "psychrometrics", "ph_chart", "ts_chart"} <= set(shell.views)
     assert shell.route_header.controls[0].value == "狀態查詢"
@@ -702,7 +720,7 @@ def test_route_switching_retains_valid_result_and_invalidates_on_tool_switch() -
     evaporator_view = shell.views["evaporator"]
     evaporator_view.workspace.action_bar.content.on_click(SimpleNamespace())
     assert evaporator_view.adapter.result_panel.status == "success"
-    evaporator_result_a = evaporator_view.adapter.result_panel._body.controls[1].value
+    evaporator_result_a = evaporator_view.adapter.result_text
 
     shell.navigate("condenser")
     condenser_view = shell.views["condenser"]
@@ -711,7 +729,7 @@ def test_route_switching_retains_valid_result_and_invalidates_on_tool_switch() -
 
     shell.navigate("evaporator")
     assert evaporator_view.adapter.result_panel.status == "success"
-    assert evaporator_view.adapter.result_panel._body.controls[1].value == evaporator_result_a
+    assert evaporator_view.adapter.result_text == evaporator_result_a
 
     # 切換 tool 必須清空目前畫面的舊結果（select() 已設 status="empty"）；
     # evaporator 目前只有單一 tool，因此改用可切換的 psychrometrics 驗證。
@@ -750,8 +768,8 @@ def test_property_query_hides_unsupported_third_condition_and_aligns_controls() 
         assert row["prop"].height == row["val"].height == row["unit"].height
 
 
-def test_responsive_shell_collapses_sidebar_and_context_panel() -> None:
-    """確認窄視窗會收合側邊導覽並隱藏選用情境面板。
+def test_responsive_shell_collapses_sidebar() -> None:
+    """確認窄視窗會收合側邊導覽，中版改為精簡圖示列。
 
 回傳：
     無。"""
@@ -762,14 +780,12 @@ def test_responsive_shell_collapses_sidebar_and_context_panel() -> None:
 
     assert isinstance(shell.content_row, ft.Stack)
     assert shell.sidebar.visible is False
-    assert shell.context_panel.visible is False
     assert shell.workspace_region.padding.left == 0
     page.width = 1024
     shell._on_resize(None)
     assert shell.sidebar.visible is True
     assert shell.sidebar.width == 76
     assert shell.workspace_region.padding.left == 76
-    assert shell.context_panel.visible is False
     page.width = 760
     shell._on_resize(None)
     shell._toggle_sidebar(None)
@@ -1693,8 +1709,9 @@ def test_property_raw_output_is_not_the_same_control_as_result_summary(
 
     assert tab.raw_output is not tab.result_text
     assert not hasattr(tab.result_panel, "raw_output")
-    result_card_content = tab.controls[0].controls[-1].content.controls[-1]
-    assert tab.result_text in result_card_content.controls
+    assert _control_tree_contains(tab.results_card, tab.result_text)
+    assert _control_tree_contains(tab.controls[0], tab.results_card)
+    assert not _control_tree_contains(tab.result_panel, tab.result_text)
     assert tab.raw_output.visible is False
     assert tab.result_text.visible is True
     assert tab.raw_output.value == tab._last_formatted_output

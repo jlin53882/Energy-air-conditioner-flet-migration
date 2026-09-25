@@ -2,6 +2,13 @@
 from domain.units.converter import CanonicalUnitConverter
 # 職責：只處理單位轉換。不認識 CoolProp，也不執行任何熱力學計算。
 
+# 錶壓力（相對於大氣壓力的壓差）只存在於通道層：application／domain 一律只接受
+# 絕對壓力 Pa。錶壓力單位與同尺度的絕對壓力單位一一對應，換算因子共用 canonical
+# 壓力定義（壓力單位沒有零點偏移，壓差與絕對壓力使用相同尺度）。
+GAUGE_PRESSURE = "PGauge"
+GAUGE_TO_ABSOLUTE_UNIT = {"Pag": "Pa", "kPag": "kPa", "MPag": "MPa", "barg": "bar", "psig": "psia"}
+ABSOLUTE_TO_GAUGE_UNIT = {absolute: gauge for gauge, absolute in GAUGE_TO_ABSOLUTE_UNIT.items()}
+
 class UnitConverter:
     def __init__(self):
         """
@@ -20,6 +27,8 @@ class UnitConverter:
         - 能量 (E): J (焦耳)  <--- 新增
         - 乾度 (Q): - (無單位)
         - 相對濕度 (RH): % (百分比)
+        - 錶壓力 (PGauge): Pa 錶壓（相對大氣壓力的壓差；只供通道層輸入，
+          交給 application 前須以 gauge_to_absolute_pa() 換成絕對壓力）
         """
         
         # --- 單位定義 (使用者介面預設顯示) ---
@@ -33,7 +42,8 @@ class UnitConverter:
             "VolumeFlow": "m³/s",
             "EntropyFlow": "kW/K",
             "Eff": "%",
-            
+            "DeltaT": "K",
+            GAUGE_PRESSURE: "kPag",
         }
         self.imperial_units = {
             "P": "psia", "T": "°F", "H": "Btu/lbm", "S": "Btu/(lbm.R)",
@@ -46,6 +56,8 @@ class UnitConverter:
             "VolumeFlow": "m³/s",
             "EntropyFlow": "kW/K",
             "Eff": "%",
+            "DeltaT": "°F",
+            GAUGE_PRESSURE: "psig",
         }
         
         # 定義從 SI 基礎單位 (Pa, K, J/kg...) 的轉換
@@ -95,6 +107,7 @@ class UnitConverter:
         # 這裡的順序將決定下拉選單中的順序
         self.unit_order = {
             "P": ["Pa","kPa","MPa", "bar", "psia"],
+            GAUGE_PRESSURE: ["Pag", "kPag", "MPag", "barg", "psig"],
             "T": ["K", "°C", "°F"],
             "H": ["J/kg", "kJ/kg", "Btu/lbm"],
             "U": ["J/kg", "kJ/kg", "Btu/lbm"],
@@ -104,7 +117,8 @@ class UnitConverter:
             "L": ["m", "ft"],
             "Mass": ["kg", "lbm"],
             "MassFlow": ["kg/s", "lbm/s"],
-            "Power": ["W", "kW", "Btu/h"],
+            "Power": ["W", "kW", "Btu/h", "RT", "kcal/h"],
+            "DeltaT": ["K", "°C", "°F"],
             "E": ["J", "kJ", "Btu"],
             "W": ["kg/kg", "g/kg", "lbm/lbm", "gr/lbm"],
             "RH": ["%"],
@@ -116,9 +130,9 @@ class UnitConverter:
             "EntropyFlow": ["W/K", "kW/K", "Btu/(h.R)"], # Btu/(h.R) (CFM)
         }
         
-        # 建立完整的轉換映射表
-        self.conversion_map = self._build_conversion_map()
+        # 建立完整的轉換映射表（錶壓力換算依賴 canonical 壓力定義，須先建立）
         self._canonical_converter = CanonicalUnitConverter()
+        self.conversion_map = self._build_conversion_map()
 
     def _build_conversion_map(self):
         """
@@ -138,6 +152,7 @@ class UnitConverter:
             "VolumeFlow": "m³/s",
             "EntropyFlow": "W/K",
             "Eff": "%",
+            "DeltaT": "K",
         }
 
         # 收集所有屬性代碼
@@ -205,7 +220,8 @@ class UnitConverter:
         cmap["E"]["from_si"]["kJ"] = lambda x: x * 1e-3
         
         # 濕度比 (W), SI: kg/kg
-        if "W" not in cmap: cmap["W"] = {"to_si": {}, "from_si": {}} # 確保 W 存在
+        if "W" not in cmap:
+            cmap["W"] = {"to_si": {}, "from_si": {}} # 確保 W 存在
         cmap["W"]["to_si"]["g/kg"] = lambda x: x / 1000.0
         cmap["W"]["from_si"]["g/kg"] = lambda x: x * 1000.0
         cmap["W"]["to_si"]["lbm/lbm"] = lambda x: x
@@ -214,7 +230,8 @@ class UnitConverter:
         cmap["W"]["from_si"]["gr/lbm"] = lambda x: x * 7000.0
 
         # 面積 (Area), SI: m²
-        if "Area" not in cmap: cmap["Area"] = {"to_si": {}, "from_si": {}}
+        if "Area" not in cmap:
+            cmap["Area"] = {"to_si": {}, "from_si": {}}
         cmap["Area"]["to_si"]["cm²"] = lambda x: x * 1e-4
         cmap["Area"]["from_si"]["cm²"] = lambda x: x * 1e4
         cmap["Area"]["to_si"]["mm²"] = lambda x: x * 1e-6
@@ -225,14 +242,16 @@ class UnitConverter:
         cmap["Area"]["from_si"]["in²"] = lambda x: x / 0.00064516
         
         # 速度 (Velocity), SI: m/s
-        if "Velocity" not in cmap: cmap["Velocity"] = {"to_si": {}, "from_si": {}}
+        if "Velocity" not in cmap:
+            cmap["Velocity"] = {"to_si": {}, "from_si": {}}
         cmap["Velocity"]["to_si"]["ft/s"] = lambda x: x * 0.3048
         cmap["Velocity"]["from_si"]["ft/s"] = lambda x: x / 0.3048
         cmap["Velocity"]["to_si"]["ft/min"] = lambda x: x * 0.00508 # (0.3048 / 60)
         cmap["Velocity"]["from_si"]["ft/min"] = lambda x: x / 0.00508
 
         # 體積流率 (VolumeFlow), SI: m³/s
-        if "VolumeFlow" not in cmap: cmap["VolumeFlow"] = {"to_si": {}, "from_si": {}}
+        if "VolumeFlow" not in cmap:
+            cmap["VolumeFlow"] = {"to_si": {}, "from_si": {}}
         # m³/h (正確)
         cmap["VolumeFlow"]["to_si"]["m³/h"] = lambda x: x / 3600.0
         cmap["VolumeFlow"]["from_si"]["m³/h"] = lambda x: x * 3600.0
@@ -252,14 +271,16 @@ class UnitConverter:
         cmap["VolumeFlow"]["from_si"]["ft³/min"] = lambda x: x / 0.000471947        
         
         # 熵流率 (EntropyFlow), SI: W/K
-        if "EntropyFlow" not in cmap: cmap["EntropyFlow"] = {"to_si": {}, "from_si": {}}
+        if "EntropyFlow" not in cmap:
+            cmap["EntropyFlow"] = {"to_si": {}, "from_si": {}}
         cmap["EntropyFlow"]["to_si"]["kW/K"] = lambda x: x * 1e3
         cmap["EntropyFlow"]["from_si"]["kW/K"] = lambda x: x * 1e-3
         cmap["EntropyFlow"]["to_si"]["Btu/(h.R)"] = lambda x: x * 0.527528
         cmap["EntropyFlow"]["from_si"]["Btu/(h.R)"] = lambda x: x / 0.527528
 
         # **效率 (Eff), SI: 小數 (無單位)**
-        if "Eff" not in cmap: cmap["Eff"] = {"to_si": {}, "from_si": {}}
+        if "Eff" not in cmap:
+            cmap["Eff"] = {"to_si": {}, "from_si": {}}
         # 顯示: % (例如 80) -> SI: 小數 (例如 0.8)
         cmap["Eff"]["to_si"]["%"] = lambda x: x / 100.0 
         # SI: 小數 (例如 0.8) -> 顯示: % (例如 80)
@@ -267,46 +288,113 @@ class UnitConverter:
 
 
         # **相對濕度 (RH), SI: 小數 (無單位)**
-        if "RH" not in cmap: cmap["RH"] = {"to_si": {}, "from_si": {}}
+        if "RH" not in cmap:
+            cmap["RH"] = {"to_si": {}, "from_si": {}}
         # 顯示: % (例如 80) -> SI: 小數 (例如 0.8)
         cmap["RH"]["to_si"]["%"] = lambda x: x / 100.0 
         # SI: 小數 (例如 0.8) -> 顯示: % (例如 80)
         cmap["RH"]["from_si"]["%"] = lambda x: x * 100.0
         
+        # 冷凍噸 (US RT) 與 kcal/h 為冷凍空調實務常用的能力單位。SI: W
+        cmap["Power"]["to_si"]["RT"] = lambda x: x * 3516.853
+        cmap["Power"]["from_si"]["RT"] = lambda x: x / 3516.853
+        cmap["Power"]["to_si"]["kcal/h"] = lambda x: x * 1.163
+        cmap["Power"]["from_si"]["kcal/h"] = lambda x: x / 1.163
+
+        # 錶壓力 (PGauge), SI: Pa 錶壓。沿用對應絕對壓力單位的 canonical 換算因子。
+        for gauge_unit, absolute_unit in GAUGE_TO_ABSOLUTE_UNIT.items():
+            cmap[GAUGE_PRESSURE]["to_si"][gauge_unit] = (
+                lambda v, unit=absolute_unit: self._canonical_converter.convert_to_si("P", v, unit)
+            )
+            cmap[GAUGE_PRESSURE]["from_si"][gauge_unit] = (
+                lambda v, unit=absolute_unit: self._canonical_converter.convert_from_si("P", v, unit)
+            )
+
+        # 溫差 (DeltaT), SI: K。溫差沒有零點偏移，°C 差值等於 K，°F 差值乘以 5/9。
+        cmap["DeltaT"]["to_si"]["°C"] = lambda x: x
+        cmap["DeltaT"]["from_si"]["°C"] = lambda x: x
+        cmap["DeltaT"]["to_si"]["°F"] = lambda x: x * 5.0 / 9.0
+        cmap["DeltaT"]["from_si"]["°F"] = lambda x: x * 9.0 / 5.0
+
         return cmap
+
+    def _conversion(self, prop_code, direction, unit_code):
+        """查找已註冊的轉換函式；找不到時明確報錯，不做恆等轉換。
+
+參數：
+    prop_code (str): 性質代碼。
+    direction (str): "to_si" 或 "from_si"。
+    unit_code (str): 單位代碼。
+
+回傳：
+    Callable[[float], float]：轉換函式。
+
+引發：
+    ValueError：性質或單位未註冊時。"""
+        if prop_code not in self.conversion_map:
+            raise ValueError(f"Unknown property '{prop_code}'")
+        try:
+            return self.conversion_map[prop_code][direction][unit_code]
+        except KeyError:
+            raise ValueError(f"Unknown unit '{unit_code}' for property '{prop_code}'") from None
 
     def convert_to_si(self, prop_code, value, unit_code):
         """將顯示單位值轉換為 SI 基礎單位 (比性質)。
 
+核心熱力性質交由 canonical converter；其他性質使用本通道註冊的轉換。
+未註冊的性質或單位一律引發 ValueError，不會把原值當成 SI 值。
+
 參數：
-    prop_code (未指定型別): 函數輸入值。
-    value (未指定型別): 函數輸入值。
-    unit_code (未指定型別): 函數輸入值。
+    prop_code (str): 性質代碼。
+    value (float): 顯示單位的數值。
+    unit_code (str): 顯示單位。
 
 回傳：
-    未指定型別：函數計算或處理後的結果。"""
+    float：SI 基礎單位的數值。
+
+引發：
+    ValueError：性質或單位未註冊時。"""
         if prop_code in self._canonical_converter.CORE_PROPERTIES:
             return self._canonical_converter.convert_to_si(prop_code, value, unit_code)
-        if prop_code in self.conversion_map and unit_code in self.conversion_map[prop_code]["to_si"]:
-            return self.conversion_map[prop_code]["to_si"][unit_code](value)
-        return value # 如果找不到轉換，返回原值
+        return self._conversion(prop_code, "to_si", unit_code)(value)
 
     def convert_from_si(self, prop_code, value_si, unit_code):
         """將 SI 單位值轉換為目標顯示單位 (比性質)。
 
 參數：
-    prop_code (未指定型別): 函數輸入值。
-    value_si (未指定型別): 函數輸入值。
-    unit_code (未指定型別): 函數輸入值。
+    prop_code (str): 性質代碼。
+    value_si (float): SI 基礎單位的數值。
+    unit_code (str): 目標顯示單位。
 
 回傳：
-    未指定型別：函數計算或處理後的結果。"""
+    float：顯示單位的數值。
+
+引發：
+    ValueError：性質或單位未註冊時。"""
         if prop_code in self._canonical_converter.CORE_PROPERTIES:
             return self._canonical_converter.convert_from_si(prop_code, value_si, unit_code)
-        if prop_code in self.conversion_map and unit_code in self.conversion_map[prop_code]["from_si"]:
-            return self.conversion_map[prop_code]["from_si"][unit_code](value_si)
-        return value_si # 如果找不到轉換，返回原值
+        return self._conversion(prop_code, "from_si", unit_code)(value_si)
         
+    @staticmethod
+    def gauge_to_absolute_pa(gauge_pa, atmospheric_pa):
+        """把錶壓力（Pa 錶壓）加上大氣絕對壓力，換成交給 application 的絕對壓力。
+
+參數：
+    gauge_pa (float): 以 PGauge 換算後的錶壓力（Pa）。
+    atmospheric_pa (float): 大氣絕對壓力（Pa）。
+
+回傳：
+    float：絕對壓力（Pa）。
+
+引發：
+    ValueError：大氣壓力不是正值，或換算後的絕對壓力不是正值時。"""
+        if atmospheric_pa <= 0:
+            raise ValueError("大氣壓力必須是大於 0 的絕對壓力。")
+        absolute_pa = gauge_pa + atmospheric_pa
+        if absolute_pa <= 0:
+            raise ValueError("錶壓力加上大氣壓力後的絕對壓力必須大於 0。")
+        return absolute_pa
+
     # --- 修改 ---
     def get_available_units(self, prop_code):
         """安全地返回所有可用的單位列表，並依照 self.unit_order 排序。

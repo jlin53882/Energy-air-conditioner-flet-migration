@@ -33,9 +33,11 @@ channel adapters / entrypoints
 
 負責規範性的物理量、單位定義、熱力學計算、HVAC 方程式、濕空氣中立結果模型，以及程序全域的參考狀態政策。它不知道 Flet 控制項、Telegram 更新或顯示格式。
 
+`domain/refrigeration/` 負責蒸氣壓縮循環與過熱度／過冷度判讀，透過 `ThermodynamicStateProvider` 協定取得 canonical SI 狀態；`domain/psychrometrics/processes.py` 負責空氣處理過程的質量／能量平衡。
+
 ### `application/`
 
-負責請求模型與 `PropertyQueryService` 等協調工作。它驗證請求形狀並協調領域服務。不負責呈現控制項或訊息。
+負責請求模型與 `PropertyQueryService`、`AirProcessService`（空氣處理過程）、`RefrigerationService`（冷凍循環、過熱度判讀與其 reference-state policy）等協調工作。它驗證請求形狀並協調領域服務。不負責呈現控制項或訊息。
 
 ### `infrastructure/`
 
@@ -53,6 +55,8 @@ channel adapters / entrypoints
 
 負責無頭圖表狀態模型與解析。現有的圖表呈現與取樣仍屬於通道／基礎設施職責。
 
+`chart/psychrometric.py` 以 `PsychrometricService` 取樣濕空氣線圖的飽和線、等相對濕度線與等焓線，只產生曲線資料。
+
 ### 進入點
 
 `run.py` 以中立的記錄設定組合並啟動 Flet 應用程式。Telegram 有自己的 bot 進入點與設定邊界。目前 repository 中沒有獨立的 `bootstrap/` 套件。
@@ -64,6 +68,8 @@ channel adapters / entrypoints
 ## 5. 熱力學邊界
 
 `ThermodynamicStateService` 在轉接器邊界接受顯示單位中的已知物性，將其轉換為 canonical SI，執行 CoolProp 或理想氣體計算，並回傳中立的數值結果。相容性外觀可以保留通道專用行為，但在契約已完成整合的地方，必須將 canonical quantities 委派給共用服務。
+
+核心熱力性質的單位換算以 `domain.units.CanonicalUnitConverter` 為準；各通道的換算器（例如 Flet 的 `UnitConverter`）只負責顯示單位，核心性質必須委派給它，並對未註冊的性質或單位明確報錯。錶壓力等通道專屬語意在通道層換成絕對 SI 後才進入 application／domain（見 `docs/domain-contracts.md`）。
 
 ## 6. HVAC 邊界
 

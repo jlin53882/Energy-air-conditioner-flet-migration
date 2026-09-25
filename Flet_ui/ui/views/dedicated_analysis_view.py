@@ -11,9 +11,11 @@ from __future__ import annotations
 import flet as ft
 
 from ..analysis_module_adapter import AnalysisModuleAdapter
+from ..analysis_presentation import presentation_for
 from ..components.analysis_workspace import AnalysisWorkspace
 from ..components.tool_selector import ToolSelector
 from ..state import WorkspaceState
+from ..structured_result import structured_from_text
 
 
 class DedicatedAnalysisView(ft.Column):
@@ -32,6 +34,7 @@ class DedicatedAnalysisView(ft.Column):
         subtitle: str,
         modules: list[object],
         workspace_state: WorkspaceState | None = None,
+        tool_label: str = "分析項目",
     ) -> None:
         """組合 tool selector、輸入堆疊與結果面板。
 
@@ -40,6 +43,7 @@ class DedicatedAnalysisView(ft.Column):
             subtitle: 頁面副標題。
             modules: 此分類使用的既有分析模組實例清單。
             workspace_state: 選用的共用工作區狀態；用於讀取全域輸出單位。
+            tool_label: 分析項目選單的欄位名稱。
 
         回傳：
             無。
@@ -53,11 +57,14 @@ class DedicatedAnalysisView(ft.Column):
             self.adapter.output_unit_system = workspace_state.output_unit_system
 
         tool_items = self.adapter.tool_items()
+        # 選單顯示 analysis_presentation 的短標籤，完整名稱顯示在輸入卡中；
+        # dispatch 仍只使用 key。
         self.tool_selector = ToolSelector(
-            items=tool_items,
+            items=[(key, self._short_label(key, label)) for key, label in tool_items],
             selected=self.adapter.active_key,
             on_change=self._handle_tool_change,
             disabled=len(tool_items) <= 1,
+            label=tool_label,
         )
 
         seen_ui_ids: set[int] = set()
@@ -77,8 +84,63 @@ class DedicatedAnalysisView(ft.Column):
             result_panel=self.adapter.result_panel,
             on_calculate=self._handle_calculate,
             show_execute_button=self.adapter.active_definition.show_execute_button,
+            show_tool_selector=len(tool_items) > 1,
         )
         self.controls = [self.workspace]
+        self._sync_presentation()
+
+    @staticmethod
+    def _short_label(key: str, label: str) -> str:
+        """回傳工具按鈕使用的短標籤；未定義時沿用完整名稱。
+
+        參數：
+            key: 分析定義 key。
+            label: 分析完整名稱。
+
+        回傳：
+            str：按鈕顯示文字。
+        """
+        presentation = presentation_for(key)
+        return presentation.short_label if presentation and presentation.short_label else label
+
+    def _sync_presentation(self) -> None:
+        """依目前選取的分析更新輸入卡片說明與結果區。
+
+        回傳：
+            無。
+        """
+        definition = self.adapter.active_definition
+        presentation = presentation_for(definition.key)
+        self.workspace.show_analysis(
+            definition.label,
+            presentation.summary if presentation else "",
+            presentation.formula if presentation and presentation.formula else "",
+        )
+        self._show_result()
+
+    def _show_result(self) -> None:
+        """以 adapter 目前的結果與選取分析的結果圖表重繪結果區。
+
+        回傳：
+            無。
+        """
+        definition = self.adapter.active_definition
+        structured = None
+        if self.adapter.result_panel.status == "success":
+            if definition.structured_result:
+                structured = definition.structured_result()
+            else:
+                # 尚未直接提供結構化結果的模組：由格式化文字重新排版，關鍵數值
+                # 依分析說明表宣告的結果名稱挑選。
+                presentation = presentation_for(definition.key)
+                structured = structured_from_text(
+                    self.adapter.result_text,
+                    key_labels=presentation.key_metrics if presentation else (),
+                    chart_title=presentation.chart_title if presentation else "圖表",
+                )
+        self.workspace.show_result(
+            self.adapter.result_text, chart=definition.result_chart, structured=structured
+        )
 
     @property
     def active_key(self) -> str:
@@ -119,6 +181,7 @@ class DedicatedAnalysisView(ft.Column):
         self.adapter.select(key)
         self.workspace.set_action_bar_visible(self.adapter.active_definition.show_execute_button)
         self._on_tool_selected(key)
+        self._sync_presentation()
         self._refresh()
 
     def _on_tool_selected(self, key: str) -> None:
@@ -141,6 +204,7 @@ class DedicatedAnalysisView(ft.Column):
             無。
         """
         self.adapter.calculate()
+        self._show_result()
         self._refresh()
 
     def perform_calculation(self, event: ft.ControlEvent | None) -> None:
@@ -164,6 +228,7 @@ class DedicatedAnalysisView(ft.Column):
             無。
         """
         self.adapter.set_output_unit_system(unit_system)
+        self._show_result()
         self._refresh()
 
     def _refresh(self) -> None:

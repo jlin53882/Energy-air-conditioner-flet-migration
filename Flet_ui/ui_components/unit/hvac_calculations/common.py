@@ -1,8 +1,6 @@
 # hvac_calculations/common.py
 # 職責：通用的熱力學計算 (穩態流、熵)
 
-import CoolProp.CoolProp as CP # exerpy 計算需要
-
 #輔助計算方程式
 def calculate_steady_flow_variable(
     rho1=None, A1=None, V1=None,

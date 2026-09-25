@@ -84,3 +84,19 @@ def test_selected_adapters_do_not_call_coolprop_directly() -> None:
             and node.func.id in {"PropsSI", "AbstractState"}
             for node in ast.walk(tree)
         )
+
+
+def test_new_domain_calculations_use_service_boundaries() -> None:
+    """冷凍循環與空氣處理只能透過狀態服務協定取得性質，不得直接呼叫 CoolProp 或舊版濕空氣 model。
+
+回傳：
+    無。"""
+    sources = _python_sources("domain/refrigeration") + [
+        ROOT / "domain/psychrometrics/processes.py",
+        ROOT / "chart/psychrometric.py",
+    ]
+    for source_path in sources:
+        modules = _imports(source_path)
+        assert not any(module.startswith("CoolProp") for module in modules), source_path
+        assert not any("PsychrometricChart" in module for module in modules), source_path
+        assert not any(module.startswith(("Flet_ui", "flet", "matplotlib")) for module in modules), source_path
