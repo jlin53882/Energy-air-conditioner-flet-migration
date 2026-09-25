@@ -17,14 +17,11 @@ from application.property_queries import PropertyQueryService
 from Flet_ui.ui_components.analysis_modules.psy_module import PsyModule
 from Flet_ui.ui_components.analysis_modules import thermo_diagram_module
 from Flet_ui.ui_components.analysis_modules.thermo_diagram_module import ThermoDiagramModule
-from Flet_ui.ui_components.analysis_tab import AnalysisTab
 from Flet_ui.ui.analysis_module_adapter import AnalysisModuleAdapter
 from Flet_ui.ui.state import WorkspaceState
 from Flet_ui.ui.views.thermo_diagram_view import ThermoDiagramView
 from Flet_ui.ui_components.property_tab import PropertyTab
-from Flet_ui.ui_components.unit.HVACAnalyzer import HVACAnalyzer
 from Flet_ui.ui_components.unit.PropertyFormatter import PropertyFormatter
-from Flet_ui.ui_components.unit.PsychrometricCalculator import PsychrometricCalculator
 from Flet_ui.ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
 from Flet_ui.ui_components.unit.UnitConverter import UnitConverter
 
@@ -75,6 +72,21 @@ def _control_tree_contains(root: object, target: object) -> bool:
     children.extend(getattr(root, "controls", None) or [])
     return any(_control_tree_contains(child, target) for child in children)
 
+
+
+def _production_analysis_modules() -> dict[str, object]:
+    """由正式進入點建構工作區，回傳各 dedicated view 使用的分析模組（以類別名稱為鍵）。
+
+回傳：
+    類別名稱對應模組實例的字典。"""
+    page = DummyPage()
+    flet_main(page)
+    modules: dict[str, object] = {}
+    for view in page.controls[0].views.values():
+        adapter = getattr(view, "adapter", None)
+        for module in getattr(adapter, "modules", []):
+            modules[type(module).__name__] = module
+    return modules
 
 def test_flet_1_api_surface_is_available() -> None:
     """確認已遷移 APIs 存在，且已移除 APIs 未被引用。
@@ -157,7 +169,7 @@ def test_thermo_diagram_uses_consistent_pressure_units_and_refreshes_existing_ch
 
 
 def test_flet_tabs_and_analysis_controls_construct() -> None:
-    """不啟動桌面工作階段，直接建構已遷移的兩個分頁。
+    """不啟動桌面工作階段，直接建構物性查詢分頁與完整分析工作區。
 
 回傳：
     無。"""
@@ -171,16 +183,9 @@ def test_flet_tabs_and_analysis_controls_construct() -> None:
         page=page,
         query_service=PropertyQueryService(state_calculator.state_service),
     )
-    analysis_tab = AnalysisTab(
-        unit_converter=converter,
-        page=page,
-        analyzer=HVACAnalyzer(),
-        psy_calculator=PsychrometricCalculator(),
-        state_calculator=state_calculator,
-    )
+    flet_main(DummyPage())
 
     assert property_tab.controls
-    assert analysis_tab.controls
     assert property_tab.result_panel.status == "empty"
     assert property_tab.scroll is None
     assert property_tab.controls[-1] is property_tab.action_bar
@@ -193,15 +198,7 @@ def test_shared_analysis_input_labels_are_outside_field_borders() -> None:
 回傳：
     無。
 """
-    converter = UnitConverter()
-    analysis_tab = AnalysisTab(
-        unit_converter=converter,
-        page=DummyPage(),
-        analyzer=HVACAnalyzer(),
-        psy_calculator=PsychrometricCalculator(),
-        state_calculator=ThermoStateCalculator(converter),
-    )
-    modules = {type(module).__name__: module for module in analysis_tab.modules_to_load}
+    modules = _production_analysis_modules()
     cases = {
         "CompressorModule": ("cr_pe", "cr_pc"),
         "EvaporatorModule": ("qe_h1", "qe_h2", "qe_m_dot"),
@@ -360,15 +357,7 @@ def test_psychrometric_unit_dropdowns_use_selection_event_and_sync_temperature()
 
 回傳：
     無。"""
-    page = DummyPage()
-    analysis_tab = AnalysisTab(
-        unit_converter=UnitConverter(),
-        page=page,
-        analyzer=HVACAnalyzer(),
-        psy_calculator=PsychrometricCalculator(),
-        state_calculator=ThermoStateCalculator(UnitConverter()),
-    )
-    module = next(item for item in analysis_tab.modules_to_load if isinstance(item, PsyModule))
+    module = _production_analysis_modules()["PsyModule"]
     tdb = module.all_entries["psy_tdb"]
     twb = module.all_entries["psy_twb"]
     altitude = module.all_entries["psy_alt"]
@@ -406,53 +395,22 @@ def test_analysis_output_toggle_reformats_existing_result() -> None:
 回傳：
     無。"""
     page = DummyPage()
-    converter = UnitConverter()
-    analysis_tab = AnalysisTab(
-        unit_converter=converter,
-        page=page,
-        analyzer=HVACAnalyzer(),
-        psy_calculator=PsychrometricCalculator(),
-        state_calculator=ThermoStateCalculator(converter),
-    )
-    module = next(item for item in analysis_tab.modules_to_load if isinstance(item, PsyModule))
-    analysis_tab.analysis_dd.value = "濕空氣性質 (已知乾球與相對濕度)"
-    analysis_tab.on_analysis_change(None)
+    flet_main(page)
+    shell = page.controls[0]
+    shell.navigate("psychrometrics")
+    view = shell.views["psychrometrics"]
+    module = view.adapter.modules[0]
+    view._handle_tool_change(PsyModule.MODE_TDB_RH)
     module.all_entries["psy_tdb"]["val"].value = "25"
     module.all_entries["psy_rh"]["val"].value = "88"
-    analysis_tab.calculate_analysis(None)
-    si_result = analysis_tab.result_text.value
-    analysis_tab.output_unit_toggle.selected = ["Imperial"]
-    analysis_tab.output_unit_toggle.on_change(None)
-    imperial_result = analysis_tab.result_text.value
+    view.perform_calculation(None)
+    si_result = view.adapter.result_text
+    shell.unit_toggle.selected = ["Imperial"]
+    shell.unit_toggle.on_change(SimpleNamespace(control=shell.unit_toggle))
+    imperial_result = view.adapter.result_text
+    assert view.result_panel.status == "success"
     assert imperial_result != si_result
     assert "°F" in imperial_result
-
-
-def test_analysis_hides_generic_execute_button_for_thermodiagram() -> None:
-    """熱力圖使用專屬繪圖按鈕，不顯示共用的執行分析按鈕。
-
-回傳：
-    無。"""
-    converter = UnitConverter()
-    analysis_tab = AnalysisTab(
-        unit_converter=converter,
-        page=DummyPage(),
-        analyzer=HVACAnalyzer(),
-        psy_calculator=PsychrometricCalculator(),
-        state_calculator=ThermoStateCalculator(converter),
-    )
-
-    assert analysis_tab.calc_button_container.visible is True
-    analysis_tab.analysis_dd.value = "熱力圖繪製"
-    analysis_tab.on_analysis_change(None)
-
-    heatmap = next(item for item in analysis_tab.modules_to_load if isinstance(item, ThermoDiagramModule))
-    assert analysis_tab.calc_button_container.visible is False
-    assert heatmap.plot_btn.visible is True
-
-    analysis_tab.analysis_dd.value = next(name for name in analysis_tab.analysis_map if name != "熱力圖繪製")
-    analysis_tab.on_analysis_change(None)
-    assert analysis_tab.calc_button_container.visible is True
 
 
 def test_chart_routes_use_dedicated_diagram_view_without_shared_execute_button() -> None:
@@ -587,20 +545,18 @@ def test_analysis_selection_clears_cached_result_before_unit_refresh() -> None:
 
 回傳：
     無。"""
-    converter = UnitConverter()
-    analysis_tab = AnalysisTab(
-        unit_converter=converter,
-        page=DummyPage(),
-        analyzer=HVACAnalyzer(),
-        psy_calculator=PsychrometricCalculator(),
-        state_calculator=ThermoStateCalculator(converter),
-    )
-    analysis_tab._has_calculated_result = True
-    analysis_tab.analysis_dd.value = list(analysis_tab.analysis_map)[1]
+    page = DummyPage()
+    flet_main(page)
+    view = page.controls[0].views["refrigeration_cycle"]
+    view.perform_calculation(None)
+    assert view.adapter._has_calculated_result is True
 
-    analysis_tab.on_analysis_change(None)
+    view._handle_tool_change("cycle.superheat_subcooling")
+    view.set_output_unit_system("Imperial")
 
-    assert analysis_tab._has_calculated_result is False
+    assert view.adapter._has_calculated_result is False
+    assert view.adapter.result_text is None
+    assert view.result_panel.status == "empty"
 
 
 def test_app_shell_replaces_top_level_tabs_and_exposes_implemented_routes() -> None:
@@ -1186,12 +1142,9 @@ def test_flet_text_theme_styles_use_theme_style_parameter() -> None:
 
 回傳：
     無。"""
-    for relative_path in (
-        "Flet_ui/ui_components/property_tab.py",
-        "Flet_ui/ui_components/analysis_tab.py",
-    ):
-        source = (Path(__file__).parents[1] / relative_path).read_text(encoding="utf-8")
-        assert ", style=ft.TextThemeStyle" not in source
+    for path in (Path(__file__).parents[1] / "Flet_ui").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        assert ", style=ft.TextThemeStyle" not in source, path
 
 
 def test_launcher_uses_flet_only_entrypoint() -> None:

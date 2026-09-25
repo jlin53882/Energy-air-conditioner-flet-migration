@@ -69,7 +69,7 @@ class CompressorModule(BaseAnalysisModule):
     def get_analysis_definitions(self) -> dict:
         """
         回報此模組提供的 *所有* 功能。
-        AnalysisTab 將會自動讀取這個字典來建立下拉選單。
+        CompressorView 透過 AnalysisModuleAdapter 讀取這個字典建立分析項目選單。
         """
         return {
             "壓縮比 (CR)": {
@@ -943,30 +943,3 @@ class CompressorModule(BaseAnalysisModule):
         self.all_entries["ref_rho1"]["unit"].on_select = self._create_unit_sync_handler("D", ["ref_rho1"])
 
         # "ref_eta_vol" (效率) 使用 "RH" 代理，單位下拉選單被禁用，無需同步
-
-
-    # --- 13. 由 AnalysisTab 呼叫的特定方法 (不變) ---
-    def update_atm_pressure_default(self, use_imperial: bool):
-        """由 AnalysisTab 呼叫，用於更新大氣壓力預設值
-
-參數：
-    use_imperial (bool): 函數輸入值。
-
-回傳：
-    無。"""
-        atm_p_controls = self.all_entries["cr_atm_p"]
-        atm_p_si_base = 101325.0
-        
-        if use_imperial:
-            new_unit = self.unit_converter.imperial_units["P"]
-            new_val = self.unit_converter.convert_from_si("P", atm_p_si_base, new_unit)
-        else:
-            new_unit = "kPa"
-            new_val = self.unit_converter.convert_from_si("P", atm_p_si_base, new_unit)
-        
-        atm_p_controls["val"].value = f"{new_val:.5g}"
-        atm_p_controls["unit"].value = new_unit
-        self._last_units["cr_atm_p"] = new_unit
-        
-        if self.cr_ui_container.parent: # 安全檢查
-            self.cr_ui_container.update()

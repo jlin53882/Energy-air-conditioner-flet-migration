@@ -24,36 +24,33 @@ BOUNDARY_SOURCE_COOLANT = "coolant"
 class CondenserModule(BaseAnalysisModule):
     def __init__(self, unit_converter: UnitConverter, page: ft.Page, analyzer: HVACAnalyzer,
                  state_calculator: ThermoStateCalculator,
-                 refrigeration_service: RefrigerationService | None = None):
+                 refrigeration_service: RefrigerationService):
         super().__init__(unit_converter, page, analyzer=analyzer,
                          state_calculator=state_calculator)
         
         self.analyzer: HVACAnalyzer = self.services.get("analyzer")
         self.state_calculator: ThermoStateCalculator = self.services.get("state_calculator")
-        # Exergy 分析需要冷凍 application service；只有新版工作區注入時才註冊，
-        # 舊版 AnalysisTab 的分析清單維持不變。
+        # Exergy 分析使用冷凍 application service。
         self.refrigeration = refrigeration_service
 
         self._build_qc_ui()
         self._setup_unit_sync()
-        self.exergy_ui = self._build_exergy_ui() if refrigeration_service is not None else None
+        self.exergy_ui = self._build_exergy_ui()
         
         
     def get_analysis_definitions(self) -> dict:
-        definitions = {
+        return {
             "冷凝器交換率 (Qcon)": {
                 "analysis_id": "condenser.heat_rate",
                 "ui": self.qc_ui_container,
                 "calc_func": self.calculate_qe
             },
-        }
-        if self.exergy_ui is not None:
-            definitions["冷凝器 Exergy 分析"] = {
+            "冷凝器 Exergy 分析": {
                 "analysis_id": "condenser.exergy",
                 "ui": self.exergy_ui,
                 "calc_func": self.calculate_exergy,
-            }
-        return definitions
+            },
+        }
 
     # --- 1. 冷凝器交換率 (Qcon) 相關 ---
     def _build_qc_ui(self):

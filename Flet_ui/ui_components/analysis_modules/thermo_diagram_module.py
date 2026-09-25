@@ -26,7 +26,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
         self._setup_unit_sync() # (修改) 現在會呼叫我們覆寫的 _setup_unit_sync
 
     # ======================================================
-    # 模組登錄：讓 analysis_tab 自動載入
+    # 模組登錄：提供 AnalysisDefinition 所需的註冊資料
     # ======================================================
     def get_analysis_definitions(self):
         """提供熱力圖分析的註冊資料與專屬結果呈現設定。

@@ -491,27 +491,28 @@ def test_analysis_ids_are_semantic_and_unique() -> None:
 
 回傳：
     無。"""
-    from Flet_ui.ui_components.analysis_tab import AnalysisTab
-    from Flet_ui.ui_components.unit.HVACAnalyzer import HVACAnalyzer
-    from Flet_ui.ui_components.unit.PsychrometricCalculator import PsychrometricCalculator
-    from Flet_ui.ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
+    from Flet_ui.flet_app import main as flet_main
 
     class DummyPage:
-        overlay: list[object] = []
-        controls: list[object] = []
+        def __init__(self) -> None:
+            self.overlay: list[object] = []
+            self.controls: list[object] = []
+
+        def add(self, *controls: object) -> None:
+            self.controls.extend(controls)
 
         def update(self) -> None:
             pass
 
-    tab = AnalysisTab(
-        unit_converter=UnitConverter(),
-        page=DummyPage(),
-        analyzer=HVACAnalyzer(),
-        psy_calculator=PsychrometricCalculator(),
-        state_calculator=ThermoStateCalculator(UnitConverter()),
-    )
-    definitions = list(tab.analysis_map.values())
-    ids = [definition["analysis_id"] for definition in definitions]
+    page = DummyPage()
+    flet_main(page)
+    ids = [
+        definition.key
+        for view in page.controls[0].views.values()
+        if hasattr(view, "adapter")
+        for definition in view.adapter.definitions
+    ]
+    assert ids
     assert len(ids) == len(set(ids))
     assert all("Module." not in analysis_id for analysis_id in ids)
     assert all(not analysis_id.rsplit(".", 1)[-1].isdigit() for analysis_id in ids)
