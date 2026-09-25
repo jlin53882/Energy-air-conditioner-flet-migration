@@ -269,7 +269,7 @@ def test_unit_switch_does_not_recalculate_with_edited_inputs(shell, edited_value
     _switch_unit_system(shell, "Imperial")
 
     assert view.result_panel.status == "warning"
-    assert "輸入已變更" in view.result_panel.message
+    assert view.result_panel.title == "輸入已變更"
     assert view.adapter.result_text is None
     assert view.workspace.result_view.chart_column.visible is False
     assert module.all_entries["cyc_te"]["val"].value == edited_value

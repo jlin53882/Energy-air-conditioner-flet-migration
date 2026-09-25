@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import logging
 
+import flet as ft
+
 from .analysis_definition import AnalysisDefinition, definitions_from_module
 from .components.result_panel import ResultPanel
 
@@ -17,6 +19,38 @@ logger = logging.getLogger(__name__)
 
 # 既有模組以這些前綴的文字回報未完成的計算，呈現為錯誤而非結果指標。
 _FAILED_RESULT_PREFIXES = ("計算錯誤", "計算失敗")
+
+
+def input_snapshot(root: ft.Control) -> tuple[tuple[str, object], ...]:
+    """依控制項樹的固定順序擷取所有輸入控制項目前的值。
+
+    只收集使用者可編輯的輸入（文字欄位、下拉選單、核取方塊、開關、單選群組與
+    分段按鈕），用來判斷兩個時間點之間輸入是否被修改；不讀取任何模組專屬欄位。
+
+    參數：
+        root: 分析定義的輸入控制項（``AnalysisDefinition.input_view``）。
+
+    回傳：
+        tuple：依走訪順序排列的 (控制項類型, 值)。
+    """
+    values: list[tuple[str, object]] = []
+    stack: list[ft.Control] = [root]
+    while stack:
+        control = stack.pop()
+        if isinstance(control, (ft.TextField, ft.Dropdown, ft.Checkbox, ft.Switch, ft.RadioGroup)):
+            values.append((type(control).__name__, control.value))
+        elif isinstance(control, ft.SegmentedButton):
+            values.append((type(control).__name__, tuple(control.selected or ())))
+        children: list[ft.Control] = []
+        content = getattr(control, "content", None)
+        if isinstance(content, ft.Control):
+            children.append(content)
+        for attribute in ("controls", "actions"):
+            nested = getattr(control, attribute, None)
+            if isinstance(nested, list):
+                children.extend(child for child in nested if isinstance(child, ft.Control))
+        stack.extend(reversed(children))
+    return tuple(values)
 
 
 class AnalysisModuleAdapter:
@@ -62,6 +96,8 @@ class AnalysisModuleAdapter:
         self.result_panel = ResultPanel()
         self.result_text: str | None = None
         self._has_calculated_result = False
+        # 最近一次成功計算當下的輸入快照；用來判斷切換單位時輸入是否已修改。
+        self._calculated_inputs: tuple[tuple[str, object], ...] | None = None
         self.output_unit_system = "SI"
         self._sync_visibility()
 
@@ -145,6 +181,7 @@ class AnalysisModuleAdapter:
             "success", "計算完成", f"{definition.label} · 輸出 {self.output_unit_system}"
         )
         self._has_calculated_result = True
+        self._calculated_inputs = input_snapshot(definition.input_view)
 
     def _record_failure(self, message: str) -> None:
         """以錯誤狀態記錄計算失敗，並清除先前的結果文字。
@@ -174,8 +211,18 @@ class AnalysisModuleAdapter:
             無。
         """
         self.output_unit_system = unit_system
-        if self._has_calculated_result:
-            self.calculate()
+        if not self._has_calculated_result:
+            return
+        # 模組只輸出格式化文字，換單位必須重新計算；但輸入若已在計算後被修改，
+        # 重新計算會把尚未送出的輸入當成原結果呈現，因此改為使結果失效。
+        if input_snapshot(self.active_definition.input_view) != self._calculated_inputs:
+            self.result_text = None
+            self._has_calculated_result = False
+            self.result_panel.set_status(
+                "warning", "輸入已變更", "舊結果已清除，請使用目前輸入重新執行計算。"
+            )
+            return
+        self.calculate()
 
     def tool_items(self) -> list[tuple[str, str]]:
         """提供給 ToolSelector 使用的 (key, label) 清單。
