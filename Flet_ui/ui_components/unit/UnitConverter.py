@@ -2,6 +2,13 @@
 from domain.units.converter import CanonicalUnitConverter
 # 職責：只處理單位轉換。不認識 CoolProp，也不執行任何熱力學計算。
 
+# 錶壓力（相對於大氣壓力的壓差）只存在於通道層：application／domain 一律只接受
+# 絕對壓力 Pa。錶壓力單位與同尺度的絕對壓力單位一一對應，換算因子共用 canonical
+# 壓力定義（壓力單位沒有零點偏移，壓差與絕對壓力使用相同尺度）。
+GAUGE_PRESSURE = "PGauge"
+GAUGE_TO_ABSOLUTE_UNIT = {"Pag": "Pa", "kPag": "kPa", "MPag": "MPa", "barg": "bar", "psig": "psia"}
+ABSOLUTE_TO_GAUGE_UNIT = {absolute: gauge for gauge, absolute in GAUGE_TO_ABSOLUTE_UNIT.items()}
+
 class UnitConverter:
     def __init__(self):
         """
@@ -20,6 +27,8 @@ class UnitConverter:
         - 能量 (E): J (焦耳)  <--- 新增
         - 乾度 (Q): - (無單位)
         - 相對濕度 (RH): % (百分比)
+        - 錶壓力 (PGauge): Pa 錶壓（相對大氣壓力的壓差；只供通道層輸入，
+          交給 application 前須以 gauge_to_absolute_pa() 換成絕對壓力）
         """
         
         # --- 單位定義 (使用者介面預設顯示) ---
@@ -34,7 +43,7 @@ class UnitConverter:
             "EntropyFlow": "kW/K",
             "Eff": "%",
             "DeltaT": "K",
-            
+            GAUGE_PRESSURE: "kPag",
         }
         self.imperial_units = {
             "P": "psia", "T": "°F", "H": "Btu/lbm", "S": "Btu/(lbm.R)",
@@ -48,6 +57,7 @@ class UnitConverter:
             "EntropyFlow": "kW/K",
             "Eff": "%",
             "DeltaT": "°F",
+            GAUGE_PRESSURE: "psig",
         }
         
         # 定義從 SI 基礎單位 (Pa, K, J/kg...) 的轉換
@@ -97,6 +107,7 @@ class UnitConverter:
         # 這裡的順序將決定下拉選單中的順序
         self.unit_order = {
             "P": ["Pa","kPa","MPa", "bar", "psia"],
+            GAUGE_PRESSURE: ["Pag", "kPag", "MPag", "barg", "psig"],
             "T": ["K", "°C", "°F"],
             "H": ["J/kg", "kJ/kg", "Btu/lbm"],
             "U": ["J/kg", "kJ/kg", "Btu/lbm"],
@@ -119,9 +130,9 @@ class UnitConverter:
             "EntropyFlow": ["W/K", "kW/K", "Btu/(h.R)"], # Btu/(h.R) (CFM)
         }
         
-        # 建立完整的轉換映射表
-        self.conversion_map = self._build_conversion_map()
+        # 建立完整的轉換映射表（錶壓力換算依賴 canonical 壓力定義，須先建立）
         self._canonical_converter = CanonicalUnitConverter()
+        self.conversion_map = self._build_conversion_map()
 
     def _build_conversion_map(self):
         """
@@ -283,6 +294,15 @@ class UnitConverter:
         cmap["Power"]["to_si"]["kcal/h"] = lambda x: x * 1.163
         cmap["Power"]["from_si"]["kcal/h"] = lambda x: x / 1.163
 
+        # 錶壓力 (PGauge), SI: Pa 錶壓。沿用對應絕對壓力單位的 canonical 換算因子。
+        for gauge_unit, absolute_unit in GAUGE_TO_ABSOLUTE_UNIT.items():
+            cmap[GAUGE_PRESSURE]["to_si"][gauge_unit] = (
+                lambda v, unit=absolute_unit: self._canonical_converter.convert_to_si("P", v, unit)
+            )
+            cmap[GAUGE_PRESSURE]["from_si"][gauge_unit] = (
+                lambda v, unit=absolute_unit: self._canonical_converter.convert_from_si("P", v, unit)
+            )
+
         # 溫差 (DeltaT), SI: K。溫差沒有零點偏移，°C 差值等於 K，°F 差值乘以 5/9。
         cmap["DeltaT"]["to_si"]["°C"] = lambda x: x
         cmap["DeltaT"]["from_si"]["°C"] = lambda x: x
@@ -323,6 +343,26 @@ class UnitConverter:
             return self.conversion_map[prop_code]["from_si"][unit_code](value_si)
         return value_si # 如果找不到轉換，返回原值
         
+    @staticmethod
+    def gauge_to_absolute_pa(gauge_pa, atmospheric_pa):
+        """把錶壓力（Pa 錶壓）加上大氣絕對壓力，換成交給 application 的絕對壓力。
+
+參數：
+    gauge_pa (float): 以 PGauge 換算後的錶壓力（Pa）。
+    atmospheric_pa (float): 大氣絕對壓力（Pa）。
+
+回傳：
+    float：絕對壓力（Pa）。
+
+引發：
+    ValueError：大氣壓力不是正值，或換算後的絕對壓力不是正值時。"""
+        if atmospheric_pa <= 0:
+            raise ValueError("大氣壓力必須是大於 0 的絕對壓力。")
+        absolute_pa = gauge_pa + atmospheric_pa
+        if absolute_pa <= 0:
+            raise ValueError("錶壓力加上大氣壓力後的絕對壓力必須大於 0。")
+        return absolute_pa
+
     # --- 修改 ---
     def get_available_units(self, prop_code):
         """安全地返回所有可用的單位列表，並依照 self.unit_order 排序。

@@ -176,7 +176,7 @@ def test_refrigeration_cycle_route_plots_cycle_on_ph_chart(shell) -> None:
 
 
 def test_superheat_tool_converts_gauge_pressure(shell) -> None:
-    """錶壓力加上大氣壓力後判讀；切換為絕對壓力時隱藏大氣壓力欄位。
+    """錶壓力加上大氣壓力後判讀；切換為絕對壓力時隱藏大氣壓力欄位，實際壓力不變。
 
 回傳：
     無。"""
@@ -194,10 +194,19 @@ def test_superheat_tool_converts_gauge_pressure(shell) -> None:
     module.sh_pressure_type.selected = ["Absolute"]
     module.on_pressure_type_change(None)
     assert module.all_entries["sh_atm"]["ui_row"].visible is False
+    assert module.all_entries["sh_p"]["unit"].value == "kPa"
     view.perform_calculation(None)
-    assert "900.00 kPa" in view.adapter.result_text
+    # 切換模式時數值換算為同一個實際壓力：900 kPag → 1001.325 kPa。
+    assert "1001.33 kPa" in view.adapter.result_text
+
+    view.set_output_unit_system("Imperial")
+    assert "145.23 psia" in view.adapter.result_text
+    view.set_output_unit_system("SI")
+
     module.sh_pressure_type.selected = ["Gauge"]
     module.on_pressure_type_change(None)
+    assert module.all_entries["sh_p"]["unit"].value == "kPag"
+    assert float(module.all_entries["sh_p"]["val"].value) == pytest.approx(900.0)
 
 
 def test_empty_fluid_name_is_reported_by_label(shell) -> None:

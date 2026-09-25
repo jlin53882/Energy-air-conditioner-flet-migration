@@ -266,6 +266,32 @@ class BaseAnalysisModule:
             entry = self.all_entries[key]
             entry["unit"].on_select = self._create_unit_sync_handler(entry["prop_code"], [key])
 
+    def retarget_input_row(self, key: str, prop_code: str, unit_code: str) -> None:
+        """把一個獨立換算的輸入列改為另一個物理量（例如錶壓力 ↔ 絕對壓力）。
+
+只更新性質代碼、單位選項、目前單位與單位換算處理器；數值由呼叫端決定如何
+換算，本方法不改動欄位數值。
+
+參數：
+    key: create_input_row 使用的識別鍵。
+    prop_code: 新的 UnitConverter 性質代碼。
+    unit_code: 新的目前單位，必須是該性質已註冊的單位。
+
+回傳：
+    無。
+
+引發：
+    ValueError：單位不屬於該性質時。"""
+        units = self.unit_converter.get_available_units(prop_code)
+        if unit_code not in units:
+            raise ValueError(f"Unknown unit '{unit_code}' for property '{prop_code}'")
+        entry = self.all_entries[key]
+        entry["prop_code"] = prop_code
+        entry["unit"].options = [ft.dropdown.Option(unit) for unit in units]
+        entry["unit"].value = unit_code
+        self._last_units[key] = unit_code
+        entry["unit"].on_select = self._create_unit_sync_handler(prop_code, [key])
+
     def bind_multi_value_unit_sync(self, keys: list[str]) -> None:
         """讓逗號分隔多筆數值的輸入列在切換單位時逐筆換算。
 
