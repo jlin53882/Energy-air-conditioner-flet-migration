@@ -147,3 +147,66 @@ def test_switching_air_process_tool_hides_previous_chart(shell) -> None:
 
     assert view.result_panel.status == "empty"
     assert view.workspace.result_view.chart_host.visible is False
+
+
+def test_refrigeration_cycle_route_plots_cycle_on_ph_chart(shell) -> None:
+    """冷凍循環路由以預設值求解，顯示 COP 並在 P-h 圖上畫出循環。
+
+回傳：
+    無。"""
+    shell.navigate("refrigeration_cycle")
+    view = shell.views["refrigeration_cycle"]
+
+    assert view.active_key == "cycle.vapor_compression"
+    view.perform_calculation(None)
+
+    chart_host = view.workspace.result_view.chart_host
+    assert view.result_panel.status == "success", view.result_panel.message
+    assert "冷房 COP" in view.adapter.result_text
+    assert chart_host.visible is True
+    title = chart_host.content.figure.axes[0].get_title()
+    assert "P-h" in title and "R32" in title
+
+
+def test_superheat_tool_converts_gauge_pressure(shell) -> None:
+    """錶壓力加上大氣壓力後判讀；切換為絕對壓力時隱藏大氣壓力欄位。
+
+回傳：
+    無。"""
+    shell.navigate("refrigeration_cycle")
+    view = shell.views["refrigeration_cycle"]
+    view._handle_tool_change("cycle.superheat_subcooling")
+    module = view.adapter.modules[0]
+
+    view.perform_calculation(None)
+    assert view.result_panel.status == "success", view.result_panel.message
+    assert "過熱蒸氣" in view.adapter.result_text
+    assert "1001.33 kPa" in view.adapter.result_text
+    assert view.workspace.result_view.chart_host.visible is False
+
+    module.sh_pressure_type.selected = ["Absolute"]
+    module.on_pressure_type_change(None)
+    assert module.all_entries["sh_atm"]["ui_row"].visible is False
+    view.perform_calculation(None)
+    assert "900.00 kPa" in view.adapter.result_text
+    module.sh_pressure_type.selected = ["Gauge"]
+    module.on_pressure_type_change(None)
+
+
+def test_empty_fluid_name_is_reported_by_label(shell) -> None:
+    """冷媒欄位空白時以欄名提示。
+
+回傳：
+    無。"""
+    shell.navigate("refrigeration_cycle")
+    view = shell.views["refrigeration_cycle"]
+    view._handle_tool_change("cycle.vapor_compression")
+    module = view.adapter.modules[0]
+    module.text_entries["cyc_fluid"]["val"].value = " "
+    try:
+        view.perform_calculation(None)
+    finally:
+        module.text_entries["cyc_fluid"]["val"].value = "R32"
+
+    assert view.result_panel.status == "error"
+    assert "冷媒" in view.result_panel.message

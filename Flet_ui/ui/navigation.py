@@ -41,6 +41,10 @@ ROUTES = (
         description="以進出口焓值與質量流率計算冷凝器放熱率。",
     ),
     WorkspaceRoute(
+        "refrigeration_cycle", "冷凍循環", "冷凍系統", "LOOP",
+        description="蒸氣壓縮循環 COP、流量與 P-h 圖，以及現場過熱度／過冷度判讀。",
+    ),
+    WorkspaceRoute(
         "psychrometrics", "濕空氣性質", "空氣處理", "AIR_OUTLINED",
         description="依海拔與乾濕球溫度或相對濕度計算濕空氣完整性質。",
     ),

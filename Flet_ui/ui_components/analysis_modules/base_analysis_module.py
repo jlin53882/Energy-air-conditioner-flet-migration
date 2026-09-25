@@ -135,6 +135,51 @@ class BaseAnalysisModule:
         }
         return self.all_entries[key] # 返回字典
 
+    def create_text_row(self, key: str, label: str, default_val: str, hint: str = "") -> ft.TextField:
+        """建立框外欄名的文字輸入列（例如流體名稱），儲存在 ``self.text_entries``。
+
+參數：
+    key: 此輸入在模組中的識別鍵。
+    label: 欄位名稱。
+    default_val: 預設文字。
+    hint: 選用的提示文字。
+
+回傳：
+    建立的 TextField；外層列控制項可由 ``self.text_entries[key]["ui_row"]`` 取得。"""
+        field = style_text_field(ft.TextField(
+            value=default_val,
+            hint_text=hint or None,
+            expand=True,
+            height=TOKENS.input_height,
+        ))
+        label_control = ft.Text(label, size=TOKENS.body, weight=ft.FontWeight.W_500,
+                                color=TOKENS.text_primary)
+        if not hasattr(self, "text_entries"):
+            self.text_entries = {}
+        self.text_entries[key] = {
+            "val": field,
+            "label_control": label_control,
+            "ui_row": ft.Column([label_control, field], spacing=6),
+        }
+        return field
+
+    def read_text(self, key: str) -> str:
+        """讀取文字輸入列，空白時以欄名提示錯誤。
+
+參數：
+    key: create_text_row 使用的識別鍵。
+
+回傳：
+    去除前後空白的文字。
+
+引發：
+    ValueError：欄位空白時。"""
+        entry = self.text_entries[key]
+        text = (entry["val"].value or "").strip()
+        if not text:
+            raise ValueError(f"請輸入「{entry['label_control'].value}」。")
+        return text
+
     def read_si(self, key: str) -> float:
         """讀取一個輸入列並換算為 canonical SI；無效數值以欄名提示錯誤。
 

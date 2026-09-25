@@ -16,6 +16,7 @@ from .ui.views.home_view import HomeView
 from .ui.views.compressor_view import CompressorView
 from .ui.views.evaporator_view import EvaporatorView
 from .ui.views.condenser_view import CondenserView
+from .ui.views.refrigeration_cycle_view import RefrigerationCycleView
 from .ui.views.psychrometrics_view import PsychrometricsView
 from .ui.views.air_process_view import AirProcessView
 from .ui.views.thermo_diagram_view import ThermoDiagramView
@@ -24,6 +25,7 @@ from .ui_components.analysis_modules.hvac_condenser_module import CondenserModul
 from .ui_components.analysis_modules.hvac_evaporator_module import EvaporatorModule
 from .ui_components.analysis_modules.psy_module import PsyModule
 from .ui_components.analysis_modules.psy_process_module import PsyProcessModule
+from .ui_components.analysis_modules.refrigeration_cycle_module import RefrigerationCycleModule
 from .ui_components.analysis_modules.thermo_diagram_module import ThermoDiagramModule
 from .ui_components.property_tab import PropertyTab
 from .ui_components.unit.HVACAnalyzer import HVACAnalyzer
@@ -33,6 +35,7 @@ from .ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
 from .ui_components.unit.UnitConverter import UnitConverter
 from application.air_processes import AirProcessService
 from application.property_queries import PropertyQueryService
+from application.refrigeration import RefrigerationService
 
 
 def main(page: ft.Page) -> None:
@@ -78,6 +81,11 @@ def main(page: ft.Page) -> None:
     condenser_module = CondenserModule(
         unit_converter=unit_converter, page=page, analyzer=hvac_analyzer, state_calculator=state_calculator
     )
+    cycle_module = RefrigerationCycleModule(
+        unit_converter=unit_converter,
+        page=page,
+        refrigeration_service=RefrigerationService(state_calculator.state_service),
+    )
     psy_module = PsyModule(unit_converter=unit_converter, page=page, psy_calculator=psy_calculator)
     air_process_module = PsyProcessModule(
         unit_converter=unit_converter,
@@ -89,6 +97,7 @@ def main(page: ft.Page) -> None:
     compressor_view = CompressorView(compressor_module, workspace_state=workspace_state)
     evaporator_view = EvaporatorView(evaporator_module, workspace_state=workspace_state)
     condenser_view = CondenserView(condenser_module, workspace_state=workspace_state)
+    cycle_view = RefrigerationCycleView(cycle_module, workspace_state=workspace_state)
     psychrometrics_view = PsychrometricsView(psy_module, workspace_state=workspace_state)
     air_process_view = AirProcessView(air_process_module, workspace_state=workspace_state)
     diagram_view = ThermoDiagramView(diagram_module)
@@ -97,6 +106,7 @@ def main(page: ft.Page) -> None:
         "compressor": compressor_view,
         "evaporator": evaporator_view,
         "condenser": condenser_view,
+        "refrigeration_cycle": cycle_view,
         "psychrometrics": psychrometrics_view,
         "air_processes": air_process_view,
     }
@@ -114,6 +124,7 @@ def main(page: ft.Page) -> None:
         "compressor": compressor_view,
         "evaporator": evaporator_view,
         "condenser": condenser_view,
+        "refrigeration_cycle": cycle_view,
         "psychrometrics": psychrometrics_view,
         "air_processes": air_process_view,
         "ph_chart": diagram_view,

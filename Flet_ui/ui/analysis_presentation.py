@@ -112,6 +112,16 @@ ANALYSIS_PRESENTATION: dict[str, AnalysisPresentation] = {
         "m_da = Q_s / (h_room − h_supply)，V = m_da · v_supply",
         "送風量估算",
     ),
+    "cycle.vapor_compression": AnalysisPresentation(
+        "單級蒸氣壓縮循環：蒸發／冷凝飽和溫度、過熱、過冷與壓縮機等熵效率，求 COP、流量與功率，並繪製 P-h 圖。",
+        "COP = (h1 − h4) / (h2 − h1)，h2 = h1 + (h2s − h1) / η_isen，h4 = h3",
+        "蒸氣壓縮循環",
+    ),
+    "cycle.superheat_subcooling": AnalysisPresentation(
+        "以量測壓力與管溫判讀過熱度（相對露點）或過冷度（相對泡點），並顯示非共沸冷媒的溫度滑移。",
+        "SH = T − T_dew(P)，SC = T_bubble(P) − T",
+        "過熱／過冷判讀",
+    ),
 }
 
 
