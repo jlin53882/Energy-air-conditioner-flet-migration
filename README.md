@@ -66,6 +66,7 @@ uv run pytest -q
 - [測試策略](docs/testing.md)
 - [維護指南](docs/maintenance.md)
 - [UI 架構與呈現契約](docs/ui-architecture.md)
+- [工作區狀態失效矩陣](docs/state-invalidation.md)
 - [開發路線圖](docs/roadmap.md)
 
 ## 已知的相容性邊界

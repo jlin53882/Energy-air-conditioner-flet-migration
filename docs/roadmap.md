@@ -17,7 +17,12 @@
 
 ### 階段 0 — #7 Integration Hardening
 
-以單一 PR 完成，依 commit 分段（docs → test → fix → refactor → docs）：
+以單一 PR 完成，依 commit 分段（docs → test → fix → refactor → docs）。
+
+**結果**：失效矩陣見 [`state-invalidation.md`](state-invalidation.md)，回歸測試見
+`tests/test_integration_hardening.py`。修正三個問題：切換單位時以計算後已修改的輸入
+重算、熱力圖重新進入同一路由時清除已繪製的圖、壓縮比頁違反錶壓契約；並移除
+legacy `AnalysisTab` 與其相容層。原規劃項目如下：
 
 1. 失效矩陣：定義切頁、切 SI/Imperial、切 Reference State、切冷媒、大氣壓力改變時，
    輸入／結果／圖表各自保留或失效。
@@ -92,7 +97,10 @@ PR #6 已合併，以上項目皆可直接進行。PR #6 帶入的內容一併�
 
 | 事項 | 影響 |
 |---|---|
-| 大氣壓力改變時，Gauge 輸入保留錶壓或保留絕對壓 | #7 失效矩陣；暫定保留錶壓、重算絕對壓 |
+| 大氣壓力改變時，Gauge 輸入保留錶壓或保留絕對壓 | #7 已採用保留錶壓、計算時重算絕對壓，待確認 |
+| 壓縮機分析跟隨物性查詢頁的 Reference State，冷凍循環不跟隨，是否統一 | #8 狀態點的 `reference_state` 來源 |
+| 分析頁修改輸入時是否立即使結果失效（與物性查詢頁一致） | 分析頁的失效規則 |
+| 冷凝器 Exergy 頁是否支援錶壓輸入 | 壓力輸入一致性 |
 | 冷凍循環是否支援以狀態點作為輸入 | 階段 2 之後的跨工具傳遞 |
 
 ## 4. 範圍外（有需要再補）
