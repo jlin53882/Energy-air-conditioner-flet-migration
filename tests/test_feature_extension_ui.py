@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from Flet_ui.flet_app import main as flet_main
@@ -351,7 +353,7 @@ def test_psychrometric_result_view_follows_output_units(shell) -> None:
     try:
         tab.set_output_unit_system("Imperial")
         assert view.kpis["Tdp"].unit_control.value == "°F"
-        assert view.kpis["W"].unit_control.value == "gr/lbm(DA)"
+        assert view.kpis["W"].unit_control.value == "gr/lbm"
     finally:
         tab.set_output_unit_system("SI")
 
@@ -386,3 +388,42 @@ def test_chart_axes_expand_for_hot_humid_states() -> None:
     assert chart_axes_for({"Tdb": 298.15, "Tdp": 290.74, "W": 0.0126}) == ((0.0, 35.0), 0.030)
     (low, high), w_max = chart_axes_for({"Tdb": 318.15, "Tdp": 305.0, "W": 0.030})
     assert high == 50.0 and w_max == pytest.approx(0.045)
+
+
+def test_context_panel_is_collapsed_by_default_and_toggles_on_wide_screens() -> None:
+    """寬版預設收起情境面板，按鈕可開關；中版與窄版不顯示面板與按鈕。
+
+回傳：
+    無。"""
+    page = DummyPage()
+    page.width = 1440
+    flet_main(page)
+    shell = page.controls[0]
+
+    assert shell.context_panel.visible is False
+    assert shell.context_toggle.visible is True
+    shell.toggle_context_panel(None)
+    assert shell.context_panel.visible is True
+    assert shell.context_toggle.selected is True
+
+    page.width = 1024
+    shell._on_resize(None)
+    assert shell.context_panel.visible is False
+    assert shell.context_toggle.visible is False
+
+    page.width = 1440
+    shell._on_resize(None)
+    assert shell.context_panel.visible is True
+    shell._on_keyboard_event(SimpleNamespace(key="Escape", ctrl=False))
+    assert shell.context_panel.visible is False
+    assert shell.context_panel_open is False
+
+
+def test_result_heavy_views_widen_the_result_column(shell) -> None:
+    """濕空氣性質與濕空氣線圖讓結果欄較寬；其他分析維持平分。
+
+回傳：
+    無。"""
+    assert shell.views["psychrometrics"].workspace.result_column.col == {"xs": 12, "lg": 8}
+    assert shell.views["psychrometric_chart"].workspace.result_column.col == {"xs": 12, "lg": 7}
+    assert shell.views["compressor"].workspace.result_column.col == {"xs": 12, "lg": 6}

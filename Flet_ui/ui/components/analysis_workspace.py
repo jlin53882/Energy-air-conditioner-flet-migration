@@ -57,6 +57,7 @@ class AnalysisWorkspace(ft.Column):
         show_execute_button: bool = True,
         show_tool_selector: bool = True,
         accent: str = TOKENS.primary,
+        column_split: tuple[int, int] = (6, 6),
     ) -> None:
         """組合工作區版面。
 
@@ -72,6 +73,8 @@ class AnalysisWorkspace(ft.Column):
                 duplicate execute 按鈕同時出現。
             show_tool_selector: 是否顯示工具選取卡片；只有單一工具時可隱藏。
             accent: 此分類使用的強調色。
+            column_split: 寬版時輸入欄與結果欄的欄寬（合計 12）；結果較多的
+                畫面可讓結果欄較寬，避免指標與圖表被壓縮。
 
         回傳：
             無。
@@ -210,8 +213,9 @@ class AnalysisWorkspace(ft.Column):
                 spacing=TOKENS.spacing_md,
             )
         )
-        self.input_column = ft.Column([self.input_card], col={"xs": 12, "lg": 6})
-        self.result_column = ft.Column([self.result_card], col={"xs": 12, "lg": 6})
+        input_span, result_span = column_split
+        self.input_column = ft.Column([self.input_card], col={"xs": 12, "lg": input_span})
+        self.result_column = ft.Column([self.result_card], col={"xs": 12, "lg": result_span})
         self.controls = [
             self.header,
             self.selector_card,

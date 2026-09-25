@@ -107,9 +107,14 @@ def draw_psychrometric_chart(
     for marker in markers:
         axes.plot(marker.dry_bulb_c, marker.humidity_ratio * 1000, "o",
                   color="#C0362C", markersize=7, zorder=5)
+        # 標籤放在點的下方，避開向左的露點線與向左上的濕球線；
+        # 位於右半部時向左延伸，避免被圖框右緣截斷。
+        low_c, high_c = data.dry_bulb_range_c
+        on_right_half = marker.dry_bulb_c > (low_c + high_c) / 2
         axes.annotate(marker.label, (marker.dry_bulb_c, marker.humidity_ratio * 1000),
-                      xytext=(6, 6), textcoords="offset points", fontsize=9,
-                      color="#C0362C", fontweight="bold")
+                      xytext=(10, -14) if on_right_half else (6, -14), textcoords="offset points",
+                      fontsize=9, color="#C0362C", fontweight="bold",
+                      ha="right" if on_right_half else "left")
 
     axes.set_xlim(*data.dry_bulb_range_c)
     axes.set_ylim(0, data.humidity_ratio_max * 1000)

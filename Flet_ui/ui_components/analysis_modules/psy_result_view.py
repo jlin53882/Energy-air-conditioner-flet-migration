@@ -86,11 +86,12 @@ class PsychrometricResultView(ft.Column):
         self.unit_converter = unit_converter
         self.psychrometrics = psychrometrics
         self._chart_cache: dict[tuple, PsychrometricChartData] = {}
+        kpi_col = {"xs": 6, "xl": 3}
         self.kpis = {
-            "RH": KpiTile("相對濕度 RH"),
-            "Tdp": KpiTile("露點溫度 Tdp"),
-            "H": KpiTile("焓值 h"),
-            "W": KpiTile("濕度比 W"),
+            "RH": KpiTile("相對濕度 RH", col=kpi_col),
+            "Tdp": KpiTile("露點溫度 Tdp", col=kpi_col),
+            "H": KpiTile("焓值 h", col=kpi_col),
+            "W": KpiTile("濕度比 W", col=kpi_col),
         }
         self.chart_panel = FigurePanel(height=420, placeholder="計算後顯示焓濕圖")
         self.property_table = PropertyTable()
@@ -125,8 +126,16 @@ class PsychrometricResultView(ft.Column):
             [
                 ft.ResponsiveRow(list(self.kpis.values()), spacing=TOKENS.spacing_sm,
                                  run_spacing=TOKENS.spacing_sm),
-                _card("焓濕圖", self.chart_panel, legend),
-                _card("完整性質", self.property_table),
+                # 寬螢幕時焓濕圖與完整性質表並排，較窄時上下排列。
+                ft.ResponsiveRow(
+                    [
+                        ft.Container(_card("焓濕圖", self.chart_panel, legend), col={"xs": 12, "xl": 7}),
+                        ft.Container(_card("完整性質", self.property_table), col={"xs": 12, "xl": 5}),
+                    ],
+                    spacing=TOKENS.spacing_md,
+                    run_spacing=TOKENS.spacing_md,
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                ),
                 ft.Container(
                     content=ft.Column([self.process_toggle, self.process_body],
                                       spacing=TOKENS.spacing_sm),
@@ -168,10 +177,9 @@ class PsychrometricResultView(ft.Column):
         fmt = ResultFormatter(self.unit_converter, use_imperial)
         self.kpis["RH"].set_value(f"{state['RH'] * 100:.1f}", "%")
         self.kpis["Tdp"].set_value(*fmt.parts("T", state["Tdp"], 2))
-        enthalpy, enthalpy_unit = fmt.parts("H", state["H"], 2)
-        self.kpis["H"].set_value(enthalpy, f"{enthalpy_unit}(DA)")
-        ratio, ratio_unit = fmt.parts("W", state["W"], 2)
-        self.kpis["W"].set_value(ratio, f"{ratio_unit}(DA)")
+        # 關鍵數值卡空間有限，乾空氣基準 (DA) 只標在完整性質表中。
+        self.kpis["H"].set_value(*fmt.parts("H", state["H"], 2))
+        self.kpis["W"].set_value(*fmt.parts("W", state["W"], 2))
         self.property_table.set_groups(self._property_groups(state, known_input, fmt))
         self.process_table.set_groups(self._process_groups(state, fmt))
         self._draw_chart(state)

@@ -65,6 +65,8 @@ class AppShell(ft.Column):
         )
         self.workspace = ft.Container(expand=True, padding=TOKENS.spacing_lg)
         self.context_panel = self._build_context_panel()
+        # 情境面板預設收起，讓計算頁有足夠寬度；寬版可由頂端列按鈕開啟。
+        self.context_panel_open = False
         self.sidebar = Sidebar(self.navigate, self.state.route_key)
         self.sidebar.left = 0
         self.sidebar.top = 0
@@ -85,14 +87,19 @@ class AppShell(ft.Column):
             expand=True,
         )
         self.workspace_row = ft.Row(
-            [self.workspace, self.context_panel], spacing=0, expand=True,
+            [self.workspace], spacing=0, expand=True,
             vertical_alignment=ft.CrossAxisAlignment.STRETCH,
         )
         self.workspace_region = ft.Container(
             content=self.workspace_row, expand=True, bgcolor=TOKENS.background
         )
+        # 情境面板以浮動抽屜覆蓋在工作區右側，開關時不改變計算頁的版面寬度。
+        self.context_panel.right = 0
+        self.context_panel.top = 0
+        self.context_panel.bottom = 0
+        self.context_panel.shadow = ft.BoxShadow(blur_radius=24, color="#330F2A47", offset=ft.Offset(-4, 0))
         self.content_row = ft.Stack(
-            [self.workspace_region, self.sidebar],
+            [self.workspace_region, self.sidebar, self.context_panel],
             expand=True,
             clip_behavior=ft.ClipBehavior.HARD_EDGE,
         )
@@ -181,6 +188,15 @@ class AppShell(ft.Column):
             tight=True,
         )
         self.output_label = ft.Text("輸出單位", size=TOKENS.caption, color=TOKENS.text_secondary)
+        self.context_toggle = ft.IconButton(
+            ft.Icons.VIEW_SIDEBAR_OUTLINED,
+            selected_icon=ft.Icons.VIEW_SIDEBAR,
+            selected=False,
+            icon_color=TOKENS.text_secondary,
+            selected_icon_color=TOKENS.primary,
+            tooltip="顯示或隱藏資訊欄（輸出設定、常用冷媒、快捷鍵）",
+            on_click=self.toggle_context_panel,
+        )
         bar_content = ft.Container(
             content=ft.Row(
                 [
@@ -193,6 +209,7 @@ class AppShell(ft.Column):
                     self.shortcut_hint,
                     self.output_label,
                     self.unit_toggle,
+                    self.context_toggle,
                 ],
                 spacing=TOKENS.spacing_md,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -270,7 +287,7 @@ class AppShell(ft.Column):
         shortcuts = ft.Column(
             [
                 self._shortcut_row("Ctrl + Enter", "執行目前畫面的計算"),
-                self._shortcut_row("Esc", "關閉窄視窗導覽抽屜"),
+                self._shortcut_row("Esc", "關閉資訊欄或窄視窗導覽抽屜"),
             ],
             spacing=TOKENS.spacing_sm,
         )
@@ -453,7 +470,7 @@ class AppShell(ft.Column):
             pass
 
     def _on_keyboard_event(self, event: ft.KeyboardEvent) -> None:
-        """以 Ctrl+Enter 執行目前畫面的計算，並以 Esc 關閉窄視窗導覽抽屜。
+        """以 Ctrl+Enter 執行目前畫面的計算；Esc 先關閉資訊欄，再關閉窄視窗導覽抽屜。
 
 參數：
     event: 包含按鍵與修飾鍵狀態的 Flet 鍵盤事件。
@@ -468,6 +485,8 @@ class AppShell(ft.Column):
                 calculate = getattr(view, "calculate_analysis", None)
             if calculate is not None:
                 calculate(None)
+        elif key == "escape" and self.context_panel_open:
+            self.toggle_context_panel(None)
         elif key == "escape" and (getattr(self._page_ref, "width", 1280) or 1280) < 800:
             self.sidebar.visible = False
             try:
@@ -475,8 +494,24 @@ class AppShell(ft.Column):
             except RuntimeError:
                 pass
 
+    def toggle_context_panel(self, _event: ft.ControlEvent | None) -> None:
+        """在寬版開啟或收起右側情境面板；中版與窄版不顯示面板。
+
+參數：
+    _event: Flet 點擊事件；此處不需讀取內容。
+
+回傳：
+    無。"""
+        self.context_panel_open = not self.context_panel_open
+        self.context_toggle.selected = self.context_panel_open
+        self._on_resize(None)
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
     def _on_resize(self, _event: ft.ControlEvent | None) -> None:
-        """依視窗寬度切換導覽尺寸，並在窄版面收起情境面板。
+        """依視窗寬度切換導覽尺寸；情境面板只在寬版且使用者開啟時顯示。
 
 參數：
     _event: Flet 尺寸變更事件；版面依 page 的最新寬度計算。
@@ -498,6 +533,7 @@ class AppShell(ft.Column):
             self.shortcut_hint.visible = False
             self.breadcrumb_prefix.visible = False
             self.output_label.visible = False
+            self.context_toggle.visible = False
         elif width < 1200:
             self.sidebar.set_compact(True)
             self.sidebar.visible = True
@@ -512,13 +548,14 @@ class AppShell(ft.Column):
             self.shortcut_hint.visible = False
             self.breadcrumb_prefix.visible = True
             self.output_label.visible = True
+            self.context_toggle.visible = False
         else:
             self.sidebar.set_compact(False)
             self.sidebar.visible = True
             self.sidebar.width = TOKENS.sidebar_width
             self.sidebar.shadow = None
             self.workspace_region.padding = ft.Padding.only(left=TOKENS.sidebar_width)
-            self.context_panel.visible = True
+            self.context_panel.visible = self.context_panel_open
             self.workspace.padding = TOKENS.spacing_lg
             self.menu_button.visible = False
             self.brand_block.width = TOKENS.sidebar_width
@@ -526,3 +563,4 @@ class AppShell(ft.Column):
             self.shortcut_hint.visible = True
             self.breadcrumb_prefix.visible = True
             self.output_label.visible = True
+            self.context_toggle.visible = True

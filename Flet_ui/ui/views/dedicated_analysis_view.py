@@ -35,6 +35,7 @@ class DedicatedAnalysisView(ft.Column):
         modules: list[object],
         workspace_state: WorkspaceState | None = None,
         accent: str = TOKENS.primary,
+        column_split: tuple[int, int] = (6, 6),
     ) -> None:
         """組合 tool selector、輸入堆疊與結果面板。
 
@@ -44,6 +45,7 @@ class DedicatedAnalysisView(ft.Column):
             modules: 此分類使用的既有分析模組實例清單。
             workspace_state: 選用的共用工作區狀態；用於讀取全域輸出單位。
             accent: 此分類使用的強調色（通常取自導覽分類色）。
+            column_split: 寬版時輸入欄與結果欄的欄寬（合計 12）。
 
         回傳：
             無。
@@ -87,6 +89,7 @@ class DedicatedAnalysisView(ft.Column):
             show_execute_button=self.adapter.active_definition.show_execute_button,
             show_tool_selector=len(tool_items) > 1,
             accent=accent,
+            column_split=column_split,
         )
         self.controls = [self.workspace]
         self._sync_presentation()

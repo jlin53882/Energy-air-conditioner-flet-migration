@@ -29,4 +29,5 @@ class PsychrometricChartView(DedicatedAnalysisView):
             modules=[module],
             workspace_state=workspace_state,
             accent=section_colors("圖表")[0],
+            column_split=(5, 7),
         )
