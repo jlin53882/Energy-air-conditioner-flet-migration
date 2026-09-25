@@ -210,3 +210,61 @@ def test_empty_fluid_name_is_reported_by_label(shell) -> None:
 
     assert view.result_panel.status == "error"
     assert "冷媒" in view.result_panel.message
+
+
+def test_psychrometric_chart_route_lists_each_point(shell) -> None:
+    """濕空氣線圖以預設三點計算，逐點列出性質，圖表放在指標之前。
+
+回傳：
+    無。"""
+    shell.navigate("psychrometric_chart")
+    view = shell.views["psychrometric_chart"]
+    result_view = view.workspace.result_view
+
+    assert view.workspace.selector_card.visible is False
+    view.perform_calculation(None)
+
+    assert view.result_panel.status == "success", view.result_panel.message
+    for index in (1, 2, 3):
+        assert f"--- 狀態點 {index} ---" in view.adapter.result_text
+    assert result_view.chart_host.visible is True
+    body = result_view.controls
+    assert body.index(result_view.chart_host) < body.index(result_view.result_sections)
+
+    shell.navigate("air_processes")
+    air_view = shell.views["air_processes"]
+    air_view.perform_calculation(None)
+    air_body = air_view.workspace.result_view.controls
+    assert air_body.index(air_view.workspace.result_view.chart_host) > air_body.index(
+        air_view.workspace.result_view.result_sections
+    )
+
+
+def test_psychrometric_chart_validates_point_counts_and_converts_lists(shell) -> None:
+    """點數不一致時提示錯誤；切換溫度單位會逐筆換算。
+
+回傳：
+    無。"""
+    shell.navigate("psychrometric_chart")
+    view = shell.views["psychrometric_chart"]
+    module = view.adapter.modules[0]
+    rh_entry = module.all_entries["pc_rh"]
+    tdb_entry = module.all_entries["pc_tdb"]
+    original_rh = rh_entry["val"].value
+    rh_entry["val"].value = "60, 50"
+    try:
+        view.perform_calculation(None)
+    finally:
+        rh_entry["val"].value = original_rh
+    assert view.result_panel.status == "error"
+    assert "數量必須相同" in view.result_panel.message
+
+    original_tdb = tdb_entry["val"].value
+    tdb_entry["unit"].value = "°F"
+    tdb_entry["unit"].on_select(None)
+    try:
+        assert tdb_entry["val"].value == "95, 78.8, 55.4"
+    finally:
+        tdb_entry["unit"].value = "°C"
+        tdb_entry["unit"].on_select(None)
+    assert tdb_entry["val"].value == original_tdb

@@ -126,8 +126,11 @@ class DedicatedAnalysisView(ft.Column):
         回傳：
             無。
         """
+        definition = self.adapter.active_definition
         self.workspace.show_result(
-            self.adapter.result_text, chart=self.adapter.active_definition.result_chart
+            self.adapter.result_text,
+            chart=definition.result_chart,
+            chart_first=definition.result_chart_first,
         )
 
     @property

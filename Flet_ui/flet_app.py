@@ -19,12 +19,14 @@ from .ui.views.condenser_view import CondenserView
 from .ui.views.refrigeration_cycle_view import RefrigerationCycleView
 from .ui.views.psychrometrics_view import PsychrometricsView
 from .ui.views.air_process_view import AirProcessView
+from .ui.views.psychrometric_chart_view import PsychrometricChartView
 from .ui.views.thermo_diagram_view import ThermoDiagramView
 from .ui_components.analysis_modules.hvac_compressor_module import CompressorModule
 from .ui_components.analysis_modules.hvac_condenser_module import CondenserModule
 from .ui_components.analysis_modules.hvac_evaporator_module import EvaporatorModule
 from .ui_components.analysis_modules.psy_module import PsyModule
 from .ui_components.analysis_modules.psy_process_module import PsyProcessModule
+from .ui_components.analysis_modules.psychrometric_chart_module import PsychrometricChartModule
 from .ui_components.analysis_modules.refrigeration_cycle_module import RefrigerationCycleModule
 from .ui_components.analysis_modules.thermo_diagram_module import ThermoDiagramModule
 from .ui_components.property_tab import PropertyTab
@@ -87,10 +89,13 @@ def main(page: ft.Page) -> None:
         refrigeration_service=RefrigerationService(state_calculator.state_service),
     )
     psy_module = PsyModule(unit_converter=unit_converter, page=page, psy_calculator=psy_calculator)
+    # 空氣處理與濕空氣線圖共用同一個 application service。
+    air_process_service = AirProcessService(psy_calculator.service)
     air_process_module = PsyProcessModule(
-        unit_converter=unit_converter,
-        page=page,
-        air_process_service=AirProcessService(psy_calculator.service),
+        unit_converter=unit_converter, page=page, air_process_service=air_process_service
+    )
+    psychrometric_chart_module = PsychrometricChartModule(
+        unit_converter=unit_converter, page=page, air_process_service=air_process_service
     )
     diagram_module = ThermoDiagramModule(unit_converter, page, hvac_analyzer, state_calculator)
 
@@ -100,6 +105,9 @@ def main(page: ft.Page) -> None:
     cycle_view = RefrigerationCycleView(cycle_module, workspace_state=workspace_state)
     psychrometrics_view = PsychrometricsView(psy_module, workspace_state=workspace_state)
     air_process_view = AirProcessView(air_process_module, workspace_state=workspace_state)
+    psychrometric_chart_view = PsychrometricChartView(
+        psychrometric_chart_module, workspace_state=workspace_state
+    )
     diagram_view = ThermoDiagramView(diagram_module)
 
     analysis_views = {
@@ -109,6 +117,7 @@ def main(page: ft.Page) -> None:
         "refrigeration_cycle": cycle_view,
         "psychrometrics": psychrometrics_view,
         "air_processes": air_process_view,
+        "psychrometric_chart": psychrometric_chart_view,
     }
     # 首頁統計只使用各 dedicated view 實際註冊的分析定義數量。
     analysis_counts = {key: len(view.adapter.definitions) for key, view in analysis_views.items()}
@@ -129,6 +138,7 @@ def main(page: ft.Page) -> None:
         "air_processes": air_process_view,
         "ph_chart": diagram_view,
         "ts_chart": diagram_view,
+        "psychrometric_chart": psychrometric_chart_view,
     }
 
     def on_unit_system_change(unit_system: str) -> None:

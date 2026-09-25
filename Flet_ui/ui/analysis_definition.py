@@ -37,6 +37,8 @@ class AnalysisDefinition:
         show_execute_button: 是否顯示共用的「執行分析」按鈕。
         result_chart: 選用的結果圖表控制項（例如 ``FigurePanel``）；成功
             計算後顯示於結果卡片，重設或失敗時隱藏。
+        result_chart_first: 以圖表為主要產出的分析設為 True，圖表會放在
+            指標卡片之前。
     """
 
     key: str
@@ -45,6 +47,7 @@ class AnalysisDefinition:
     calculate: Callable[[bool], str]
     show_execute_button: bool = True
     result_chart: ft.Control | None = None
+    result_chart_first: bool = False
 
 
 def definitions_from_module(module: object) -> list[AnalysisDefinition]:
@@ -86,6 +89,7 @@ def definitions_from_module(module: object) -> list[AnalysisDefinition]:
                 calculate=raw_calc_func,
                 show_execute_button=raw.get("show_execute_button", True),
                 result_chart=raw.get("result_chart"),
+                result_chart_first=raw.get("result_chart_first", False),
             )
         )
     return definitions

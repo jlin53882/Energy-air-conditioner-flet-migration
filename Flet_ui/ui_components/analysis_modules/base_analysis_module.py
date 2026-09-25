@@ -202,6 +202,35 @@ class BaseAnalysisModule:
             raise ValueError(f"「{label}」必須是有限數字。")
         return self.unit_converter.convert_to_si(entry["prop_code"], value, entry["unit"].value)
 
+    def read_si_list(self, key: str) -> list[float]:
+        """讀取以逗號分隔的多筆數值並換算為 SI。
+
+參數：
+    key: create_input_row 使用的識別鍵。
+
+回傳：
+    SI 數值清單（至少一筆）。
+
+引發：
+    ValueError：沒有數值或任一筆不是有限數字時。"""
+        entry = self.all_entries[key]
+        label = entry["label_control"].value
+        values = []
+        for raw_value in (entry["val"].value or "").split(","):
+            raw_value = raw_value.strip()
+            if not raw_value:
+                continue
+            try:
+                value = float(raw_value)
+            except ValueError:
+                raise ValueError(f"「{label}」包含無效數值：{raw_value}") from None
+            if not isfinite(value):
+                raise ValueError(f"「{label}」必須是有限數字。")
+            values.append(self.unit_converter.convert_to_si(entry["prop_code"], value, entry["unit"].value))
+        if not values:
+            raise ValueError(f"「{label}」請至少輸入一筆數值。")
+        return values
+
     def bind_independent_unit_sync(self, keys: list[str]) -> None:
         """讓每個輸入列的單位選單獨立換算自己的數值。
 
@@ -213,6 +242,49 @@ class BaseAnalysisModule:
         for key in keys:
             entry = self.all_entries[key]
             entry["unit"].on_select = self._create_unit_sync_handler(entry["prop_code"], [key])
+
+    def bind_multi_value_unit_sync(self, keys: list[str]) -> None:
+        """讓逗號分隔多筆數值的輸入列在切換單位時逐筆換算。
+
+無法解析的片段保持原樣，由計算時的驗證提示使用者。
+
+參數：
+    keys: 要綁定的輸入列識別鍵。
+
+回傳：
+    無。"""
+        for key in keys:
+            entry = self.all_entries[key]
+
+            def on_select(event, key=key, entry=entry) -> None:
+                """逐筆換算數值並記錄新單位。
+
+參數：
+    event: 單位選單的 Flet 事件。
+    key: 輸入列識別鍵。
+    entry: 輸入列控制項。
+
+回傳：
+    無。"""
+                old_unit = self._last_units.get(key)
+                new_unit = entry["unit"].value
+                if old_unit and new_unit and old_unit != new_unit:
+                    converted = []
+                    for part in (entry["val"].value or "").split(","):
+                        text = part.strip()
+                        try:
+                            value_si = self.unit_converter.convert_to_si(entry["prop_code"], float(text), old_unit)
+                            converted.append(f"{self.unit_converter.convert_from_si(entry['prop_code'], value_si, new_unit):.6g}")
+                        except ValueError:
+                            converted.append(text)
+                    entry["val"].value = ", ".join(item for item in converted if item)
+                self._last_units[key] = new_unit
+                try:
+                    entry["val"].update()
+                except RuntimeError:
+                    pass
+
+            entry["unit"].on_select = on_select
 
     @staticmethod
     def section_label(text: str) -> ft.Control:

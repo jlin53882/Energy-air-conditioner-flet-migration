@@ -60,6 +60,7 @@ class AnalysisResultView(ft.Column):
         *,
         accent: str,
         chart: ft.Control | None = None,
+        chart_first: bool = False,
     ) -> None:
         """依目前狀態呈現結果；只有成功狀態才會投影指標與圖表。
 
@@ -67,6 +68,7 @@ class AnalysisResultView(ft.Column):
             result_text: 模組回傳的原始結果文字；尚未計算時為 None。
             accent: 指標卡片使用的強調色。
             chart: 選用的結果圖表；成功時顯示並要求重繪。
+            chart_first: True 表示圖表放在指標卡片之前。
 
         回傳：
             無。
@@ -79,24 +81,28 @@ class AnalysisResultView(ft.Column):
             if succeeded
             else []
         )
-        self._show_chart(chart if succeeded else None)
+        self._show_chart(chart if succeeded else None, chart_first)
         self.details_button.disabled = not has_text
         self.copy_button.disabled = not succeeded
         if not has_text:
             self.raw_box.visible = False
         self.details_button.text = "隱藏原始文字" if self.raw_box.visible else "顯示原始文字"
 
-    def _show_chart(self, chart: ft.Control | None) -> None:
+    def _show_chart(self, chart: ft.Control | None, chart_first: bool) -> None:
         """放入或隱藏結果圖表；圖表提供 refresh() 時要求重繪。
 
         參數：
             chart: 要顯示的圖表；None 表示隱藏。
+            chart_first: True 表示圖表放在指標卡片之前。
 
         回傳：
             無。
         """
         self.chart_host.content = chart
         self.chart_host.visible = chart is not None
+        self.controls.remove(self.chart_host)
+        anchor = self.result_panel if chart_first else self.result_sections
+        self.controls.insert(self.controls.index(anchor) + 1, self.chart_host)
         refresh = getattr(chart, "refresh", None)
         if callable(refresh):
             refresh()

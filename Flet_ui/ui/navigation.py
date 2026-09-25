@@ -60,6 +60,10 @@ ROUTES = (
         "ts_chart", "T-s 圖", "圖表", "STACKED_LINE_CHART",
         description="繪製溫度－熵圖並標示狀態點或壓縮過程。",
     ),
+    WorkspaceRoute(
+        "psychrometric_chart", "濕空氣線圖", "圖表", "BUBBLE_CHART_OUTLINED",
+        description="依海拔繪製濕空氣線圖，標示多個狀態點並列出完整性質。",
+    ),
 )
 
 ROUTE_BY_KEY = {route.key: route for route in ROUTES}

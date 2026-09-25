@@ -122,6 +122,11 @@ ANALYSIS_PRESENTATION: dict[str, AnalysisPresentation] = {
         "SH = T − T_dew(P)，SC = T_bubble(P) − T",
         "過熱／過冷判讀",
     ),
+    "psychrometric_chart.plot": AnalysisPresentation(
+        "依海拔計算大氣壓力並繪製飽和線、等相對濕度線與等焓線；乾球溫度與相對濕度以逗號分隔可標示多點。",
+        None,
+        "濕空氣線圖",
+    ),
 }
 
 
