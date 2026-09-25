@@ -14,9 +14,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from domain.state_points import StateSource, ThermoStatePoint, enthalpy_difference
 from domain.thermodynamics.reference_state import ReferenceStatePolicy, normalize_reference_state_policy
 
-from .states import CycleState, ThermodynamicStateProvider, query_state
+from .states import ThermodynamicStateProvider, query_state
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,7 @@ class VaporCompressionResult:
     """
 
     fluid: str
-    states: dict[str, CycleState]
+    states: dict[str, ThermoStatePoint]
     evaporating_pressure_pa: float
     condensing_pressure_pa: float
     refrigerating_effect_j_kg: float
@@ -60,7 +61,7 @@ class VaporCompressionResult:
     suction_volume_flow_m3_s: float | None = None
 
     @property
-    def cycle_path(self) -> tuple[CycleState, ...]:
+    def cycle_path(self) -> tuple[ThermoStatePoint, ...]:
         """回傳依循環順序排列、首尾相接的狀態點，供圖表連線使用。
 
 回傳：
@@ -142,14 +143,32 @@ def solve_vapor_compression_cycle(
     h3 = float(s3["H"])
     s4 = state([("P", p_evap), ("H", h3)], "蒸發器入口")
 
+    resolved_policy = normalize_reference_state_policy(policy)
+
+    def point(key: str, label: str, mapping) -> ThermoStatePoint:
+        """把查詢結果包成帶有流體與基準的循環狀態點。
+
+參數：
+    key: 穩定狀態鍵。
+    label: 顯示用說明。
+    mapping: 狀態服務回傳的 dict。
+
+回傳：
+    ThermoStatePoint。"""
+        return ThermoStatePoint.from_state_mapping(
+            mapping, fluid=fluid, reference_state=resolved_policy,
+            source=StateSource.REFRIGERATION_CYCLE, key=key, label=label,
+        )
+
     states = {
-        "1": CycleState.from_mapping("1", "壓縮機入口", s1),
-        "2s": CycleState.from_mapping("2s", "等熵壓縮出口", s2s),
-        "2": CycleState.from_mapping("2", "壓縮機出口", s2),
-        "3": CycleState.from_mapping("3", "冷凝器出口", s3),
-        "4": CycleState.from_mapping("4", "蒸發器入口", s4),
+        "1": point("1", "壓縮機入口", s1),
+        "2s": point("2s", "等熵壓縮出口", s2s),
+        "2": point("2", "壓縮機出口", s2),
+        "3": point("3", "冷凝器出口", s3),
+        "4": point("4", "蒸發器入口", s4),
     }
-    refrigerating_effect = h1 - h3
+    # 經基準防護相減；h1、h3 與狀態點的焓值相同。
+    refrigerating_effect = enthalpy_difference(states["1"], states["3"])
     compressor_work = h2 - h1
     heat_rejection = h2 - h3
     if refrigerating_effect <= 0 or compressor_work <= 0:
@@ -176,6 +195,6 @@ def solve_vapor_compression_cycle(
         cop_cooling=refrigerating_effect / compressor_work,
         cop_heating=heat_rejection / compressor_work,
         pressure_ratio=p_cond / p_evap,
-        reference_state=normalize_reference_state_policy(policy),
+        reference_state=resolved_policy,
         **system,
     )
