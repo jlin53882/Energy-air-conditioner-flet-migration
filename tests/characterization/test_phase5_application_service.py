@@ -64,14 +64,13 @@ def test_query_updates_requested_reference_state() -> None:
         service.set_reference_state("R134a", "DEF")
 
 
-def test_query_policy_is_consumed_by_compressor_reference_state_provider() -> None:
-    """Compressor downstream consumer 必須讀取 query 寫入的 canonical policy。
+def test_query_policy_is_not_consumed_by_compressor() -> None:
+    """物性查詢寫入的 policy 只屬於物性查詢頁；壓縮機依流體決定自己的 policy。
 
 回傳：
     無。"""
     service = PropertyQueryService(ThermodynamicStateService(CanonicalUnitConverter()))
     compressor = CompressorModule.__new__(CompressorModule)
-    compressor.reference_state_provider = service
     try:
         service.query(
             PropertyQueryRequest(
@@ -80,7 +79,8 @@ def test_query_policy_is_consumed_by_compressor_reference_state_provider() -> No
                 reference_state="IIR",
             )
         )
-        assert compressor._reference_state_for("R134a") == "IIR"
+        assert service.requested_reference_state("R134a") == "IIR"
+        assert compressor._reference_state_for("R134a") == "ASHRAE"
     finally:
         service.set_reference_state("R134a", "DEF")
 

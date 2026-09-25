@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import flet as ft
 
 from application.models import RefrigerationCycleRequest, SuperheatCheckRequest
@@ -36,17 +38,20 @@ class RefrigerationCycleModule(BaseAnalysisModule):
     """冷凍循環相關分析。"""
 
     def __init__(self, unit_converter: UnitConverter, page: ft.Page,
-                 refrigeration_service: RefrigerationService) -> None:
+                 refrigeration_service: RefrigerationService,
+                 pressure_from_altitude: Callable[[float], float] | None = None) -> None:
         """建立循環與過熱度判讀表單。
 
 參數：
     unit_converter: 共用單位轉換器。
     page: Flet 頁面。
     refrigeration_service: 冷凍 application service。
+    pressure_from_altitude: 選用的「海拔（m）→ 大氣壓力（Pa）」換算；未提供時使用預設濕空氣服務。
 
 回傳：
     無。"""
-        super().__init__(unit_converter, page, refrigeration_service=refrigeration_service)
+        super().__init__(unit_converter, page, refrigeration_service=refrigeration_service,
+                         pressure_from_altitude=pressure_from_altitude)
         self.refrigeration = refrigeration_service
         self.chart_panel = FigurePanel(height=520, placeholder="執行分析後在 P-h 圖上繪製循環")
         self.cycle_ui = self._build_cycle_ui()
@@ -90,9 +95,11 @@ class RefrigerationCycleModule(BaseAnalysisModule):
             ("cyc_eta", "壓縮機等熵效率", "70", "Eff", "%"),
             ("cyc_capacity", "冷凍能力", "10", "Power", "kW"),
         ]
+        reference_state_row, self.cyc_ref_state = self.create_reference_state_row()
         controls: list[ft.Control] = [
             self.section_label("冷媒與飽和溫度"),
             self.text_entries["cyc_fluid"]["ui_row"],
+            reference_state_row,
         ]
         for index, (key, label, default, prop_code, unit) in enumerate(rows):
             if index == 2:
@@ -127,38 +134,24 @@ class RefrigerationCycleModule(BaseAnalysisModule):
             ], spacing=6),
             # 預設為錶壓力模式，因此量測壓力以錶壓單位（kPag、psig…）輸入。
             self.create_input_row("sh_p", "量測壓力", "900", GAUGE_PRESSURE, "kPag")["ui_row"],
-            self.create_input_row("sh_atm", "大氣壓力（錶壓換算用）", "101.325", "P", "kPa")["ui_row"],
+            *self.create_atmosphere_rows("sh_alt", "sh_atm"),
             self.create_input_row("sh_t", "量測管溫", "20", "T", "°C")["ui_row"],
         ]
         return ft.Container(content=ft.Column(controls, spacing=12), visible=False)
 
-    def _pressure_is_gauge(self) -> bool:
-        """回傳目前是否為錶壓力模式。
-
-回傳：
-    True 表示錶壓力模式。"""
-        return "Gauge" in self.sh_pressure_type.selected
-
     def on_pressure_type_change(self, _event: ft.ControlEvent | None) -> None:
         """切換錶壓力／絕對壓力：量測壓力改用對應語意的單位，並維持相同的實際壓力。
 
-錶壓力模式使用錶壓單位（kPag、psig…）並顯示大氣壓力欄位；絕對壓力模式使用
-絕對單位（kPa、psia…）。大氣壓力無法解析而無法換算時，維持原模式並在大氣壓力
-欄位提示（換算規則見 ``BaseAnalysisModule.switch_pressure_basis``）。
+錶壓力模式使用錶壓單位（kPag、psig…）並顯示海拔與大氣壓力欄位；絕對壓力模式
+使用絕對單位（kPa、psia…）。大氣壓力無法解析而無法換算時，維持原模式並在大氣
+壓力欄位提示（換算規則見 ``BaseAnalysisModule.switch_pressure_basis``）。
 
 參數：
     _event: Flet 事件；初始化時為 None。
 
 回傳：
     無。"""
-        to_gauge = self._pressure_is_gauge()
-        if not self.switch_pressure_basis(["sh_p"], "sh_atm", to_gauge):
-            self.sh_pressure_type.selected = ["Absolute" if to_gauge else "Gauge"]
-        self.all_entries["sh_atm"]["ui_row"].visible = self._pressure_is_gauge()
-        try:
-            self.superheat_ui.update()
-        except RuntimeError:
-            pass
+        self.apply_pressure_basis(self.sh_pressure_type, ["sh_p"], "sh_alt", "sh_atm", self.superheat_ui)
 
     # ======================================================
     # 計算
@@ -180,6 +173,7 @@ class RefrigerationCycleModule(BaseAnalysisModule):
             subcooling_k=self.read_si("cyc_sc"),
             isentropic_efficiency=self.read_si("cyc_eta"),
             refrigeration_capacity_w=self.read_si("cyc_capacity"),
+            reference_state=self.cyc_ref_state.value,
         ))
         self._plot_cycle(result)
 

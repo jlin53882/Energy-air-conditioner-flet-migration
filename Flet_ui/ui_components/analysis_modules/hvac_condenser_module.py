@@ -1,5 +1,7 @@
 # ui_components/analysis_modules/hvac_evaporator_module.py
 
+from collections.abc import Callable
+
 import flet as ft
 from application.models import CondenserExergyRequest
 from application.refrigeration import RefrigerationService
@@ -24,9 +26,11 @@ BOUNDARY_SOURCE_COOLANT = "coolant"
 class CondenserModule(BaseAnalysisModule):
     def __init__(self, unit_converter: UnitConverter, page: ft.Page, analyzer: HVACAnalyzer,
                  state_calculator: ThermoStateCalculator,
-                 refrigeration_service: RefrigerationService):
+                 refrigeration_service: RefrigerationService,
+                 pressure_from_altitude: Callable[[float], float] | None = None):
         super().__init__(unit_converter, page, analyzer=analyzer,
-                         state_calculator=state_calculator)
+                         state_calculator=state_calculator,
+                         pressure_from_altitude=pressure_from_altitude)
         
         self.analyzer: HVACAnalyzer = self.services.get("analyzer")
         self.state_calculator: ThermoStateCalculator = self.services.get("state_calculator")
@@ -106,6 +110,16 @@ class CondenserModule(BaseAnalysisModule):
 回傳：
     預設隱藏的表單容器。"""
         self.create_text_row("cx_fluid", "冷媒", "R134a", "例如 R134a、R32、R410A")
+        reference_state_row, self.cx_ref_state = self.create_reference_state_row()
+        self.cx_pressure_type = ft.SegmentedButton(
+            allow_empty_selection=False,
+            segments=[
+                ft.Segment(value="Gauge", label=ft.Text("錶壓力 (Gauge)")),
+                ft.Segment(value="Absolute", label=ft.Text("絕對壓力 (Absolute)")),
+            ],
+            selected=["Absolute"],
+            on_change=self.on_pressure_type_change,
+        )
         self.cx_boundary = ft.SegmentedButton(
             allow_empty_selection=False,
             segments=[
@@ -155,7 +169,7 @@ class CondenserModule(BaseAnalysisModule):
             visible=False,
         )
         rows = [
-            ("cx_p", "冷凝壓力（絕對）", "1000", "P", "kPa"),
+            ("cx_p", "冷凝壓力", "1000", "P", "kPa"),
             ("cx_t_in", "冷媒入口溫度", "60", "T", "°C"),
             ("cx_t_out", "冷媒出口溫度", "35", "T", "°C"),
             ("cx_m_dot", "冷媒質量流率", "0.05", "MassFlow", "kg/s"),
@@ -167,9 +181,17 @@ class CondenserModule(BaseAnalysisModule):
         for key, label, default, prop_code, unit in rows:
             self.create_input_row(key, label, default, prop_code, unit)
         self.bind_independent_unit_sync([key for key, *_ in rows])
+        atmosphere_rows = self.create_atmosphere_rows("cx_alt", "cx_atm")
         controls: list[ft.Control] = [
             self.text_entries["cx_fluid"]["ui_row"],
+            reference_state_row,
             self.section_label("冷媒狀態（忽略冷凝器壓降）"),
+            ft.Column([
+                ft.Text("壓力類型", size=TOKENS.body, weight=ft.FontWeight.W_500,
+                        color=TOKENS.text_primary),
+                self.cx_pressure_type,
+            ], spacing=6),
+            *atmosphere_rows,
             self.all_entries["cx_p"]["ui_row"],
             self.all_entries["cx_t_in"]["ui_row"],
             self.all_entries["cx_t_out"]["ui_row"],
@@ -191,7 +213,22 @@ class CondenserModule(BaseAnalysisModule):
             self.all_entries["cx_c_out"]["ui_row"],
         ]
         self._refresh_boundary_rows()
-        return ft.Container(content=ft.Column(controls, spacing=12), visible=False)
+        container = ft.Container(content=ft.Column(controls, spacing=12), visible=False)
+        self.apply_pressure_basis(self.cx_pressure_type, ["cx_p"], "cx_alt", "cx_atm")
+        return container
+
+    def on_pressure_type_change(self, _event: ft.ControlEvent | None) -> None:
+        """切換冷凝壓力的錶壓力／絕對壓力，數值換算為同一個實際壓力。
+
+錶壓力模式使用錶壓單位並顯示海拔與大氣壓力欄位；大氣壓力無法解析時維持原模式並
+提示（換算規則見 ``BaseAnalysisModule.switch_pressure_basis``）。
+
+參數：
+    _event: Flet 變更事件；此處不需讀取內容。
+
+回傳：
+    無。"""
+        self.apply_pressure_basis(self.cx_pressure_type, ["cx_p"], "cx_alt", "cx_atm", self.exergy_ui)
 
     def toggle_boundary_help(self, _event: ft.ControlEvent | None) -> None:
         """展開或收起等效傳熱邊界溫度的說明。
@@ -268,12 +305,13 @@ class CondenserModule(BaseAnalysisModule):
             boundary_k, boundary_label = self.read_si("cx_t_b"), "指定等效傳熱邊界溫度"
         result = self.refrigeration.analyze_condenser_exergy(CondenserExergyRequest(
             fluid=self.read_text("cx_fluid"),
-            pressure_pa=self.read_si("cx_p"),
+            pressure_pa=self.read_absolute_pressure_pa("cx_p", "cx_atm"),
             inlet_temperature_k=self.read_si("cx_t_in"),
             outlet_temperature_k=self.read_si("cx_t_out"),
             mass_flow_kg_s=self.read_si("cx_m_dot"),
             dead_state_temperature_k=dead_state_k,
             boundary_temperature_k=boundary_k,
+            reference_state=self.cx_ref_state.value,
         ))
         balance = result.balance
         formatter = ResultFormatter(self.unit_converter, use_imperial)
@@ -295,6 +333,7 @@ class CondenserModule(BaseAnalysisModule):
         formatter.add("泡點（飽和液體）", "T", result.bubble_point_k, 2)
         formatter.add("死狀態溫度 T0", "T", result.dead_state_temperature_k, 2)
         formatter.section("冷媒狀態")
+        formatter.add("冷凝壓力（絕對）", "P", result.pressure_pa, 2)
         formatter.add("入口比焓 h1", "H", result.inlet.enthalpy_j_kg, 2)
         formatter.add("出口比焓 h2", "H", result.outlet.enthalpy_j_kg, 2)
         formatter.add("入口比熵 s1", "S", result.inlet.entropy_j_kgk, 4)

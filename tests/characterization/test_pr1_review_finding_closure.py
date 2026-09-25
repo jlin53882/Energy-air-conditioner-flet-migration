@@ -123,8 +123,8 @@ def test_chart_auto_water_aliases_use_default_reference_state(fluid: str) -> Non
     assert _effective_reference_state("R134a", "Auto") == ReferenceStatePolicy.ASHRAE
 
 
-def test_property_selection_policy_is_shared_with_compressor_example() -> None:
-    """PropertyTab 的選擇就是 compressor page 消費的 policy。
+def test_property_selection_policy_does_not_leak_into_compressor_example() -> None:
+    """PropertyTab 的 Reference State 只影響物性查詢頁；壓縮機範例依流體決定 policy。
 
 回傳：
     None：函數計算或處理後的結果。"""
@@ -158,7 +158,6 @@ def test_property_selection_policy_is_shared_with_compressor_example() -> None:
     property_tab.on_ref_state_change(None)
 
     compressor = CompressorModule.__new__(CompressorModule)
-    compressor.reference_state_provider = query_service
     compressor.unit_converter = converter
     compressor.analyzer = CapturingAnalyzer()
     compressor.ce_substance_tf = ValueControl("R134a")
@@ -175,15 +174,15 @@ def test_property_selection_policy_is_shared_with_compressor_example() -> None:
             ("ce_v1_dot", "1", converter.default_units["VolumeFlow"]),
         )
     }
-    compressor._reference_state_for("R134a")
     assert compressor._reference_state_for(" water ") == ReferenceStatePolicy.DEFAULT
     compressor.calculate_comp_example(use_imperial=False)
-    assert compressor.analyzer.reference_states == ["IIR"]
+    assert compressor.analyzer.reference_states == ["ASHRAE"]
 
     property_tab.ref_state_dd.value = "NBP"
     property_tab.on_ref_state_change(None)
     compressor.calculate_comp_example(use_imperial=False)
-    assert compressor.analyzer.reference_states == ["IIR", "NBP"]
+    assert compressor.analyzer.reference_states == ["ASHRAE", "ASHRAE"]
+    assert query_service.requested_reference_state("R134a") == "NBP"
 
 
 def test_t_s_renderer_path_returns_figure_without_residual_count_access(monkeypatch) -> None:

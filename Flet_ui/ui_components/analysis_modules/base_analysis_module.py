@@ -1,6 +1,7 @@
 # ui_components/analysis_modules/base_analysis_module.py
 # (新介面 - 支援功能群組)
 
+from collections.abc import Callable
 from math import isfinite
 
 import flet as ft
@@ -10,7 +11,18 @@ from ..unit.UnitConverter import (
     GAUGE_TO_ABSOLUTE_UNIT,
     UnitConverter,
 )
-from ...ui.theme import TOKENS, mono_style, style_text_field
+from ...ui.theme import TOKENS, mono_style, style_dropdown, style_text_field
+
+# 未填海拔時，錶壓換算使用的標準大氣壓力（Pa）。
+STANDARD_ATMOSPHERE_PA = 101_325.0
+
+# 分析頁 Reference State 選單的選項；Auto 依流體決定（冷媒 ASHRAE、水 Default）。
+REFERENCE_STATE_OPTIONS = (
+    ("Auto", "自動（冷媒 ASHRAE、水 Default）"),
+    ("ASHRAE", "ASHRAE（冷媒常用）"),
+    ("NBP", "NBP（常壓沸點為 0）"),
+    ("IIR", "IIR（0 °C 飽和液體為基準）"),
+)
 
 class BaseAnalysisModule:
     """
@@ -37,6 +49,9 @@ class BaseAnalysisModule:
         self.all_entries = {} # 儲存此模組 *所有* 的 UI 元件 (跨功能)
         self._is_updating_units = False
         self._last_units = {}
+        # 只改變表示方式、不改變實際數值的輸入控制項（例如錶壓／絕對壓切換）；
+        # AnalysisModuleAdapter 不會因這些控制項變更而使結果失效。
+        self.presentation_only_controls: list[ft.Control] = []
         # ---
 
     def get_analysis_definitions(self) -> dict:
@@ -363,6 +378,136 @@ class BaseAnalysisModule:
             self.retarget_input_row(key, new_prop, new_unit)
         atm_entry["val"].error_text = None
         return True
+
+    def _pressure_from_altitude(self) -> Callable[[float], float]:
+        """回傳「海拔（m）→ 大氣壓力（Pa）」的換算函式。
+
+組合根可用 ``pressure_from_altitude`` 服務注入共用濕空氣服務的換算；未注入時
+建立預設濕空氣服務，確保全系統只使用同一個海拔公式。
+
+回傳：
+    換算函式。"""
+        converter = self.services.get("pressure_from_altitude")
+        if converter is None:
+            from ..unit.PsychrometricCalculator import PsychrometricCalculator
+
+            converter = PsychrometricCalculator().service.calculate_pressure_from_altitude
+            self.services["pressure_from_altitude"] = converter
+        return converter
+
+    def create_atmosphere_rows(self, altitude_key: str, atm_key: str) -> list[ft.Control]:
+        """建立錶壓換算用的「海拔（選填）」與「大氣壓力」輸入列，並綁定自動換算。
+
+大氣壓力預設為標準大氣壓 101.325 kPa；填入海拔時依海拔自動計算大氣壓力，清空海拔
+時恢復標準大氣壓。大氣壓力欄位仍可手動修改。大氣壓力改變時不改寫錶壓讀值，
+計算時才以新的大氣壓力換算絕對壓力。
+
+參數：
+    altitude_key: 海拔輸入列識別鍵。
+    atm_key: 大氣壓力（絕對）輸入列識別鍵。
+
+回傳：
+    [海拔輸入列, 大氣壓力輸入列]。"""
+        altitude = self.create_input_row(altitude_key, "海拔高度（選填）", "", "L", "m")
+        altitude["val"].hint_text = "未填時使用 101.325 kPa"
+        atmosphere = self.create_input_row(
+            atm_key, "大氣壓力（絕對；填海拔時自動計算）", "101.325", "P", "kPa"
+        )
+        self.bind_independent_unit_sync([altitude_key, atm_key])
+
+        def sync_atmosphere(_event: ft.ControlEvent | None) -> None:
+            """依海拔欄位更新大氣壓力欄位。
+
+參數：
+    _event: 海拔欄位的 Flet 變更事件。
+
+回傳：
+    無。"""
+            raw_value = (altitude["val"].value or "").strip()
+            atmospheric_pa = STANDARD_ATMOSPHERE_PA
+            if raw_value:
+                try:
+                    atmospheric_pa = self._pressure_from_altitude()(self.read_si(altitude_key))
+                    if isinstance(atmospheric_pa, complex) or not isfinite(atmospheric_pa) or atmospheric_pa <= 0:
+                        raise ValueError("海拔超出標準大氣公式的適用範圍。")
+                except (ValueError, TypeError, OverflowError) as error:
+                    altitude["val"].error_text = str(error)
+                    self._update_controls(altitude["val"])
+                    return
+            altitude["val"].error_text = None
+            atmosphere["val"].value = (
+                f"{self.unit_converter.convert_from_si('P', atmospheric_pa, atmosphere['unit'].value):.6g}"
+            )
+            atmosphere["val"].error_text = None
+            self._update_controls(altitude["val"], atmosphere["val"])
+
+        altitude["val"].on_change = sync_atmosphere
+        return [altitude["ui_row"], atmosphere["ui_row"]]
+
+    def apply_pressure_basis(
+        self,
+        toggle: ft.SegmentedButton,
+        pressure_keys: list[str],
+        altitude_key: str,
+        atm_key: str,
+        container: ft.Control | None = None,
+    ) -> None:
+        """依壓力類型切換按鈕換算壓力輸入列，並只在錶壓模式顯示海拔與大氣壓力欄位。
+
+大氣壓力無效而無法換算時，按鈕恢復為原模式（見 :meth:`switch_pressure_basis`）。
+切換按鈕會登記為 ``presentation_only_controls``：換算後實際壓力不變，不使結果失效。
+
+參數：
+    toggle: 選項為 "Gauge"／"Absolute" 的分段按鈕。
+    pressure_keys: 要切換的壓力輸入列識別鍵。
+    altitude_key: 海拔輸入列識別鍵。
+    atm_key: 大氣壓力輸入列識別鍵。
+    container: 切換後需要更新的外層容器；未掛載時略過更新。
+
+回傳：
+    無。"""
+        if all(control is not toggle for control in self.presentation_only_controls):
+            self.presentation_only_controls.append(toggle)
+        to_gauge = "Gauge" in toggle.selected
+        if not self.switch_pressure_basis(pressure_keys, atm_key, to_gauge):
+            toggle.selected = ["Absolute" if to_gauge else "Gauge"]
+        is_gauge = "Gauge" in toggle.selected
+        self.all_entries[altitude_key]["ui_row"].visible = is_gauge
+        self.all_entries[atm_key]["ui_row"].visible = is_gauge
+        if container is not None:
+            self._update_controls(container)
+
+    def create_reference_state_row(self, label: str = "參考狀態 (Reference State)") -> tuple[ft.Column, ft.Dropdown]:
+        """建立此分析頁自己的 Reference State 選單，不跟隨其他頁面的設定。
+
+參數：
+    label: 欄位名稱。
+
+回傳：
+    (輸入列, 下拉選單)；選單值為 ``Auto``、``ASHRAE``、``NBP`` 或 ``IIR``。"""
+        dropdown = style_dropdown(ft.Dropdown(
+            options=[ft.dropdown.Option(code, text) for code, text in REFERENCE_STATE_OPTIONS],
+            value="Auto",
+            expand=True,
+        ))
+        label_control = ft.Text(label, size=TOKENS.body, weight=ft.FontWeight.W_500,
+                                color=TOKENS.text_primary)
+        return ft.Column([label_control, dropdown], spacing=6), dropdown
+
+    @staticmethod
+    def _update_controls(*controls: ft.Control) -> None:
+        """更新已掛載的控制項；未掛載時略過。
+
+參數：
+    controls: 要更新的控制項。
+
+回傳：
+    無。"""
+        for control in controls:
+            try:
+                control.update()
+            except RuntimeError:
+                pass
 
     def read_absolute_pressure_pa(self, key: str, atm_key: str) -> float:
         """讀取壓力輸入列並換成絕對壓力 Pa；錶壓力模式時加上大氣壓力。

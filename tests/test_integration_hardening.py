@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import flet as ft
 import matplotlib.pyplot as plt
 import pytest
 
@@ -15,6 +16,7 @@ from domain.refrigeration.condenser_exergy import analyze_condenser_exergy
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units import CanonicalUnitConverter
 from Flet_ui.flet_app import main as flet_main
+from Flet_ui.ui.analysis_module_adapter import iter_controls
 from Flet_ui.ui_components.unit.UnitConverter import GAUGE_PRESSURE, UnitConverter
 
 
@@ -250,9 +252,23 @@ def test_unit_switch_keeps_inputs_and_round_trips_result(shell) -> None:
     assert _entry_state(module, list(module.all_entries)) == inputs_before
 
 
+def _edit(control, value: str) -> None:
+    """模擬使用者在輸入控制項中修改內容並觸發 Flet 事件。
+
+參數：
+    control: TextField 或 Dropdown。
+    value: 新的內容。
+
+回傳：
+    無。"""
+    control.value = value
+    handler = control.on_select if isinstance(control, ft.Dropdown) else control.on_change
+    handler(SimpleNamespace(control=control))
+
+
 @pytest.mark.parametrize("edited_value", ["10", "abc"])
-def test_unit_switch_does_not_recalculate_with_edited_inputs(shell, edited_value) -> None:
-    """計算後修改輸入但未重新計算，切換單位不得以未送出的輸入重算，結果改為失效。
+def test_editing_analysis_input_invalidates_result(shell, edited_value) -> None:
+    """分析頁修改輸入後結果立即失效；之後切換單位也不得以未送出的輸入重算。
 
 參數：
     shell: 工作區外殼。
@@ -264,14 +280,17 @@ def test_unit_switch_does_not_recalculate_with_edited_inputs(shell, edited_value
     view = shell.views["refrigeration_cycle"]
     module = view.adapter.modules[0]
     view.perform_calculation(None)
-    module.all_entries["cyc_te"]["val"].value = edited_value
 
-    _switch_unit_system(shell, "Imperial")
+    _edit(module.all_entries["cyc_te"]["val"], edited_value)
 
     assert view.result_panel.status == "warning"
     assert view.result_panel.title == "輸入已變更"
     assert view.adapter.result_text is None
     assert view.workspace.result_view.chart_column.visible is False
+
+    _switch_unit_system(shell, "Imperial")
+    assert view.result_panel.status == "warning"
+    assert view.adapter.result_text is None
     assert module.all_entries["cyc_te"]["val"].value == edited_value
 
     # 以目前輸入重新計算後恢復正常。
@@ -279,6 +298,63 @@ def test_unit_switch_does_not_recalculate_with_edited_inputs(shell, edited_value
     view.perform_calculation(None)
     assert view.result_panel.status == "success"
     assert "°F" in view.adapter.result_text
+
+
+def test_editing_input_on_every_analysis_view_invalidates_result(shell) -> None:
+    """每個分析頁的文字輸入修改後都使結果失效，並在結果區隱藏圖表。
+
+回傳：
+    無。"""
+    for route_key in ("compressor", "evaporator", "condenser", "refrigeration_cycle",
+                      "psychrometrics", "air_processes", "psychrometric_chart"):
+        shell.navigate(route_key)
+        view = shell.views[route_key]
+        view.perform_calculation(None)
+        if view.result_panel.status != "success":
+            continue
+        field = next(
+            control for control in iter_controls(view.adapter.active_definition.input_view)
+            if isinstance(control, ft.TextField) and control.visible
+        )
+        _edit(field, field.value or "1")
+        assert view.result_panel.status == "warning", route_key
+        assert view.workspace.result_view.chart_column.visible is False, route_key
+
+
+def test_unit_dropdown_and_pressure_basis_do_not_invalidate_result(shell) -> None:
+    """切換欄位單位或錶壓／絕對壓只改表示方式，實際數值不變，結果保留。
+
+回傳：
+    無。"""
+    shell.navigate("refrigeration_cycle")
+    view = shell.views["refrigeration_cycle"]
+    module = view.adapter.modules[0]
+    view.perform_calculation(None)
+    _edit(module.all_entries["cyc_te"]["unit"], "°F")
+    assert view.result_panel.status == "success"
+    assert float(module.all_entries["cyc_te"]["val"].value) == pytest.approx(41.0)
+
+    view._handle_tool_change("cycle.superheat_subcooling")
+    view.perform_calculation(None)
+    module.sh_pressure_type.selected = ["Absolute"]
+    module.sh_pressure_type.on_change(SimpleNamespace(control=module.sh_pressure_type))
+    assert view.result_panel.status == "success"
+    assert module.all_entries["sh_p"]["unit"].value == "kPa"
+
+
+def test_reference_state_selector_change_invalidates_result(shell) -> None:
+    """分析頁自己的 Reference State 選單屬於計算輸入，修改後結果失效。
+
+回傳：
+    無。"""
+    shell.navigate("refrigeration_cycle")
+    view = shell.views["refrigeration_cycle"]
+    module = view.adapter.modules[0]
+    view.perform_calculation(None)
+
+    _edit(module.cyc_ref_state, "IIR")
+
+    assert view.result_panel.status == "warning"
 
 
 def test_unit_switch_recalculates_all_views_with_unchanged_inputs(shell) -> None:
@@ -416,6 +492,118 @@ def test_gauge_pressure_is_consistent_across_navigation_and_unit_switch(shell) -
     assert f"{expected_psia:.2f} psia" in view.adapter.result_text
 
 
+def _superheat_module(shell):
+    """切到過熱度／過冷度判讀並回傳 (view, module)。
+
+參數：
+    shell: 工作區外殼。
+
+回傳：
+    (RefrigerationCycleView, RefrigerationCycleModule)。"""
+    shell.navigate("refrigeration_cycle")
+    view = shell.views["refrigeration_cycle"]
+    view._handle_tool_change("cycle.superheat_subcooling")
+    return view, view.adapter.modules[0]
+
+
+def test_altitude_sets_atmospheric_pressure_and_keeps_gauge_reading(shell) -> None:
+    """填入海拔時自動計算大氣壓力，錶壓讀值不變；清空海拔時恢復 101.325 kPa。
+
+回傳：
+    無。"""
+    view, module = _superheat_module(shell)
+    atmosphere = module.all_entries["sh_atm"]["val"]
+    assert atmosphere.value == "101.325"
+
+    _edit(module.all_entries["sh_alt"]["val"], "1000")
+
+    assert float(atmosphere.value) == pytest.approx(89.8745, rel=1e-5)
+    assert module.all_entries["sh_p"]["val"].value == "900"
+    view.perform_calculation(None)
+    assert "989.87 kPa" in view.adapter.result_text
+
+    _edit(module.all_entries["sh_alt"]["val"], "")
+
+    assert float(atmosphere.value) == pytest.approx(101.325)
+    view.perform_calculation(None)
+    assert "1001.33 kPa" in view.adapter.result_text
+
+
+def test_invalid_altitude_keeps_atmospheric_pressure_and_names_error(shell) -> None:
+    """海拔無效時提示錯誤，不改動大氣壓力欄位。
+
+回傳：
+    無。"""
+    _view, module = _superheat_module(shell)
+    atmosphere = module.all_entries["sh_atm"]["val"]
+    atmosphere.value = "100"
+
+    _edit(module.all_entries["sh_alt"]["val"], "abc")
+
+    assert module.all_entries["sh_alt"]["val"].error_text
+    assert atmosphere.value == "100"
+
+
+@pytest.mark.parametrize(
+    ("route_key", "analysis_key", "toggle_name", "altitude_key", "atm_key"),
+    [
+        ("refrigeration_cycle", "cycle.superheat_subcooling", "sh_pressure_type", "sh_alt", "sh_atm"),
+        ("compressor", "compressor.compression_ratio", "cr_pressure_type_toggle", "cr_alt", "cr_atm_p"),
+        ("condenser", "condenser.exergy", "cx_pressure_type", "cx_alt", "cx_atm"),
+    ],
+)
+def test_altitude_and_atmosphere_rows_follow_pressure_basis(
+    shell, route_key, analysis_key, toggle_name, altitude_key, atm_key
+) -> None:
+    """海拔與大氣壓力欄位只在錶壓模式顯示。
+
+參數：
+    shell: 工作區外殼。
+    route_key: 要測試的路由。
+    analysis_key: 分析項目。
+    toggle_name: 壓力類型切換按鈕的屬性名稱。
+    altitude_key: 海拔輸入列識別鍵。
+    atm_key: 大氣壓力輸入列識別鍵。
+
+回傳：
+    無。"""
+    shell.navigate(route_key)
+    view = shell.views[route_key]
+    view._handle_tool_change(analysis_key)
+    module = view.adapter.modules[0]
+    toggle = getattr(module, toggle_name)
+
+    for mode in ("Gauge", "Absolute", "Gauge"):
+        toggle.selected = [mode]
+        toggle.on_change(SimpleNamespace(control=toggle))
+        assert module.all_entries[altitude_key]["ui_row"].visible is (mode == "Gauge")
+        assert module.all_entries[atm_key]["ui_row"].visible is (mode == "Gauge")
+
+
+def test_condenser_exergy_gauge_toggle_preserves_physical_pressure(shell) -> None:
+    """冷凝器 Exergy 頁切換錶壓後實際壓力不變，計算結果與絕對壓力模式相同。
+
+回傳：
+    無。"""
+    shell.navigate("condenser")
+    view = shell.views["condenser"]
+    view._handle_tool_change("condenser.exergy")
+    module = view.adapter.modules[0]
+    view.perform_calculation(None)
+    absolute_result = view.adapter.result_text
+    assert "冷凝壓力（絕對）: 1000.00 kPa" in absolute_result
+
+    module.cx_pressure_type.selected = ["Gauge"]
+    module.cx_pressure_type.on_change(SimpleNamespace(control=module.cx_pressure_type))
+
+    pressure = module.all_entries["cx_p"]
+    assert pressure["prop_code"] == GAUGE_PRESSURE and pressure["unit"].value == "kPag"
+    assert float(pressure["val"].value) == pytest.approx(1000 - 101.325)
+    assert view.result_panel.status == "success"
+    view.perform_calculation(None)
+    assert view.adapter.result_text == absolute_result
+
+
 # ======================================================
 # 4. Reference State
 # ======================================================
@@ -487,6 +675,83 @@ def test_thermo_diagram_reference_state_does_not_change_property_query(shell) ->
     assert "成功" in module.result_text.value
 
     assert _calculate_property(shell, fluid="R32", reference_state="ASHRAE") == pytest.approx(baseline)
+
+
+def _result_line(result_text: str, label: str) -> str:
+    """回傳結果文字中以指定名稱開頭的那一行。
+
+參數：
+    result_text: 模組輸出的格式化文字。
+    label: 結果名稱。
+
+回傳：
+    該行文字。"""
+    return next(line for line in result_text.splitlines() if line.startswith(label))
+
+
+def test_refrigeration_cycle_uses_its_own_reference_state(shell) -> None:
+    """冷凍循環以自己頁面的 Reference State 回報焓值；COP 等狀態差值不受影響。
+
+回傳：
+    無。"""
+    shell.navigate("refrigeration_cycle")
+    view = shell.views["refrigeration_cycle"]
+    module = view.adapter.modules[0]
+    view.perform_calculation(None)
+    ashrae = view.adapter.result_text
+
+    module.cyc_ref_state.value = "IIR"
+    view.perform_calculation(None)
+    iir = view.adapter.result_text
+
+    enthalpy_section = "--- 狀態點比焓 ---"
+    assert iir.split(enthalpy_section)[1] != ashrae.split(enthalpy_section)[1]
+    assert _result_line(iir, "冷房 COP") == _result_line(ashrae, "冷房 COP")
+    assert _result_line(iir, "壓縮功 w") == _result_line(ashrae, "壓縮功 w")
+
+
+def test_condenser_exergy_uses_its_own_reference_state(shell) -> None:
+    """冷凝器 Exergy 以自己頁面的 Reference State 回報焓、熵；Exergy 平衡不受影響。
+
+回傳：
+    無。"""
+    shell.navigate("condenser")
+    view = shell.views["condenser"]
+    view._handle_tool_change("condenser.exergy")
+    module = view.adapter.modules[0]
+    view.perform_calculation(None)
+    ashrae = view.adapter.result_text
+
+    module.cx_ref_state.value = "IIR"
+    view.perform_calculation(None)
+    iir = view.adapter.result_text
+
+    assert _result_line(iir, "入口比焓 h1") != _result_line(ashrae, "入口比焓 h1")
+    for label in ("Exergy 破壞率 X_dest", "Exergy 效率 η", "放熱量 Q_H", "熵產生率 S_gen"):
+        assert _result_line(iir, label) == _result_line(ashrae, label), label
+
+
+def test_compressor_example_results_do_not_depend_on_reference_state(shell, monkeypatch) -> None:
+    """壓縮機綜合範例只輸出狀態差值，不同 policy 下結果相同，因此不提供選單。
+
+參數：
+    shell: 工作區外殼。
+    monkeypatch: pytest 的屬性替換工具。
+
+回傳：
+    無。"""
+    shell.navigate("compressor")
+    view = shell.views["compressor"]
+    view._handle_tool_change("compressor.combined_example")
+    module = view.adapter.modules[0]
+    results = {}
+    for policy in ("ASHRAE", "IIR", "NBP"):
+        monkeypatch.setattr(module, "_reference_state_for", lambda _fluid, policy=policy: policy)
+        view.perform_calculation(None)
+        assert view.result_panel.status == "success", view.result_panel.message
+        results[policy] = view.adapter.result_text
+    assert results["IIR"] == results["ASHRAE"]
+    assert results["NBP"] == results["ASHRAE"]
 
 
 @pytest.mark.parametrize("fluid", ["R134a", "R32"])

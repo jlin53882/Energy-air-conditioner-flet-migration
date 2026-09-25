@@ -108,5 +108,5 @@ class RefrigerationService:
             request.mass_flow_kg_s,
             request.dead_state_temperature_k,
             boundary_temperature_k=request.boundary_temperature_k,
-            reference_state=self.resolve_policy(request.fluid, None),
+            reference_state=self.resolve_policy(request.fluid, request.reference_state),
         )

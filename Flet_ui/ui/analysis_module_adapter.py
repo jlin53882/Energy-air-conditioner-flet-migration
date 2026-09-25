@@ -9,6 +9,7 @@ compressor、evaporator、condenser、psychrometric 等任何特定分類的存�
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Iterator
 
 import flet as ft
 
@@ -21,26 +22,30 @@ logger = logging.getLogger(__name__)
 _FAILED_RESULT_PREFIXES = ("計算錯誤", "計算失敗")
 
 
-def input_snapshot(root: ft.Control) -> tuple[tuple[str, object], ...]:
-    """依控制項樹的固定順序擷取所有輸入控制項目前的值。
+# 使用者修改後會改變計算語意的輸入控制項，以及各自的事件屬性名稱。
+_SEMANTIC_INPUT_EVENTS = (
+    (ft.TextField, "on_change"),
+    (ft.Dropdown, "on_select"),
+    (ft.Checkbox, "on_change"),
+    (ft.Switch, "on_change"),
+    (ft.RadioGroup, "on_change"),
+    (ft.SegmentedButton, "on_change"),
+)
 
-    只收集使用者可編輯的輸入（文字欄位、下拉選單、核取方塊、開關、單選群組與
-    分段按鈕），用來判斷兩個時間點之間輸入是否被修改；不讀取任何模組專屬欄位。
+
+def iter_controls(root: ft.Control) -> Iterator[ft.Control]:
+    """依控制項樹的固定順序走訪所有子控制項（含 root）。
 
     參數：
-        root: 分析定義的輸入控制項（``AnalysisDefinition.input_view``）。
+        root: 起點控制項。
 
     回傳：
-        tuple：依走訪順序排列的 (控制項類型, 值)。
+        Iterator：依深度優先順序產生的控制項。
     """
-    values: list[tuple[str, object]] = []
     stack: list[ft.Control] = [root]
     while stack:
         control = stack.pop()
-        if isinstance(control, (ft.TextField, ft.Dropdown, ft.Checkbox, ft.Switch, ft.RadioGroup)):
-            values.append((type(control).__name__, control.value))
-        elif isinstance(control, ft.SegmentedButton):
-            values.append((type(control).__name__, tuple(control.selected or ())))
+        yield control
         children: list[ft.Control] = []
         content = getattr(control, "content", None)
         if isinstance(content, ft.Control):
@@ -50,7 +55,6 @@ def input_snapshot(root: ft.Control) -> tuple[tuple[str, object], ...]:
             if isinstance(nested, list):
                 children.extend(child for child in nested if isinstance(child, ft.Control))
         stack.extend(reversed(children))
-    return tuple(values)
 
 
 class AnalysisModuleAdapter:
@@ -96,10 +100,11 @@ class AnalysisModuleAdapter:
         self.result_panel = ResultPanel()
         self.result_text: str | None = None
         self._has_calculated_result = False
-        # 最近一次成功計算當下的輸入快照；用來判斷切換單位時輸入是否已修改。
-        self._calculated_inputs: tuple[tuple[str, object], ...] | None = None
+        # 結果因輸入修改而失效時通知 view 重繪結果區。
+        self.on_result_invalidated: Callable[[], None] | None = None
         self.output_unit_system = "SI"
         self._sync_visibility()
+        self._bind_input_invalidation()
 
     @property
     def active_definition(self) -> AnalysisDefinition:
@@ -181,7 +186,6 @@ class AnalysisModuleAdapter:
             "success", "計算完成", f"{definition.label} · 輸出 {self.output_unit_system}"
         )
         self._has_calculated_result = True
-        self._calculated_inputs = input_snapshot(definition.input_view)
 
     def _record_failure(self, message: str) -> None:
         """以錯誤狀態記錄計算失敗，並清除先前的結果文字。
@@ -211,18 +215,70 @@ class AnalysisModuleAdapter:
             無。
         """
         self.output_unit_system = unit_system
+        # 模組只輸出格式化文字，換單位必須重新計算。輸入一被修改結果就已失效
+        # （見 invalidate_result），因此仍有結果時輸入必定與該結果一致。
+        if self._has_calculated_result:
+            self.calculate()
+
+    def invalidate_result(self) -> None:
+        """使用者修改計算輸入後清除舊結果，並提示以目前輸入重新計算。
+
+        尚無成功結果（未計算或計算失敗）時不做任何事。
+
+        回傳：
+            無。
+        """
         if not self._has_calculated_result:
             return
-        # 模組只輸出格式化文字，換單位必須重新計算；但輸入若已在計算後被修改，
-        # 重新計算會把尚未送出的輸入當成原結果呈現，因此改為使結果失效。
-        if input_snapshot(self.active_definition.input_view) != self._calculated_inputs:
-            self.result_text = None
-            self._has_calculated_result = False
-            self.result_panel.set_status(
-                "warning", "輸入已變更", "舊結果已清除，請使用目前輸入重新執行計算。"
-            )
-            return
-        self.calculate()
+        self.result_text = None
+        self._has_calculated_result = False
+        self.result_panel.set_status(
+            "warning", "輸入已變更", "舊結果已清除，請使用目前輸入重新執行計算。"
+        )
+        if self.on_result_invalidated is not None:
+            self.on_result_invalidated()
+
+    def _bind_input_invalidation(self) -> None:
+        """讓每個會改變計算語意的輸入在使用者修改時使結果失效。
+
+        單位選單（``all_entries[...]["unit"]``）與模組宣告的
+        ``presentation_only_controls``（例如錶壓／絕對壓切換）只改變表示方式、
+        實際數值不變，不視為修改。既有的事件處理器會先執行，再使結果失效。
+
+        回傳：
+            無。
+        """
+        presentation_only: set[int] = set()
+        for module in self.modules:
+            for entry in getattr(module, "all_entries", {}).values():
+                presentation_only.add(id(entry["unit"]))
+            presentation_only.update(id(control) for control in getattr(module, "presentation_only_controls", ()))
+        seen: set[int] = set()
+        for definition in self.definitions:
+            for control in iter_controls(definition.input_view):
+                if id(control) in seen or id(control) in presentation_only:
+                    continue
+                seen.add(id(control))
+                for control_type, event_name in _SEMANTIC_INPUT_EVENTS:
+                    if isinstance(control, control_type):
+                        setattr(control, event_name, self._invalidating_handler(getattr(control, event_name)))
+                        break
+
+    def _invalidating_handler(self, original: Callable[[object], object] | None) -> Callable[[object], None]:
+        """包裝既有事件處理器：先執行原處理器，再使結果失效。
+
+        參數：
+            original: 控制項原有的事件處理器；沒有時為 None。
+
+        回傳：
+            新的事件處理器。
+        """
+        def handler(event: object) -> None:
+            if original is not None:
+                original(event)
+            self.invalidate_result()
+
+        return handler
 
     def tool_items(self) -> list[tuple[str, str]]:
         """提供給 ToolSelector 使用的 (key, label) 清單。
