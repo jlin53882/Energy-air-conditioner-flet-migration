@@ -1,5 +1,16 @@
 # hvac_calculations/compressor.py
 # 職責：壓縮機相關計算
+#
+# 舊版 API 單位契約（HVACAnalyzer 與壓縮機分析模組依此呼叫；本檔不做單位換算）：
+# - 比焓 h：kJ/kg
+# - 比熵 s：kJ/(kg·K)
+# - 質量流率 m_dot：kg/s
+# - 溫度 T0_dead 等：K（絕對溫度）
+# - 功率、熱傳率、㶲率（W_in、W_rev、Q_out、Ex_destruction）：kW
+# 例外：calculate_compression_ratio 接受任何一致的絕對壓力單位；
+# calculate_isentropic_efficiency 與 calculate_volumetric_efficiency 只計算
+# 無單位比值，接受任何一致的單位；calculate_compressor_example 以 SI（Pa、K、
+# m³/s）接收狀態，內部把 CoolProp 的 J/kg、J/(kg·K) 換成 kJ 後依本契約計算。
 
 import CoolProp.CoolProp as CP
 from domain.thermodynamics.reference_state import ReferenceStateService
@@ -14,15 +25,15 @@ _REFERENCE_STATE = ReferenceStateService()
 
 #壓縮機相關計算方程式
 def calculate_compressor_work(mass_flow_rate, h1, h2):
-    """針對舊版 kJ/kg API 回傳以 kW 為單位的壓縮機功。
+    """針對舊版 kJ/kg API 回傳以 kW 為單位的壓縮機功 W_in = ṁ · (h2 − h1)。
 
 參數：
-    mass_flow_rate (未指定型別): 函數輸入值。
-    h1 (未指定型別): 函數輸入值。
-    h2 (未指定型別): 函數輸入值。
+    mass_flow_rate (float): 質量流率（kg/s）。
+    h1 (float): 壓縮機入口比焓（kJ/kg）。
+    h2 (float): 壓縮機出口比焓（kJ/kg）。
 
 回傳：
-    未指定型別：函數計算或處理後的結果。"""
+    float：壓縮機輸入功（kW）。"""
     return calculate_compressor_work_si(mass_flow_rate, h1 * 1000.0, h2 * 1000.0) / 1000.0
 
 def calculate_compressor_work_heat_transfer( mass_flow_rate,h1, h2, Q_out):
@@ -47,8 +58,14 @@ def calculate_compressor_work_heat_transfer( mass_flow_rate,h1, h2, Q_out):
 def calculate_compressor_reversible_work(mass_flow_rate , h1, h2, s1, s2,T0_dead):
     """
     計算壓縮機可逆的功 (Wrev)。
-    公式: Wrev = ṁ * ((h2 - h1 - T0_dead * (s2 - s1))
+    公式: Wrev = ṁ * ((h2 - h1) - T0_dead * (s2 - s1))
     :param mass_flow_rate: 質量流率 (單位: kg/s)
+    :param h1: 壓縮機入口比焓 (單位: kJ/kg)
+    :param h2: 壓縮機出口比焓 (單位: kJ/kg)
+    :param s1: 壓縮機入口比熵 (單位: kJ/(kg·K))
+    :param s2: 壓縮機出口比熵 (單位: kJ/(kg·K))
+    :param T0_dead: 死狀態溫度 (單位: K)
+    :return: 可逆功 (單位: kW)
     """
     Wrev=mass_flow_rate*((h2-h1)-T0_dead*(s2-s1))
     return Wrev
@@ -59,67 +76,78 @@ def calculate_compression_ratio(p_suction_abs, p_discharge_abs):
     """透過共用 SI 方程式回傳壓縮比。
 
 參數：
-    p_suction_abs (未指定型別): 函數輸入值。
-    p_discharge_abs (未指定型別): 函數輸入值。
+    p_suction_abs (float): 吸入絕對壓力（與排出壓力同單位）。
+    p_discharge_abs (float): 排出絕對壓力（與吸入壓力同單位）。
 
 回傳：
-    未指定型別：函數計算或處理後的結果。"""
+    float：壓縮比（無單位）。"""
     return calculate_compression_ratio_si(p_suction_abs, p_discharge_abs)
 
 def calculate_compressor_exerpy_destruction(mass_flow_rate, h1,h2, s1, s2 ,T0_dead,ho_dead, s0_dead):
     """
-    計算壓縮機的㶲破壞 (Ex_destruction)。
-    公式: Ex_destruction = mass_flow_rate * [ (h2 - h1) - T0_dead * (s2 - s1) ] + W_in
+    計算壓縮機的㶲破壞率 (Ex_destruction)。
+    公式: Ex_destruction = W_in + mass_flow_rate * (ex1 - ex2)
+                         = W_in - mass_flow_rate * [ (h2 - h1) - T0_dead * (s2 - s1) ]
+                         = W_in - W_rev
 
     :param mass_flow_rate: 質量流率 (kg/s)
-    :param h1: 壓縮機入口比焓 (J/kg)
-    :param s1: 壓縮機入口比熵 (J/(kg.K))
-    :param h2: 壓縮機出口比焓 (J/kg)
-    :param s2: 壓縮機出口比熵 (J/(kg.K))
+    :param h1: 壓縮機入口比焓 (kJ/kg)
+    :param h2: 壓縮機出口比焓 (kJ/kg)
+    :param s1: 壓縮機入口比熵 (kJ/(kg·K))
+    :param s2: 壓縮機出口比熵 (kJ/(kg·K))
     :param T0_dead: 參考狀態溫度 (K)
-    :return: 㶲破壞 (W)
+    :param ho_dead: 死狀態比焓 (kJ/kg)；在 ex1 - ex2 中抵消，不影響結果
+    :param s0_dead: 死狀態比熵 (kJ/(kg·K))；在 ex1 - ex2 中抵消，不影響結果
+    :return: 㶲破壞率 (kW)
     """
-    # 計算壓縮機的功 (W_in)
-    W_in = calculate_compressor_work(mass_flow_rate, h1, h2) # 這裡的h1, h2是J/kg，W_in會是W
-    # 計算入口和出口的比㶲
+    # 計算壓縮機的功 (W_in，kW)
+    W_in = calculate_compressor_work(mass_flow_rate, h1, h2)
+    # 流體通過壓縮機的㶲減少率 ṁ·(ex1 - ex2)（kW；壓縮時為負值）
     Ex_change = mass_flow_rate*calculate_change_specific_exerpy1_2(h1,h2, s1, s2 ,T0_dead,ho_dead, s0_dead,)
     
     #print("Ex_change:",Ex_change)
     #print("W_in:",W_in)
-    # 㶲破壞 = 進入的功+可逆功
+    # 㶲破壞 = 輸入功 + 流體㶲減少率 = W_in - W_rev
     Ex_destruction =Ex_change+W_in
     return Ex_destruction
 
 
 def calculate_compressor_exergetic_efficiency_ratio(mass_flow_rate, h1,h2, s1, s2 ,T0_dead,ho_dead, s0_dead):
-    """計算壓縮機的㶲效率 (Wrev / Win)。
+    """以可逆功法計算壓縮機的㶲效率：η_ex = W_rev / W_in。
+
+W_rev 由 calculate_compressor_reversible_work 以進出口狀態直接計算
+（ṁ · [(h2 − h1) − T0 · (s2 − s1)]），不經由㶲破壞率推導。死狀態的焓與熵
+在進出口㶲差中互相抵消，不影響結果；保留 ho_dead、s0_dead 參數是為了與
+calculate_compressor_exergetic_efficiency_loss 使用相同的輸入。理論上
+W_rev = W_in − X_dest，因此結果應與損失法相同，可互相驗證。
 
 參數：
-    mass_flow_rate (未指定型別): 函數輸入值。
-    h1 (未指定型別): 函數輸入值。
-    h2 (未指定型別): 函數輸入值。
-    s1 (未指定型別): 函數輸入值。
-    s2 (未指定型別): 函數輸入值。
-    T0_dead (未指定型別): 函數輸入值。
-    ho_dead (未指定型別): 函數輸入值。
-    s0_dead (未指定型別): 函數輸入值。
+    mass_flow_rate: 質量流率（kg/s）。
+    h1: 壓縮機入口比焓（kJ/kg）。
+    h2: 壓縮機出口比焓（kJ/kg）。
+    s1: 壓縮機入口比熵（kJ/(kg·K)）。
+    s2: 壓縮機出口比熵（kJ/(kg·K)）。
+    T0_dead: 死狀態溫度（K）。
+    ho_dead: 死狀態比焓（kJ/kg）；不影響結果。
+    s0_dead: 死狀態比熵（kJ/(kg·K)）；不影響結果。
 
 回傳：
-    未指定型別：函數計算或處理後的結果。"""
-    Wrev=calculate_compressor_exerpy_destruction(mass_flow_rate, h1,h2, s1, s2 ,T0_dead,ho_dead, s0_dead)
-    #print("Wrev:",Wrev)
+    㶲效率（無單位比值）。
+
+引發：
+    ValueError：輸入功不為正、可逆功為負，或效率超出合理範圍時。"""
     Win=calculate_compressor_work(mass_flow_rate, h1,h2)
-    #print("Win:",Win)
     if Win <= 0:
         raise ValueError("實際輸入功 (Win) 必須大於零。")
+    Wrev=calculate_compressor_reversible_work(mass_flow_rate, h1, h2, s1, s2, T0_dead)
     if Wrev < 0:
         raise ValueError("可逆功 (Wrev) 必須大於或等於零。")
-        
-    efficiency = 1-(Wrev / Win)
-    
+
+    efficiency = Wrev / Win
+
     if efficiency < 0 or efficiency > 1.05:
         raise ValueError(f"計算出的效率 ({efficiency:.4f}) 不在合理範圍。")
-        
+
     return efficiency
 
 
@@ -127,17 +155,17 @@ def calculate_compressor_exergetic_efficiency_loss(mass_flow_rate, h1,h2, s1, s2
     """計算壓縮機的㶲效率 (1 - Ex_destruction / Win)。
 
 參數：
-    mass_flow_rate (未指定型別): 函數輸入值。
-    h1 (未指定型別): 函數輸入值。
-    h2 (未指定型別): 函數輸入值。
-    s1 (未指定型別): 函數輸入值。
-    s2 (未指定型別): 函數輸入值。
-    T0_dead (未指定型別): 函數輸入值。
-    ho_dead (未指定型別): 函數輸入值。
-    s0_dead (未指定型別): 函數輸入值。
+    mass_flow_rate (float): 質量流率（kg/s）。
+    h1 (float): 壓縮機入口比焓（kJ/kg）。
+    h2 (float): 壓縮機出口比焓（kJ/kg）。
+    s1 (float): 壓縮機入口比熵（kJ/(kg·K)）。
+    s2 (float): 壓縮機出口比熵（kJ/(kg·K)）。
+    T0_dead (float): 死狀態溫度（K）。
+    ho_dead (float): 死狀態比焓（kJ/kg）；不影響結果。
+    s0_dead (float): 死狀態比熵（kJ/(kg·K)）；不影響結果。
 
 回傳：
-    未指定型別：函數計算或處理後的結果。"""
+    float：㶲效率（無單位比值）。"""
     Ex_destruction =calculate_compressor_exerpy_destruction(mass_flow_rate, h1,h2, s1, s2 ,T0_dead,ho_dead,s0_dead)
     Win=calculate_compressor_work(mass_flow_rate, h1,h2)
     #print("Ex_destruction:",Ex_destruction)
@@ -161,10 +189,10 @@ def calculate_isentropic_efficiency(h1_inlet_enthalpy, h2_actual_enthalpy,h2s_is
 
     公式 (3.8): η_comp, isen = (h2s - h1) / (h2 - h1)
 
-    參數:
-    h2s_isentropic_enthalpy (float): 冷媒在等熵壓縮後出口處的比焓 (kJ/kg)。
-    h1_inlet_enthalpy (float): 冷媒在壓縮機入口處的比焓 (kJ/kg)。
-    h2_actual_enthalpy (float): 冷媒在實際壓縮後出口處的比焓 (kJ/kg)。
+    參數（三個焓值只需使用同一單位，例如 kJ/kg 或 J/kg；結果為無單位比值）:
+    h2s_isentropic_enthalpy (float): 冷媒在等熵壓縮後出口處的比焓。
+    h1_inlet_enthalpy (float): 冷媒在壓縮機入口處的比焓。
+    h2_actual_enthalpy (float): 冷媒在實際壓縮後出口處的比焓。
 
     回傳值 （回傳）:
     float: 壓縮機的等熵效率 (無單位)。
@@ -250,19 +278,19 @@ def calculate_compressor_example(R,P1,T1,P2,T2,P0_dead,T0_dead,V1_dot,substance:
     """在共用狀態同步機制下計算舊版壓縮機範例。
 
 參數：
-    R (未指定型別): 函數輸入值。
-    P1 (未指定型別): 函數輸入值。
-    T1 (未指定型別): 函數輸入值。
-    P2 (未指定型別): 函數輸入值。
-    T2 (未指定型別): 函數輸入值。
-    P0_dead (未指定型別): 函數輸入值。
-    T0_dead (未指定型別): 函數輸入值。
-    V1_dot (未指定型別): 函數輸入值。
-    substance (str): 函數輸入值。
-    ref_state_code (str): 函數輸入值。
+    R (float): 餘隙容積比（無單位）。
+    P1 (float): 壓縮機入口絕對壓力（Pa）。
+    T1 (float): 壓縮機入口溫度（K）。
+    P2 (float): 壓縮機出口絕對壓力（Pa）。
+    T2 (float): 壓縮機出口溫度（K）。
+    P0_dead (float): 死狀態絕對壓力（Pa）。
+    T0_dead (float): 死狀態溫度（K）。
+    V1_dot (float): 壓縮機入口體積流率（m³/s）。
+    substance (str): CoolProp 流體名稱。
+    ref_state_code (str): CoolProp reference-state policy。
 
 回傳：
-    未指定型別：函數計算或處理後的結果。"""
+    tuple：(容積效率, 輸入功 kW, 等熵效率, 㶲破壞率 kW, 㶲效率)。"""
     with _REFERENCE_STATE.calculation_scope(substance, ref_state_code):
         return _calculate_compressor_example_unlocked(
             R, P1, T1, P2, T2, P0_dead, T0_dead, V1_dot, substance, ref_state_code
@@ -278,20 +306,20 @@ def _calculate_compressor_example_unlocked(R,P1,T1,P2,T2,P0_dead,T0_dead,V1_dot,
     㶲（㶲）破壞量與㶲效率。
 
     參數:
-    R (float): 壓縮比 (Compression Ratio, P2/P1) 或與體積效率相關的參數，通常為容積效率計算公式中的參數。
-               **請注意：此處 R 的實際物理意義取決於 calculate_volumetric_efficiency 的定義。**
-    P1 (float): 壓縮機入口壓力 (Pa 或 kPa，依 CoolProp 單位而定)
+    R (float): 餘隙容積比 (clearance ratio)，即 calculate_volumetric_efficiency 的 R_clearance_ratio (無單位)
+    P1 (float): 壓縮機入口絕對壓力 (Pa，CoolProp SI)
     T1 (float): 壓縮機入口溫度 (K)
-    P2 (float): 壓縮機出口壓力 (Pa 或 kPa)
+    P2 (float): 壓縮機出口絕對壓力 (Pa)
     T2 (float): 壓縮機出口溫度 (K)
-    P0_dead (float): 死狀態（環境）壓力 (Pa 或 kPa)
+    P0_dead (float): 死狀態（環境）絕對壓力 (Pa)
     T0_dead (float): 死狀態（環境）溫度 (K)
     V1_dot (float): 壓縮機入口體積流率 (m^3/s)
     substance (str): 工作流體物質名稱 (例如： 'R134a', 'Air', 'Water')
 
     回傳:
     tuple: 包含 (Eff_vol, Win, Eff_isen, Ex_destruction_flow, EFF_comp_ex)
-           分別為 容積效率、壓縮機輸入功、等熵效率、流動㶲破壞率、㶲效率
+           分別為 容積效率、壓縮機輸入功 (kW)、等熵效率、流動㶲破壞率 (kW)、㶲效率
+           （CoolProp 的 J/kg、J/(kg·K) 在計算前先換成 kJ/kg、kJ/(kg·K)，因此功率為 kW）
     """
 
     #state 1 (壓縮機入口狀態的熱力學性質計算)

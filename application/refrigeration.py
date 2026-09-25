@@ -1,19 +1,21 @@
-"""冷凍循環與冷媒飽和判讀的 application service。"""
+"""冷凍循環、冷媒飽和判讀與冷凝器㶲平衡的 application service。"""
 
 from __future__ import annotations
 
 from domain.refrigeration import (
+    CondenserExergyResult,
     SaturationCheckResult,
     ThermodynamicStateProvider,
     VaporCompressionInputs,
     VaporCompressionResult,
+    analyze_condenser_exergy,
     evaluate_superheat_subcooling,
     solve_vapor_compression_cycle,
 )
 from domain.thermodynamics.fluid_policy import resolve_reference_state_policy
 from domain.thermodynamics.reference_state import normalize_reference_state_policy
 
-from .models import RefrigerationCycleRequest, SuperheatCheckRequest
+from .models import CondenserExergyRequest, RefrigerationCycleRequest, SuperheatCheckRequest
 
 
 class RefrigerationService:
@@ -87,4 +89,24 @@ class RefrigerationService:
             request.pressure_pa,
             request.measured_temperature_k,
             self.resolve_policy(request.fluid, None),
+        )
+
+    def analyze_condenser_exergy(self, request: CondenserExergyRequest) -> CondenserExergyResult:
+        """分析冷凝器的能量、熵與㶲平衡。
+
+參數：
+    request: 冷凝器㶲平衡 request。
+
+回傳：
+    CondenserExergyResult。"""
+        return analyze_condenser_exergy(
+            self.state_provider,
+            request.fluid,
+            request.pressure_pa,
+            request.inlet_temperature_k,
+            request.outlet_temperature_k,
+            request.mass_flow_kg_s,
+            request.dead_state_temperature_k,
+            boundary_temperature_k=request.boundary_temperature_k,
+            reference_state=self.resolve_policy(request.fluid, None),
         )

@@ -33,7 +33,7 @@ channel adapters / entrypoints
 
 負責規範性的物理量、單位定義、熱力學計算、HVAC 方程式、濕空氣中立結果模型，以及程序全域的參考狀態政策。它不知道 Flet 控制項、Telegram 更新或顯示格式。
 
-`domain/refrigeration/` 負責蒸氣壓縮循環與過熱度／過冷度判讀，透過 `ThermodynamicStateProvider` 協定取得 canonical SI 狀態；`domain/psychrometrics/processes.py` 負責空氣處理過程的質量／能量平衡。
+`domain/refrigeration/` 負責蒸氣壓縮循環、過熱度／過冷度判讀與冷凝器能量／熵／㶲平衡，透過 `ThermodynamicStateProvider` 協定取得 canonical SI 狀態；`domain/psychrometrics/processes.py` 負責空氣處理過程的質量／能量平衡。
 
 ### `application/`
 

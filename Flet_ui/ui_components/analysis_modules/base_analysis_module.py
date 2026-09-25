@@ -203,6 +203,33 @@ class BaseAnalysisModule:
             raise ValueError(f"請輸入「{entry['label_control'].value}」。")
         return text
 
+    def read_float(self, key: str) -> float:
+        """讀取一個輸入列的數值（使用者選擇的單位，不換算）；無效數值以欄名提示錯誤。
+
+參數：
+    key: create_input_row 使用的識別鍵。
+
+回傳：
+    欄位中的數值。
+
+引發：
+    ValueError：欄位空白或不是有限數字時。"""
+        entry = self.all_entries[key]
+        raw_value = (entry["val"].value or "").strip()
+        try:
+            value = float(raw_value) if raw_value else None
+        except ValueError:
+            value = None
+        if value is not None and isfinite(value):
+            return value
+        # 欄名只在出錯時需要。
+        label = entry["label_control"].value
+        if not raw_value:
+            raise ValueError(f"請輸入「{label}」。")
+        if value is None:
+            raise ValueError(f"「{label}」請輸入有效數值（目前為「{raw_value}」）。")
+        raise ValueError(f"「{label}」必須是有限數字。")
+
     def read_si(self, key: str) -> float:
         """讀取一個輸入列並換算為 canonical SI；無效數值以欄名提示錯誤。
 
@@ -215,15 +242,7 @@ class BaseAnalysisModule:
 引發：
     ValueError：欄位空白或不是有限數字時。"""
         entry = self.all_entries[key]
-        label = entry["label_control"].value
-        raw_value = (entry["val"].value or "").strip()
-        try:
-            value = float(raw_value)
-        except ValueError:
-            raise ValueError(f"「{label}」請輸入有效數值。") from None
-        if not isfinite(value):
-            raise ValueError(f"「{label}」必須是有限數字。")
-        return self.unit_converter.convert_to_si(entry["prop_code"], value, entry["unit"].value)
+        return self.unit_converter.convert_to_si(entry["prop_code"], self.read_float(key), entry["unit"].value)
 
     def read_si_list(self, key: str) -> list[float]:
         """讀取以逗號分隔的多筆數值並換算為 SI。

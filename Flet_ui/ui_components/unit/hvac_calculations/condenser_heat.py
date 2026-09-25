@@ -2,10 +2,7 @@
 #condenser_heat_rate.py
 from .exergy import calculate_change_specific_exerpy1_2_simple
 from domain.hvac.basic import calculate_condenser_heat_rate_si
-import CoolProp.CoolProp as CP
-from domain.thermodynamics.reference_state import ReferenceStateService
-
-_REFERENCE_STATE = ReferenceStateService()
+from domain.refrigeration.condenser_exergy import condenser_exergy_balance
 
 def calculate_condenser_heat_rate(mass_flow_rate, h1, h2):
     """針對舊版 kJ/kg API 回傳以 kW 為單位的冷凝器熱傳率。
@@ -168,111 +165,49 @@ def exbe_water_cooled_condenser_simplified(m_dot_R, ex_1, ex_2, m_dot_w, ex_3, e
         return Ex_dot_dest_calculated - Ex_dot_dest
 
 
-def calculate_exergy_condenser(m_dot_R, h1, h2,T0_dead):
-    """
-    計算 空冷凝器Exergy
-    calculate_condenser_heat_rate= m_dot_R * (h1-h2)  => Q_dot_H
-    exergy_condenser=calculate_condenser_heat_rate(m_dot_R, h1, h2)*(1-T0_dead/T)
-    """
-    T=T0_dead #理想狀態
-
-    exergy_condenser=calculate_condenser_heat_rate(m_dot_R, h1, h2)*(1-T0_dead/T)
-    return exergy_condenser
-
-
 def exergy_efficiency_condenser(m_dot_R, h1, h2, s1, s2, T0_dead, Q_dot_H=None, T=None, Ex_dot_dest=None):
     """
     計算冷凝器的㶲效率 (eta_ex,con)。適用於空冷式冷凝器 (圖 3.23a)。
 
+    分母為冷媒㶲減少量 ṁ·(ex1 − ex2)，依提供的參數選擇算法：
+    - 提供等效傳熱邊界溫度 T（熱量穿越所選控制邊界時的溫度，不一定等於外部熱匯的
+      bulk temperature）：η = Q_dot_H·(1 − T0/T) / [ṁ·(ex1 − ex2)]，
+      委派 domain.refrigeration.condenser_exergy_balance，並檢查熱力學第二定律。
+      分析邊界涵蓋到整體排熱至環境時 T = T0，η = 0。
+    - 未提供 T 但提供 Ex_dot_dest：η = 1 − Ex_dot_dest / [ṁ·(ex1 − ex2)]。
+    等效傳熱邊界溫度沒有預設值，兩者都未提供時引發 ValueError。
+
     參數:
-    m_dot_R (float): 製冷劑 (R) 質量流量 (m_dot_1 或 m_dot_2, 假設 m_dot_1 = m_dot_2 = m_dot_R)
-    h1 (float): 製冷劑入口 (1) 比焓
-    h2 (float): 製冷劑出口 (2) 比焓
-    s1 (float): 製冷劑入口 (1) 比熵
-    s2 (float): 製冷劑出口 (2) 比熵
-    T0_dead (float): 參考環境溫度 (K 或 R)
-    Q_dot_H (float, optional): 傳熱率。用於第一個計算公式。
-    T (float, optional): 傳熱邊界溫度 (K 或 R)。用於第一個計算公式。
-    Ex_dot_dest (float, optional): 㶲破壞率。用於第三個計算公式。
+    m_dot_R (float): 製冷劑 (R) 質量流量 (kg/s，m_dot_1 或 m_dot_2, 假設 m_dot_1 = m_dot_2 = m_dot_R)
+    h1 (float): 製冷劑入口 (1) 比焓 (kJ/kg)
+    h2 (float): 製冷劑出口 (2) 比焓 (kJ/kg)
+    s1 (float): 製冷劑入口 (1) 比熵 (kJ/(kg·K))
+    s2 (float): 製冷劑出口 (2) 比熵 (kJ/(kg·K))
+    T0_dead (float): 參考環境溫度 (K)
+    Q_dot_H (float, optional): 放熱率 (kW)；提供時必須等於 ṁ·(h1 − h2)。
+    T (float, optional): 等效傳熱邊界溫度 (K)，介於 T0 與冷媒平均放熱溫度之間。
+    Ex_dot_dest (float, optional): 㶲破壞率 (kW)。
 
     回傳:
     float: 冷凝器的㶲效率。
     """
-    # 㶲輸入 (Ex_dot_1 - Ex_dot_2) - 製冷劑㶲減少量
+    if T is not None:
+        balance = condenser_exergy_balance(
+            m_dot_R, h1 * 1000.0, h2 * 1000.0, s1 * 1000.0, s2 * 1000.0, T0_dead,
+            boundary_temperature_k=T,
+        )
+        if Q_dot_H is not None and abs(Q_dot_H * 1000.0 - balance.heat_rejection_w) > 1e-6 * balance.heat_rejection_w:
+            raise ValueError("Q_dot_H 與 ṁ·(h1 − h2) 不一致。")
+        return balance.exergy_efficiency
+
+    if Ex_dot_dest is None:
+        raise ValueError("必須提供等效傳熱邊界溫度 T（分析邊界涵蓋到整體排熱至環境時為 T0）或 Ex_dot_dest 才能計算㶲效率。")
+
+    # 㶲輸入 (Ex_dot_1 - Ex_dot_2) - 製冷劑㶲減少量（kW）
     # 注意：根據比㶲公式 ex = (h - h0) - T0 * (s - s0)，
     # ex1 - ex2 = (h1 - h2) - T0 * (s1 - s2)
-    Ex_dot_decrease = m_dot_R * calculate_change_specific_exerpy1_2_simple(h1, h2, s1, s2, T0_dead)
-    
-    
-    if Ex_dot_decrease == 0:
-        return float('nan') # 避免除以零
-
-    if Q_dot_H is not None and T is None:
-        # 使用 Q_dot_H 和 T (第一個公式)
-        T=T0_dead #理想狀態
-        Ex_dot_Q = Q_dot_H * (1 - (T0_dead / T))
-        return Ex_dot_Q / Ex_dot_decrease
-    
-    elif Ex_dot_dest is not None:
-        # 使用 Ex_dot_dest (第三個公式)
-        return 1.0 - (Ex_dot_dest / Ex_dot_decrease)
-        
-    else:
-        raise ValueError("必須提供 (Q_dot_H 和 T) 或 Ex_dot_dest 才能計算㶲效率。")
-    
-def calculate_condenser_example_air(m_dot_R, P1, P2, T1, T2,P0_dead, T0_dead,substance: str,ref_state_code: str):
-    """在共用狀態同步機制下計算舊版冷凝器範例。
-
-參數：
-    m_dot_R (未指定型別): 函數輸入值。
-    P1 (未指定型別): 函數輸入值。
-    P2 (未指定型別): 函數輸入值。
-    T1 (未指定型別): 函數輸入值。
-    T2 (未指定型別): 函數輸入值。
-    P0_dead (未指定型別): 函數輸入值。
-    T0_dead (未指定型別): 函數輸入值。
-    substance (str): 函數輸入值。
-    ref_state_code (str): 函數輸入值。
-
-回傳：
-    未指定型別：函數計算或處理後的結果。"""
-    with _REFERENCE_STATE.calculation_scope(substance, ref_state_code):
-        return _calculate_condenser_example_air_unlocked(
-            m_dot_R, P1, P2, T1, T2, P0_dead, T0_dead, substance, ref_state_code
-        )
-
-def _calculate_condenser_example_air_unlocked(m_dot_R, P1, P2, T1, T2,P0_dead, T0_dead,substance: str,ref_state_code: str):
-    """
-    計算空冷 冷凝器 傳熱
-    Exergy loss
-    Exergy efficiency
-    """
-    #state 1 (冷凝器入口狀態的熱力學性質計算)
-    # H: 比焓
-    h1_j_kg=CP.PropsSI('H', 'P', P1, 'T', T1, substance)
-    # S: 比熵
-    s1_j_kgk=CP.PropsSI('S', 'P', P1, 'T', T1, substance)
-    
-    #單位換算
-    h1 = h1_j_kg / 1000.0  # J/kg -> kJ/kg
-    s1 = s1_j_kgk / 1000.0 # J/(kg.K) -> kJ/(kg.K)
-
-    #state 2 (壓縮機出口狀態的熱力學性質計算)
-    h2_j_kg=CP.PropsSI('H', 'P', P2, 'T', T2, substance)
-    s2_j_kgk=CP.PropsSI('S', 'P', P2, 'T', T2, substance)
-
-    #單位換算
-    h2 = h2_j_kg / 1000.0
-    s2 = s2_j_kgk / 1000.0
-
-    #state reference (死狀態/環境狀態)
-    # 本函式的輸出不需要死狀態的比焓與比熵；仍查詢一次，讓無法求得的死狀態
-    # 輸入與原本一樣直接引發錯誤。
-    CP.PropsSI('H', 'P', P0_dead, 'T', T0_dead, substance)
-    CP.PropsSI('S', 'P', P0_dead, 'T', T0_dead, substance)
-
-    Q_dot_H= calculate_condenser_heat_rate(m_dot_R, h1, h2)
-    eta_ex=exergy_efficiency_condenser(m_dot_R, h1, h2, s1, s2, T0_dead)
-    Ex_dest_con=calculate_exergy_condenser(m_dot_R, h1, h2,T0_dead)
-    Ex_dest_con_eff=exergy_efficiency_condenser(m_dot_R, h1, h2, s1, s2, T0_dead,Q_dot_H)
-    return Q_dot_H,eta_ex,Ex_dest_con,Ex_dest_con_eff
+    # calculate_change_specific_exerpy1_2_simple 回傳 ex2 - ex1，因此取負號。
+    Ex_dot_decrease = -m_dot_R * calculate_change_specific_exerpy1_2_simple(h1, h2, s1, s2, T0_dead)
+    if Ex_dot_decrease <= 0:
+        raise ValueError("冷媒的㶲減少量必須大於 0。")
+    return 1.0 - (Ex_dot_dest / Ex_dot_decrease)

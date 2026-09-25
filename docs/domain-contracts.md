@@ -96,6 +96,7 @@ Flet 與 Telegram 負責 label、display unit、string 以及 message/control re
 
 - `solve_vapor_compression_cycle`：單級蒸氣壓縮循環。蒸發壓力取蒸發溫度的露點（Q = 1），冷凝壓力取冷凝溫度的泡點（Q = 0）；壓縮以等熵效率修正，節流為等焓。只有提供冷凍能力時才回傳質量流率、功率與吸入體積流量，不推估未提供的系統量。結果的 `reference_state` 是求解時實際使用的 policy code；reference-state policy 只在 application（`RefrigerationService`）解析一次，繪製同一循環的圖表必須使用這個值，不得再以 `Auto` 重新解析。
 - `evaluate_superheat_subcooling`：以量測絕對壓力與管溫判斷過熱蒸氣、過冷液體或兩相，過熱度以露點、過冷度以泡點為基準，並回報非共沸冷媒的溫度滑移。
+- `condenser_exergy_balance`／`analyze_condenser_exergy`：冷凝器的能量、熵與㶲平衡（忽略冷凝器壓降）。放熱量 `Q_H = ṁ·(h1 − h2)`，熱帶走的㶲 `Ex_Q = Q_H·(1 − T0/T_b)`，㶲破壞 `X_dest = ṁ·(ex1 − ex2) − Ex_Q = T0·S_gen`，㶲效率 `η = Ex_Q / [ṁ·(ex1 − ex2)]`。`T_b` 是熱量穿越所選分析控制邊界時的等效傳熱邊界溫度，不一定等於外部熱匯（外氣、熱水、室內空氣）的 bulk temperature：控制容積只涵蓋冷凝器本體時，`T_b` 應是該邊界對應的等效溫度，不可直接把外氣溫度當成冷凝器本體的 `T_b`；只有把分析邊界定義為「冷凝器直到最終向環境排熱的整體系統」時，`T_b = T0` 才代表熱最終排到環境（`η = 0`，冷媒減少的㶲在這個整體邊界內全部被破壞）。`T_b` 沒有預設值，必須由呼叫端依所選控制邊界明確指定。`T_b` 必須介於 `T0` 與冷媒平均放熱溫度 `(h1 − h2)/(s1 − s2)` 之間，超過上限時熵產生為負而拒絕；出口大量過冷時，平均放熱溫度可能低於飽和溫度，因此不得把飽和溫度當成預設邊界。`coolant_mean_temperature_k` 由冷卻介質（冷卻水、熱回收熱水或空冷空氣）進出口溫度計算熱力學平均溫度 `(T_out − T_in)/ln(T_out/T_in)`，可作為只涵蓋冷凝器本體時的 `T_b`；比熱視為定值時此 `T_b` 使 `Ex_Q` 等於冷卻介質獲得的㶲，`η` 即熱交換器㶲效率，且與冷卻介質流率、比熱無關；不適用於蒸發式冷凝器等有相變的冷卻介質。舊版 `condenser_heat.exergy_efficiency_condenser` 委派此函式，不再把 `T` 固定為 `T0`。
 
 狀態服務無法計算的狀態（例如高於臨界壓力）必須轉為明確的 `ValueError`，不得回傳部分結果。
 
