@@ -542,8 +542,8 @@ class CompressorModule(BaseAnalysisModule):
     def _build_vol_eff_ui(self):
         # 這裡使用 've_' 作為前綴
         self.create_input_row("ve_r_clearance", "餘隙容積比 (Clearance Ratio, R)", "0.05", "Ratio", "—")
-        self.create_input_row("ve_v1", "入口比容 (v1)", "0.05", "SpecVolume", "m³/kg")
-        self.create_input_row("ve_v2", "出口比容 (v2)", "0.005", "SpecVolume", "m³/kg")
+        self.create_input_row("ve_v1", "入口比容 (v1)", "0.05", "V", "m³/kg")
+        self.create_input_row("ve_v2", "出口比容 (v2)", "0.005", "V", "m³/kg")
 
         self.vol_eff_ui_container = ft.Container(
             content=ft.Column(
@@ -565,8 +565,8 @@ class CompressorModule(BaseAnalysisModule):
         v2_unit = self.all_entries["ve_v2"]["unit"].value
 
         # 轉換為 SI 單位 (m³/kg)
-        v1_si = self.unit_converter.convert_to_si("SpecVolume", v1_val, v1_unit)
-        v2_si = self.unit_converter.convert_to_si("SpecVolume", v2_val, v2_unit)
+        v1_si = self.unit_converter.convert_to_si("V", v1_val, v1_unit)
+        v2_si = self.unit_converter.convert_to_si("V", v2_val, v2_unit)
 
         # 呼叫計算函式
         # 這裡假設 calculate_volumetric_efficiency 是 Analyzer 類別的方法或已作為 helper function 導入

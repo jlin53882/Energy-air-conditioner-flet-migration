@@ -311,37 +311,62 @@ class UnitConverter:
 
         return cmap
 
+    def _conversion(self, prop_code, direction, unit_code):
+        """查找已註冊的轉換函式；找不到時明確報錯，不做恆等轉換。
+
+參數：
+    prop_code (str): 性質代碼。
+    direction (str): "to_si" 或 "from_si"。
+    unit_code (str): 單位代碼。
+
+回傳：
+    Callable[[float], float]：轉換函式。
+
+引發：
+    ValueError：性質或單位未註冊時。"""
+        if prop_code not in self.conversion_map:
+            raise ValueError(f"Unknown property '{prop_code}'")
+        try:
+            return self.conversion_map[prop_code][direction][unit_code]
+        except KeyError:
+            raise ValueError(f"Unknown unit '{unit_code}' for property '{prop_code}'") from None
+
     def convert_to_si(self, prop_code, value, unit_code):
         """將顯示單位值轉換為 SI 基礎單位 (比性質)。
 
+核心熱力性質交由 canonical converter；其他性質使用本通道註冊的轉換。
+未註冊的性質或單位一律引發 ValueError，不會把原值當成 SI 值。
+
 參數：
-    prop_code (未指定型別): 函數輸入值。
-    value (未指定型別): 函數輸入值。
-    unit_code (未指定型別): 函數輸入值。
+    prop_code (str): 性質代碼。
+    value (float): 顯示單位的數值。
+    unit_code (str): 顯示單位。
 
 回傳：
-    未指定型別：函數計算或處理後的結果。"""
+    float：SI 基礎單位的數值。
+
+引發：
+    ValueError：性質或單位未註冊時。"""
         if prop_code in self._canonical_converter.CORE_PROPERTIES:
             return self._canonical_converter.convert_to_si(prop_code, value, unit_code)
-        if prop_code in self.conversion_map and unit_code in self.conversion_map[prop_code]["to_si"]:
-            return self.conversion_map[prop_code]["to_si"][unit_code](value)
-        return value # 如果找不到轉換，返回原值
+        return self._conversion(prop_code, "to_si", unit_code)(value)
 
     def convert_from_si(self, prop_code, value_si, unit_code):
         """將 SI 單位值轉換為目標顯示單位 (比性質)。
 
 參數：
-    prop_code (未指定型別): 函數輸入值。
-    value_si (未指定型別): 函數輸入值。
-    unit_code (未指定型別): 函數輸入值。
+    prop_code (str): 性質代碼。
+    value_si (float): SI 基礎單位的數值。
+    unit_code (str): 目標顯示單位。
 
 回傳：
-    未指定型別：函數計算或處理後的結果。"""
+    float：顯示單位的數值。
+
+引發：
+    ValueError：性質或單位未註冊時。"""
         if prop_code in self._canonical_converter.CORE_PROPERTIES:
             return self._canonical_converter.convert_from_si(prop_code, value_si, unit_code)
-        if prop_code in self.conversion_map and unit_code in self.conversion_map[prop_code]["from_si"]:
-            return self.conversion_map[prop_code]["from_si"][unit_code](value_si)
-        return value_si # 如果找不到轉換，返回原值
+        return self._conversion(prop_code, "from_si", unit_code)(value_si)
         
     @staticmethod
     def gauge_to_absolute_pa(gauge_pa, atmospheric_pa):
