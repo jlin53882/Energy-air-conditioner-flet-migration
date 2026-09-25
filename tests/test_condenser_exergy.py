@@ -205,7 +205,7 @@ def _result_lines(view) -> dict[str, str]:
 
 
 def test_condenser_exergy_analysis_defaults_to_heat_rejected_to_ambient(condenser_view) -> None:
-    """預設「排到環境」：η = 0、㶲破壞率等於冷媒 Exergy 減少量，並顯示關鍵數值與溫度範圍。
+    """預設「整體排熱至環境（T_b = T0）」：η = 0、㶲破壞率等於冷媒 Exergy 減少量，並顯示關鍵數值與溫度範圍。
 
 回傳：
     無。"""
@@ -218,14 +218,19 @@ def test_condenser_exergy_analysis_defaults_to_heat_rejected_to_ambient(condense
     assert lines["Exergy 效率 η"] == "0.0 %"
     assert lines["Exergy 破壞率 X_dest"] == lines["冷媒 Exergy 減少量"] == "0.474 kW"
     assert lines["放熱量 Q_H"] == "9.627 kW"
-    assert lines["傳熱邊界"] == "排到環境（T_b = T0）"
+    assert lines["傳熱邊界"] == "整體排熱至環境（T_b = T0）"
+    assert lines["等效傳熱邊界溫度 T_b"] == "25.00 °C"
+    # 選項與欄位使用「等效傳熱邊界溫度」，不描述成外部熱匯的溫度。
+    segment_labels = [segment.label.value for segment in module.cx_boundary.segments]
+    assert segment_labels == ["整體排熱至環境（T_b = T0）", "指定等效傳熱邊界溫度"]
+    assert module.all_entries["cx_t_b"]["label_control"].value == "等效傳熱邊界溫度 T_b"
     assert lines["冷媒平均放熱溫度"] == "40.45 °C"
     kpis = [tile.label_control.value for tile in condenser_view.workspace.result_view.kpi_row.controls]
     assert kpis == ["Exergy 破壞率 X_dest", "Exergy 效率 η", "放熱量 Q_H", "熵產生率 S_gen"]
 
 
 def test_condenser_exergy_analysis_with_a_heat_sink_temperature(condenser_view) -> None:
-    """指定放熱對象溫度時計算熱帶走的㶲；高於冷媒平均放熱溫度時以第二定律說明拒絕。
+    """指定等效傳熱邊界溫度時計算熱帶走的㶲；高於冷媒平均放熱溫度時以第二定律說明拒絕。
 
 回傳：
     無。"""
@@ -242,6 +247,7 @@ def test_condenser_exergy_analysis_with_a_heat_sink_temperature(condenser_view) 
         assert condenser_view.result_panel.status == "success"
         lines = _result_lines(condenser_view)
         # Ex_Q = 9.627 × (1 − 298.15 / 308.15) ≈ 0.312 kW，η ≈ 0.312 / 0.474 ≈ 65.9 %。
+        assert lines["傳熱邊界"] == "指定等效傳熱邊界溫度"
         assert lines["熱帶走的 Exergy Ex_Q"] == "0.312 kW"
         assert lines["Exergy 效率 η"] == "65.9 %"
 

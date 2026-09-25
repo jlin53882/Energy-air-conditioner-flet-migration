@@ -90,7 +90,7 @@ ANALYSIS_PRESENTATION: dict[str, AnalysisPresentation] = {
         "放熱率",
     ),
     "condenser.exergy": AnalysisPresentation(
-        "以冷凝壓力與冷媒進出口溫度計算放熱量、熵產生與 Exergy 破壞；傳熱邊界溫度決定熱帶走多少 Exergy。",
+        "以冷凝壓力與冷媒進出口溫度計算放熱量、熵產生與 Exergy 破壞；等效傳熱邊界溫度（熱量穿越所選控制邊界的溫度）決定熱帶走多少 Exergy。",
         "X_dest = ṁ·(ex1 − ex2) − Q_H·(1 − T0/T_b) = T0·S_gen，η = Q_H·(1 − T0/T_b) / [ṁ·(ex1 − ex2)]",
         "Exergy 分析",
         key_metrics=("Exergy 破壞率 X_dest", "Exergy 效率 η", "放熱量 Q_H", "熵產生率 S_gen"),

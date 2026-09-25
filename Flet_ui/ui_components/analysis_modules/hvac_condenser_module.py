@@ -11,7 +11,8 @@ from ..unit.HVACAnalyzer import HVACAnalyzer
 from ..unit.UnitConverter import UnitConverter
 from ..unit.ThermoStateCalculator import ThermoStateCalculator
 
-# 傳熱邊界溫度的兩種設定：熱直接排到環境（T_b = T0），或指定放熱對象溫度。
+# 等效傳熱邊界溫度的兩種設定：分析邊界涵蓋到整體排熱至環境（T_b = T0），
+# 或指定熱量穿越所選控制邊界時的等效傳熱邊界溫度。
 BOUNDARY_AMBIENT = "ambient"
 BOUNDARY_CUSTOM = "custom"
 
@@ -107,8 +108,8 @@ class CondenserModule(BaseAnalysisModule):
         self.cx_boundary = ft.SegmentedButton(
             allow_empty_selection=False,
             segments=[
-                ft.Segment(value=BOUNDARY_AMBIENT, label=ft.Text("排到環境 (T0)")),
-                ft.Segment(value=BOUNDARY_CUSTOM, label=ft.Text("指定放熱對象溫度")),
+                ft.Segment(value=BOUNDARY_AMBIENT, label=ft.Text("整體排熱至環境（T_b = T0）")),
+                ft.Segment(value=BOUNDARY_CUSTOM, label=ft.Text("指定等效傳熱邊界溫度")),
             ],
             selected=[BOUNDARY_AMBIENT],
             on_change=self.on_boundary_change,
@@ -119,7 +120,7 @@ class CondenserModule(BaseAnalysisModule):
             ("cx_t_out", "冷媒出口溫度", "35", "T", "°C"),
             ("cx_m_dot", "冷媒質量流率", "0.05", "MassFlow", "kg/s"),
             ("cx_t0", "死狀態（環境）溫度 T0", "25", "T", "°C"),
-            ("cx_t_b", "放熱對象溫度 T_b", "35", "T", "°C"),
+            ("cx_t_b", "等效傳熱邊界溫度 T_b", "35", "T", "°C"),
         ]
         for key, label, default, prop_code, unit in rows:
             self.create_input_row(key, label, default, prop_code, unit)
@@ -134,11 +135,13 @@ class CondenserModule(BaseAnalysisModule):
             self.section_label("Exergy 分析基準"),
             self.all_entries["cx_t0"]["ui_row"],
             ft.Column([
-                ft.Text("傳熱邊界溫度", size=TOKENS.body, weight=ft.FontWeight.W_500,
+                ft.Text("等效傳熱邊界溫度", size=TOKENS.body, weight=ft.FontWeight.W_500,
                         color=TOKENS.text_primary),
                 self.cx_boundary,
-                ft.Text("熱直接排到環境時邊界溫度等於 T0，熱不帶走 Exergy（η = 0）；熱被回收利用時"
-                        "（例如加熱熱水），請指定放熱對象溫度，需介於 T0 與冷媒平均放熱溫度之間。",
+                ft.Text("T_b 是熱量穿越所選控制邊界 (control boundary) 的等效溫度，不一定等於外氣或"
+                        "熱水的 bulk temperature。分析邊界涵蓋冷凝器直到最終向環境排熱的整體系統時，"
+                        "T_b = T0，熱不帶走 Exergy（η = 0）；只分析冷凝器本體時，請指定對應的等效傳熱"
+                        "邊界溫度，需介於 T0 與冷媒平均放熱溫度之間。",
                         size=TOKENS.caption, color=TOKENS.text_muted),
             ], spacing=6),
             self.all_entries["cx_t_b"]["ui_row"],
@@ -147,14 +150,14 @@ class CondenserModule(BaseAnalysisModule):
         return ft.Container(content=ft.Column(controls, spacing=12), visible=False)
 
     def _boundary_is_custom(self) -> bool:
-        """回傳是否使用指定的放熱對象溫度。
+        """回傳是否使用指定的等效傳熱邊界溫度。
 
 回傳：
-    True 表示使用指定溫度；False 表示熱排到環境。"""
+    True 表示使用指定溫度；False 表示分析邊界涵蓋到整體排熱至環境（T_b = T0）。"""
         return BOUNDARY_CUSTOM in self.cx_boundary.selected
 
     def on_boundary_change(self, _event: ft.ControlEvent | None) -> None:
-        """切換傳熱邊界設定時，只在指定溫度模式顯示放熱對象溫度欄位。
+        """切換傳熱邊界設定時，只在指定溫度模式顯示等效傳熱邊界溫度欄位。
 
 參數：
     _event: Flet 變更事件；此處不需讀取內容。
@@ -197,8 +200,8 @@ class CondenserModule(BaseAnalysisModule):
         formatter.add("熱帶走的 Exergy Ex_Q", "Power", balance.heat_exergy_w, 3)
         formatter.add("熵產生率 S_gen", "EntropyFlow", balance.entropy_generation_w_k, 5)
         formatter.section("溫度")
-        formatter.add_text("傳熱邊界", "指定放熱對象溫度" if self._boundary_is_custom() else "排到環境（T_b = T0）")
-        formatter.add("傳熱邊界溫度 T_b", "T", result.boundary_temperature_k, 2)
+        formatter.add_text("傳熱邊界", "指定等效傳熱邊界溫度" if self._boundary_is_custom() else "整體排熱至環境（T_b = T0）")
+        formatter.add("等效傳熱邊界溫度 T_b", "T", result.boundary_temperature_k, 2)
         formatter.add("冷媒平均放熱溫度", "T", balance.mean_heat_rejection_temperature_k, 2)
         formatter.add("露點（飽和蒸氣）", "T", result.dew_point_k, 2)
         formatter.add("泡點（飽和液體）", "T", result.bubble_point_k, 2)

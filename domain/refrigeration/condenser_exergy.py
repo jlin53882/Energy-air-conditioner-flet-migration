@@ -1,6 +1,7 @@
 """冷凝器的能量、熵與㶲平衡（canonical SI）。
 
-冷媒由入口狀態 1 放熱到出口狀態 2，熱量 Q_H 在傳熱邊界溫度 T_b 離開系統：
+冷媒由入口狀態 1 放熱到出口狀態 2，熱量 Q_H 在等效傳熱邊界溫度 T_b 穿越所選的
+分析控制邊界 (control boundary) 離開系統：
 
 - 放熱量：Q_H = ṁ · (h1 − h2)
 - 冷媒㶲減少量：ṁ · (ex1 − ex2) = ṁ · [(h1 − h2) − T0 · (s1 − s2)]
@@ -9,10 +10,17 @@
 - 熵產生：S_gen = ṁ · (s2 − s1) + Q_H / T_b，並滿足 X_dest = T0 · S_gen
 - 㶲效率：η = Ex_Q / [ṁ · (ex1 − ex2)]
 
-傳熱邊界溫度沒有預設值，必須由呼叫端明確指定：熱直接排到環境時 T_b = T0，
-此時 Ex_Q = 0、冷媒減少的㶲全部被破壞；熱被回收利用時 T_b 為放熱對象（例如
-熱水或室內空氣）的溫度。T_b 必須介於 T0 與冷媒平均放熱溫度
-(h1 − h2) / (s1 − s2) 之間，超過上限時熵產生為負，違反熱力學第二定律。
+T_b 是熱量穿越所選控制邊界時的等效傳熱邊界溫度，取決於控制容積的劃定方式，
+不一定等於外部熱匯（外氣、熱水、室內空氣）的 bulk temperature：
+
+- 控制容積只涵蓋冷凝器本體時，T_b 應是冷凝器表面／邊界處對應的等效溫度；
+  不可直接把外氣溫度（例如 25 °C）當成冷凝器本體的 T_b。
+- 只有把分析邊界定義為「冷凝器直到最終向環境排熱的整體系統」時，T_b = T0
+  才代表熱最終排到環境；此時 Ex_Q = 0，冷媒減少的㶲在這個整體邊界內全部被破壞。
+
+T_b 沒有預設值，必須由呼叫端依所選控制邊界明確指定。T_b 必須介於 T0 與冷媒
+平均放熱溫度 (h1 − h2) / (s1 − s2) 之間，超過上限時熵產生為負，違反熱力學第二
+定律。
 """
 
 from __future__ import annotations
@@ -59,7 +67,8 @@ def condenser_exergy_balance(
     inlet_entropy_j_kgk: 入口比熵（J/(kg·K)）。
     outlet_entropy_j_kgk: 出口比熵（J/(kg·K)）。
     dead_state_temperature_k: 死狀態（環境）溫度 T0（K）。
-    boundary_temperature_k: 傳熱邊界溫度 T_b（K）；熱排到環境時為 T0。
+    boundary_temperature_k: 等效傳熱邊界溫度 T_b（K），即熱量穿越所選控制邊界時
+        的溫度；分析邊界涵蓋到整體排熱至環境時為 T0。
 
 回傳：
     CondenserExergyBalance。
@@ -70,20 +79,20 @@ def condenser_exergy_balance(
     if mass_flow_kg_s <= 0:
         raise ValueError("冷媒質量流率必須大於 0。")
     if dead_state_temperature_k <= 0 or boundary_temperature_k <= 0:
-        raise ValueError("死狀態溫度與傳熱邊界溫度必須是大於 0 的絕對溫度。")
+        raise ValueError("死狀態溫度與等效傳熱邊界溫度必須是大於 0 的絕對溫度。")
     enthalpy_drop = inlet_enthalpy_j_kg - outlet_enthalpy_j_kg
     entropy_drop = inlet_entropy_j_kgk - outlet_entropy_j_kgk
     if enthalpy_drop <= 0 or entropy_drop <= 0:
         raise ValueError("冷凝器出口的比焓與比熵必須低於入口（冷媒須放熱）。")
     if boundary_temperature_k < dead_state_temperature_k:
-        raise ValueError("傳熱邊界溫度不可低於死狀態溫度 T0；熱排到環境時請使用 T0。")
+        raise ValueError("等效傳熱邊界溫度不可低於死狀態溫度 T0；分析邊界涵蓋到整體排熱至環境時請使用 T0。")
 
     mean_temperature_k = enthalpy_drop / entropy_drop
     heat_rejection_w = mass_flow_kg_s * enthalpy_drop
     entropy_generation_w_k = -mass_flow_kg_s * entropy_drop + heat_rejection_w / boundary_temperature_k
     if entropy_generation_w_k < -_ENTROPY_TOLERANCE * mass_flow_kg_s * entropy_drop:
         raise ValueError(
-            f"傳熱邊界溫度 {boundary_temperature_k - 273.15:.2f} °C 高於冷媒平均放熱溫度 "
+            f"等效傳熱邊界溫度 {boundary_temperature_k - 273.15:.2f} °C 高於冷媒平均放熱溫度 "
             f"{mean_temperature_k - 273.15:.2f} °C，熵產生為負，違反熱力學第二定律。"
         )
     entropy_generation_w_k = max(entropy_generation_w_k, 0.0)
@@ -141,7 +150,8 @@ def analyze_condenser_exergy(
     outlet_temperature_k: 冷媒出口溫度（K），通常為過冷液體。
     mass_flow_kg_s: 冷媒質量流率（kg/s）。
     dead_state_temperature_k: 死狀態（環境）溫度 T0（K）。
-    boundary_temperature_k: 傳熱邊界溫度 T_b（K）；熱排到環境時為 T0。
+    boundary_temperature_k: 等效傳熱邊界溫度 T_b（K），即熱量穿越所選控制邊界時
+        的溫度；分析邊界涵蓋到整體排熱至環境時為 T0。
     reference_state: reference-state policy（焓熵差與此無關，只影響查詢交易）。
 
 回傳：

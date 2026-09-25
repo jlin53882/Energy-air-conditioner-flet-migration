@@ -170,11 +170,12 @@ def exergy_efficiency_condenser(m_dot_R, h1, h2, s1, s2, T0_dead, Q_dot_H=None, 
     計算冷凝器的㶲效率 (eta_ex,con)。適用於空冷式冷凝器 (圖 3.23a)。
 
     分母為冷媒㶲減少量 ṁ·(ex1 − ex2)，依提供的參數選擇算法：
-    - 提供傳熱邊界溫度 T：η = Q_dot_H·(1 − T0/T) / [ṁ·(ex1 − ex2)]，
+    - 提供等效傳熱邊界溫度 T（熱量穿越所選控制邊界時的溫度，不一定等於外部熱匯的
+      bulk temperature）：η = Q_dot_H·(1 − T0/T) / [ṁ·(ex1 − ex2)]，
       委派 domain.refrigeration.condenser_exergy_balance，並檢查熱力學第二定律。
-      熱直接排到環境時 T = T0，η = 0。
+      分析邊界涵蓋到整體排熱至環境時 T = T0，η = 0。
     - 未提供 T 但提供 Ex_dot_dest：η = 1 − Ex_dot_dest / [ṁ·(ex1 − ex2)]。
-    傳熱邊界溫度沒有預設值，兩者都未提供時引發 ValueError。
+    等效傳熱邊界溫度沒有預設值，兩者都未提供時引發 ValueError。
 
     參數:
     m_dot_R (float): 製冷劑 (R) 質量流量 (kg/s，m_dot_1 或 m_dot_2, 假設 m_dot_1 = m_dot_2 = m_dot_R)
@@ -184,7 +185,7 @@ def exergy_efficiency_condenser(m_dot_R, h1, h2, s1, s2, T0_dead, Q_dot_H=None, 
     s2 (float): 製冷劑出口 (2) 比熵 (kJ/(kg·K))
     T0_dead (float): 參考環境溫度 (K)
     Q_dot_H (float, optional): 放熱率 (kW)；提供時必須等於 ṁ·(h1 − h2)。
-    T (float, optional): 傳熱邊界溫度 (K)，介於 T0 與冷媒平均放熱溫度之間。
+    T (float, optional): 等效傳熱邊界溫度 (K)，介於 T0 與冷媒平均放熱溫度之間。
     Ex_dot_dest (float, optional): 㶲破壞率 (kW)。
 
     回傳:
@@ -200,7 +201,7 @@ def exergy_efficiency_condenser(m_dot_R, h1, h2, s1, s2, T0_dead, Q_dot_H=None, 
         return balance.exergy_efficiency
 
     if Ex_dot_dest is None:
-        raise ValueError("必須提供傳熱邊界溫度 T（熱排到環境時為 T0）或 Ex_dot_dest 才能計算㶲效率。")
+        raise ValueError("必須提供等效傳熱邊界溫度 T（分析邊界涵蓋到整體排熱至環境時為 T0）或 Ex_dot_dest 才能計算㶲效率。")
 
     # 㶲輸入 (Ex_dot_1 - Ex_dot_2) - 製冷劑㶲減少量（kW）
     # 注意：根據比㶲公式 ex = (h - h0) - T0 * (s - s0)，

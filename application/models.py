@@ -106,7 +106,7 @@ class SuperheatCheckRequest:
 
 @dataclass(frozen=True)
 class CondenserExergyRequest:
-    """以冷凝壓力與冷媒進出口溫度分析冷凝器㶲平衡；傳熱邊界溫度必須明確指定。"""
+    """以冷凝壓力與冷媒進出口溫度分析冷凝器㶲平衡；等效傳熱邊界溫度必須依所選控制邊界明確指定。"""
 
     fluid: str
     pressure_pa: float
