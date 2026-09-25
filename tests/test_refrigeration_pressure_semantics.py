@@ -16,7 +16,6 @@ from Flet_ui.ui_components.unit.UnitConverter import (
 )
 
 PSI_PA = 6_894.757
-ATM_PA = 101_325.0
 
 
 class DummyPage:
