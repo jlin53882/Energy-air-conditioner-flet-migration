@@ -166,9 +166,9 @@ class CompressorModule(BaseAnalysisModule):
         )
 
     def calculate_cr(self, use_imperial: bool) -> str:
-        pe_val = float(self.all_entries["cr_pe"]["val"].value)
+        pe_val = self.read_float("cr_pe")
         pe_unit = self.all_entries["cr_pe"]["unit"].value
-        pc_val = float(self.all_entries["cr_pc"]["val"].value)
+        pc_val = self.read_float("cr_pc")
         pc_unit = self.all_entries["cr_pc"]["unit"].value
         
         pe_pa = self.unit_converter.convert_to_si("P", pe_val, pe_unit) 
@@ -176,7 +176,7 @@ class CompressorModule(BaseAnalysisModule):
 
         atm_p_si = 0.0
         if "Gauge" in self.cr_pressure_type_toggle.selected:
-            atm_p_val = float(self.all_entries["cr_atm_p"]["val"].value)
+            atm_p_val = self.read_float("cr_atm_p")
             atm_p_unit = self.all_entries["cr_atm_p"]["unit"].value
             atm_p_si = self.unit_converter.convert_to_si("P", atm_p_val, atm_p_unit)
         
@@ -215,11 +215,11 @@ class CompressorModule(BaseAnalysisModule):
 
     def calculate_work(self, use_imperial: bool) -> str:
         # 1. 取得 UI 值
-        h1_val = float(self.all_entries["win_h1"]["val"].value)
+        h1_val = self.read_float("win_h1")
         h1_unit = self.all_entries["win_h1"]["unit"].value
-        h2_val = float(self.all_entries["win_h2"]["val"].value)
+        h2_val = self.read_float("win_h2")
         h2_unit = self.all_entries["win_h2"]["unit"].value
-        m_dot_val = float(self.all_entries["win_m_dot"]["val"].value)
+        m_dot_val = self.read_float("win_m_dot")
         m_dot_unit = self.all_entries["win_m_dot"]["unit"].value
         
         # 2. 轉換為 SI (J/kg, kg/s)
@@ -260,11 +260,11 @@ class CompressorModule(BaseAnalysisModule):
         )
         
     def calculate_isen_eff(self, use_imperial: bool) -> str:
-        h1_val = float(self.all_entries["isen_h1"]["val"].value)
+        h1_val = self.read_float("isen_h1")
         h1_unit = self.all_entries["isen_h1"]["unit"].value
-        h2_val = float(self.all_entries["isen_h2"]["val"].value)
+        h2_val = self.read_float("isen_h2")
         h2_unit = self.all_entries["isen_h2"]["unit"].value
-        h2s_val = float(self.all_entries["isen_h2s"]["val"].value)
+        h2s_val = self.read_float("isen_h2s")
         h2s_unit = self.all_entries["isen_h2s"]["unit"].value
         
         # 轉換為 SI (J/kg)。
@@ -301,19 +301,19 @@ class CompressorModule(BaseAnalysisModule):
 
     def calculate_ref_cap(self, use_imperial: bool) -> str:
         # 1. 讀取所有 5 個 UI 的值
-        v_dot_val = float(self.all_entries["ref_v_dot"]["val"].value)
+        v_dot_val = self.read_float("ref_v_dot")
         v_dot_unit = self.all_entries["ref_v_dot"]["unit"].value
         
-        eta_vol_val = float(self.all_entries["ref_eta_vol"]["val"].value)
+        eta_vol_val = self.read_float("ref_eta_vol")
         eta_vol_unit = self.all_entries["ref_eta_vol"]["unit"].value
         
-        rho1_val = float(self.all_entries["ref_rho1"]["val"].value)
+        rho1_val = self.read_float("ref_rho1")
         rho1_unit = self.all_entries["ref_rho1"]["unit"].value
         
-        h1_val = float(self.all_entries["ref_h1"]["val"].value)
+        h1_val = self.read_float("ref_h1")
         h1_unit = self.all_entries["ref_h1"]["unit"].value
         
-        h4_val = float(self.all_entries["ref_h4"]["val"].value)
+        h4_val = self.read_float("ref_h4")
         h4_unit = self.all_entries["ref_h4"]["unit"].value
         
         # 2. 將所有值轉換為 Analyzer 函式所需的單位
@@ -367,13 +367,13 @@ class CompressorModule(BaseAnalysisModule):
         )
 
     def calculate_work_q(self, use_imperial: bool) -> str:
-        m_dot_val = float(self.all_entries["wq_m_dot"]["val"].value)
+        m_dot_val = self.read_float("wq_m_dot")
         m_dot_unit = self.all_entries["wq_m_dot"]["unit"].value
-        h1_val = float(self.all_entries["wq_h1"]["val"].value)
+        h1_val = self.read_float("wq_h1")
         h1_unit = self.all_entries["wq_h1"]["unit"].value
-        h2_val = float(self.all_entries["wq_h2"]["val"].value)
+        h2_val = self.read_float("wq_h2")
         h2_unit = self.all_entries["wq_h2"]["unit"].value
-        q_out_val = float(self.all_entries["wq_q_out"]["val"].value)
+        q_out_val = self.read_float("wq_q_out")
         q_out_unit = self.all_entries["wq_q_out"]["unit"].value
 
         m_dot_si = self.unit_converter.convert_to_si("MassFlow", m_dot_val, m_dot_unit)
@@ -420,17 +420,17 @@ class CompressorModule(BaseAnalysisModule):
         )
 
     def calculate_rev_work(self, use_imperial: bool) -> str:
-        m_dot_val = float(self.all_entries["rev_m_dot"]["val"].value)
+        m_dot_val = self.read_float("rev_m_dot")
         m_dot_unit = self.all_entries["rev_m_dot"]["unit"].value
-        h1_val = float(self.all_entries["rev_h1"]["val"].value)
+        h1_val = self.read_float("rev_h1")
         h1_unit = self.all_entries["rev_h1"]["unit"].value
-        h2_val = float(self.all_entries["rev_h2"]["val"].value)
+        h2_val = self.read_float("rev_h2")
         h2_unit = self.all_entries["rev_h2"]["unit"].value
-        s1_val = float(self.all_entries["rev_s1"]["val"].value)
+        s1_val = self.read_float("rev_s1")
         s1_unit = self.all_entries["rev_s1"]["unit"].value
-        s2_val = float(self.all_entries["rev_s2"]["val"].value)
+        s2_val = self.read_float("rev_s2")
         s2_unit = self.all_entries["rev_s2"]["unit"].value
-        t0_val = float(self.all_entries["rev_t0"]["val"].value)
+        t0_val = self.read_float("rev_t0")
         t0_unit = self.all_entries["rev_t0"]["unit"].value
 
         m_dot_si = self.unit_converter.convert_to_si("MassFlow", m_dot_val, m_dot_unit)
@@ -492,21 +492,21 @@ class CompressorModule(BaseAnalysisModule):
         )
 
     def calculate_ex_dest(self, use_imperial: bool) -> str:
-        t0_val = float(self.all_entries["exd_t0"]["val"].value)
+        t0_val = self.read_float("exd_t0")
         t0_unit = self.all_entries["exd_t0"]["unit"].value
-        h1_val = float(self.all_entries["exd_h1"]["val"].value)
+        h1_val = self.read_float("exd_h1")
         h1_unit = self.all_entries["exd_h1"]["unit"].value
-        h2_val = float(self.all_entries["exd_h2"]["val"].value)
+        h2_val = self.read_float("exd_h2")
         h2_unit = self.all_entries["exd_h2"]["unit"].value
-        h0_val = float(self.all_entries["exd_h0"]["val"].value)
+        h0_val = self.read_float("exd_h0")
         h0_unit = self.all_entries["exd_h0"]["unit"].value
-        s0_val = float(self.all_entries["exd_s0"]["val"].value)
+        s0_val = self.read_float("exd_s0")
         s0_unit = self.all_entries["exd_s0"]["unit"].value
-        s1_val = float(self.all_entries["exd_s1"]["val"].value)
+        s1_val = self.read_float("exd_s1")
         s1_unit = self.all_entries["exd_s1"]["unit"].value
-        s2_val = float(self.all_entries["exd_s2"]["val"].value)
+        s2_val = self.read_float("exd_s2")
         s2_unit = self.all_entries["exd_s2"]["unit"].value
-        m_dot_val = float(self.all_entries["exd_m_dot"]["val"].value)
+        m_dot_val = self.read_float("exd_m_dot")
         m_dot_unit = self.all_entries["exd_m_dot"]["unit"].value
 
         t0_k = self.unit_converter.convert_to_si("T", t0_val, t0_unit)
@@ -556,12 +556,12 @@ class CompressorModule(BaseAnalysisModule):
         )
 
     def calculate_vol_eff(self, use_imperial: bool) -> str:
-        r_val = float(self.all_entries["ve_r_clearance"]["val"].value)
+        r_val = self.read_float("ve_r_clearance")
         # 餘隙容積比 (R) 是無單位的，無需轉換
 
-        v1_val = float(self.all_entries["ve_v1"]["val"].value)
+        v1_val = self.read_float("ve_v1")
         v1_unit = self.all_entries["ve_v1"]["unit"].value
-        v2_val = float(self.all_entries["ve_v2"]["val"].value)
+        v2_val = self.read_float("ve_v2")
         v2_unit = self.all_entries["ve_v2"]["unit"].value
 
         # 轉換為 SI 單位 (m³/kg)
@@ -609,21 +609,21 @@ class CompressorModule(BaseAnalysisModule):
 
     def calculate_ex_eff_loss(self, use_imperial: bool) -> str:
         # 提取值
-        t0_val = float(self.all_entries["eel_t0"]["val"].value)
+        t0_val = self.read_float("eel_t0")
         t0_unit = self.all_entries["eel_t0"]["unit"].value
-        h1_val = float(self.all_entries["eel_h1"]["val"].value)
+        h1_val = self.read_float("eel_h1")
         h1_unit = self.all_entries["eel_h1"]["unit"].value
-        h2_val = float(self.all_entries["eel_h2"]["val"].value)
+        h2_val = self.read_float("eel_h2")
         h2_unit = self.all_entries["eel_h2"]["unit"].value
-        h0_val = float(self.all_entries["eel_h0"]["val"].value)
+        h0_val = self.read_float("eel_h0")
         h0_unit = self.all_entries["eel_h0"]["unit"].value
-        s0_val = float(self.all_entries["eel_s0"]["val"].value)
+        s0_val = self.read_float("eel_s0")
         s0_unit = self.all_entries["eel_s0"]["unit"].value
-        s1_val = float(self.all_entries["eel_s1"]["val"].value)
+        s1_val = self.read_float("eel_s1")
         s1_unit = self.all_entries["eel_s1"]["unit"].value
-        s2_val = float(self.all_entries["eel_s2"]["val"].value)
+        s2_val = self.read_float("eel_s2")
         s2_unit = self.all_entries["eel_s2"]["unit"].value
-        m_dot_val = float(self.all_entries["eel_m_dot"]["val"].value)
+        m_dot_val = self.read_float("eel_m_dot")
         m_dot_unit = self.all_entries["eel_m_dot"]["unit"].value
 
         # 轉換為 SI 單位
@@ -685,21 +685,21 @@ class CompressorModule(BaseAnalysisModule):
 
     def calculate_ex_eff_ratio(self, use_imperial: bool) -> str:
         # 提取值 (與 calculate_ex_eff_loss 相同)
-        t0_val = float(self.all_entries["eer_t0"]["val"].value)
+        t0_val = self.read_float("eer_t0")
         t0_unit = self.all_entries["eer_t0"]["unit"].value
-        h1_val = float(self.all_entries["eer_h1"]["val"].value)
+        h1_val = self.read_float("eer_h1")
         h1_unit = self.all_entries["eer_h1"]["unit"].value
-        h2_val = float(self.all_entries["eer_h2"]["val"].value)
+        h2_val = self.read_float("eer_h2")
         h2_unit = self.all_entries["eer_h2"]["unit"].value
-        h0_val = float(self.all_entries["eer_h0"]["val"].value)
+        h0_val = self.read_float("eer_h0")
         h0_unit = self.all_entries["eer_h0"]["unit"].value
-        s0_val = float(self.all_entries["eer_s0"]["val"].value)
+        s0_val = self.read_float("eer_s0")
         s0_unit = self.all_entries["eer_s0"]["unit"].value
-        s1_val = float(self.all_entries["eer_s1"]["val"].value)
+        s1_val = self.read_float("eer_s1")
         s1_unit = self.all_entries["eer_s1"]["unit"].value
-        s2_val = float(self.all_entries["eer_s2"]["val"].value)
+        s2_val = self.read_float("eer_s2")
         s2_unit = self.all_entries["eer_s2"]["unit"].value
-        m_dot_val = float(self.all_entries["eer_m_dot"]["val"].value)
+        m_dot_val = self.read_float("eer_m_dot")
         m_dot_unit = self.all_entries["eer_m_dot"]["unit"].value
 
         # 轉換為 SI 單位
@@ -795,23 +795,23 @@ class CompressorModule(BaseAnalysisModule):
 
     def calculate_comp_example(self, use_imperial: bool) -> str:
         # 1. 獲取並轉換輸入值
-        r_val = float(self.all_entries["ce_r"]["val"].value)
+        r_val = self.read_float("ce_r")
 
-        p1_val = float(self.all_entries["ce_p1"]["val"].value)
+        p1_val = self.read_float("ce_p1")
         p1_unit = self.all_entries["ce_p1"]["unit"].value
-        p2_val = float(self.all_entries["ce_p2"]["val"].value)
+        p2_val = self.read_float("ce_p2")
         p2_unit = self.all_entries["ce_p2"]["unit"].value
-        p0_val = float(self.all_entries["ce_p0"]["val"].value)
+        p0_val = self.read_float("ce_p0")
         p0_unit = self.all_entries["ce_p0"]["unit"].value
 
-        t1_val = float(self.all_entries["ce_t1"]["val"].value)
+        t1_val = self.read_float("ce_t1")
         t1_unit = self.all_entries["ce_t1"]["unit"].value
-        t2_val = float(self.all_entries["ce_t2"]["val"].value)
+        t2_val = self.read_float("ce_t2")
         t2_unit = self.all_entries["ce_t2"]["unit"].value
-        t0_val = float(self.all_entries["ce_t0"]["val"].value)
+        t0_val = self.read_float("ce_t0")
         t0_unit = self.all_entries["ce_t0"]["unit"].value
 
-        v1_dot_val = float(self.all_entries["ce_v1_dot"]["val"].value)
+        v1_dot_val = self.read_float("ce_v1_dot")
         v1_dot_unit = self.all_entries["ce_v1_dot"]["unit"].value
 
         substance = self.ce_substance_tf.value # 獲取流體名稱
