@@ -120,6 +120,28 @@ def test_condenser_exergy_efficiency_uses_the_refrigerant_exergy_decrease() -> N
     assert 0.0 < efficiency < 1.0
 
 
+def test_condenser_exergy_efficiency_requires_an_explicit_boundary_temperature() -> None:
+    """邊界溫度 T 需明確提供：T = T0 時 η = 0；T 由 domain 檢查第二定律；都沒提供時報錯。
+
+回傳：
+    無。"""
+    m_dot, h1, h2, s1, s2 = 0.05, 430.0, 250.0, 1.75, 1.17
+    assert exergy_efficiency_condenser(m_dot, h1, h2, s1, s2, T0, T=T0) == pytest.approx(0.0)
+    heat_kw = m_dot * (h1 - h2)
+    decrease_kw = m_dot * ((h1 - h2) - T0 * (s1 - s2))
+    expected = heat_kw * (1 - T0 / 305.0) / decrease_kw
+    assert exergy_efficiency_condenser(m_dot, h1, h2, s1, s2, T0, T=305.0) == pytest.approx(expected)
+    assert exergy_efficiency_condenser(m_dot, h1, h2, s1, s2, T0, Q_dot_H=heat_kw, T=305.0) == pytest.approx(expected)
+    with pytest.raises(ValueError, match="不一致"):
+        exergy_efficiency_condenser(m_dot, h1, h2, s1, s2, T0, Q_dot_H=1.0, T=305.0)
+    # 平均放熱溫度 180 / 0.58 ≈ 310.3 K，邊界 320 K 違反第二定律。
+    with pytest.raises(ValueError, match="第二定律"):
+        exergy_efficiency_condenser(m_dot, h1, h2, s1, s2, T0, T=320.0)
+    # 舊版只提供 Q_dot_H 時會把 T 設為 T0 而恆回傳 0；現在要求明確的邊界溫度。
+    with pytest.raises(ValueError, match="傳熱邊界溫度"):
+        exergy_efficiency_condenser(m_dot, h1, h2, s1, s2, T0, Q_dot_H=heat_kw)
+
+
 def test_throttling_exergy_destruction_is_in_watts() -> None:
     """節流閥以 CoolProp SI（J/kg、J/(kg·K)）計算，㶲破壞率以 W 回傳，等於 ṁ·T0·(s2 − s1)。
 

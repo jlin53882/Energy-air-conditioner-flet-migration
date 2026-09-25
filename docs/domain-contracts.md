@@ -96,6 +96,7 @@ Flet 與 Telegram 負責 label、display unit、string 以及 message/control re
 
 - `solve_vapor_compression_cycle`：單級蒸氣壓縮循環。蒸發壓力取蒸發溫度的露點（Q = 1），冷凝壓力取冷凝溫度的泡點（Q = 0）；壓縮以等熵效率修正，節流為等焓。只有提供冷凍能力時才回傳質量流率、功率與吸入體積流量，不推估未提供的系統量。結果的 `reference_state` 是求解時實際使用的 policy code；reference-state policy 只在 application（`RefrigerationService`）解析一次，繪製同一循環的圖表必須使用這個值，不得再以 `Auto` 重新解析。
 - `evaluate_superheat_subcooling`：以量測絕對壓力與管溫判斷過熱蒸氣、過冷液體或兩相，過熱度以露點、過冷度以泡點為基準，並回報非共沸冷媒的溫度滑移。
+- `condenser_exergy_balance`／`analyze_condenser_exergy`：冷凝器的能量、熵與㶲平衡（忽略冷凝器壓降）。放熱量 `Q_H = ṁ·(h1 − h2)`，熱帶走的㶲 `Ex_Q = Q_H·(1 − T0/T_b)`，㶲破壞 `X_dest = ṁ·(ex1 − ex2) − Ex_Q = T0·S_gen`，㶲效率 `η = Ex_Q / [ṁ·(ex1 − ex2)]`。傳熱邊界溫度 `T_b` 沒有預設值，必須由呼叫端明確指定：熱排到環境時 `T_b = T0`（`η = 0`，冷媒減少的㶲全部被破壞），熱被回收時為放熱對象溫度。`T_b` 必須介於 `T0` 與冷媒平均放熱溫度 `(h1 − h2)/(s1 − s2)` 之間，超過上限時熵產生為負而拒絕；出口大量過冷時，平均放熱溫度可能低於飽和溫度，因此不得把飽和溫度當成預設邊界。舊版 `condenser_heat.exergy_efficiency_condenser` 委派此函式，不再把 `T` 固定為 `T0`。
 
 狀態服務無法計算的狀態（例如高於臨界壓力）必須轉為明確的 `ValueError`，不得回傳部分結果。
 
