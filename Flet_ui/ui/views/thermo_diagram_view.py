@@ -38,6 +38,9 @@ class ThermoDiagramView(ft.Column):
     def set_mode(self, mode: str) -> None:
         """切換圖表種類並清除舊圖，對應 route ``ph_chart`` / ``ts_chart``。
 
+        模組目前已是同一種圖表時（例如 P-h → 首頁 → P-h）不做任何事，保留
+        已繪製的圖與結果文字；只有圖表種類真的改變時才清除。
+
         參數：
             mode: ``"ph"`` 或 ``"ts"``。
 
@@ -50,7 +53,10 @@ class ThermoDiagramView(ft.Column):
         if mode not in _MODE_TO_DIAGRAM:
             raise ValueError(f"不支援的熱力圖模式：{mode}")
         self.mode = mode
-        self.module.set_diagram_type(_MODE_TO_DIAGRAM[mode])
+        diagram = _MODE_TO_DIAGRAM[mode]
+        if self.module.diagram_dd.value == diagram:
+            return
+        self.module.set_diagram_type(diagram)
 
     def activate_route(self, route_key: str) -> None:
         """generic route-activation 協定：由 ``AppShell.navigate`` 呼叫。
