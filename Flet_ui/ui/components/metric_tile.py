@@ -54,7 +54,8 @@ class MetricTile(ft.Container):
             ft.Text(
                 number,
                 size=TOKENS.metric_large if emphasis else TOKENS.metric,
-                weight=ft.FontWeight.W_700,
+                weight=ft.FontWeight.W_600,
+                font_family=TOKENS.mono_font,
                 color=TOKENS.text_primary,
                 selectable=True,
                 max_lines=1,

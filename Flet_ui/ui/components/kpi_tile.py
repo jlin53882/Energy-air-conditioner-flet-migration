@@ -18,7 +18,8 @@ class KpiTile(ft.Container):
 回傳：
     無。"""
         self.label_control = ft.Text(label, size=TOKENS.caption + 1, color=TOKENS.text_secondary)
-        self.value_control = ft.Text("—", size=TOKENS.display, weight=ft.FontWeight.W_600,
+        self.value_control = ft.Text("—", size=TOKENS.display, weight=ft.FontWeight.W_500,
+                                     font_family=TOKENS.mono_font,
                                      color=TOKENS.text_primary, selectable=True)
         self.unit_control = ft.Text("", size=TOKENS.caption + 1, color=TOKENS.text_muted)
         super().__init__(

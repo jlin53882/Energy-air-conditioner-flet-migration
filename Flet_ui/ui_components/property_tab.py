@@ -108,7 +108,7 @@ class PropertyTab(ft.Column):
         self.reference_state_helper = ft.Text(
             self.ref_state_descriptions["ASHRAE"],
             size=TOKENS.caption,
-            color=ft.Colors.BLUE_GREY_600,
+            color=TOKENS.text_secondary,
         )
         
         # 2. 性質輸入區塊 (Property Input Block)
@@ -296,7 +296,7 @@ class PropertyTab(ft.Column):
         )
         self.result_panel = ResultPanel()
         self.raw_output = ft.Text(
-            "", selectable=True, visible=False, font_family="Courier New",
+            "", selectable=True, visible=False, font_family=TOKENS.mono_font,
             size=TOKENS.caption + 1, color=TOKENS.text_primary,
         )
         self.result_text.size = TOKENS.caption + 1

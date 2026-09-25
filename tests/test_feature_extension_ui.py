@@ -388,8 +388,8 @@ def test_chart_axes_expand_for_hot_humid_states() -> None:
     assert high == 50.0 and w_max == pytest.approx(0.045)
 
 
-def test_context_panel_is_collapsed_by_default_and_toggles_on_wide_screens() -> None:
-    """寬版預設收起情境面板，按鈕可開關；中版與窄版不顯示面板與按鈕。
+def test_wide_sidebar_collapses_to_icon_rail_and_back() -> None:
+    """寬版可把側欄收合為圖示列並讓工作區變寬；中版固定為圖示列。
 
 回傳：
     無。"""
@@ -398,23 +398,46 @@ def test_context_panel_is_collapsed_by_default_and_toggles_on_wide_screens() -> 
     flet_main(page)
     shell = page.controls[0]
 
-    assert shell.context_panel.visible is False
-    assert shell.context_toggle.visible is True
-    shell.toggle_context_panel(None)
-    assert shell.context_panel.visible is True
-    assert shell.context_toggle.selected is True
+    assert shell.sidebar.width == 256
+    assert shell.menu_button.visible is True
+    shell._toggle_sidebar(None)
+    assert shell.sidebar_collapsed is True
+    assert shell.sidebar.compact is True
+    assert shell.sidebar.width == 76
+    assert shell.workspace_region.padding.left == 76
+    assert shell.brand_text.visible is False
 
     page.width = 1024
     shell._on_resize(None)
-    assert shell.context_panel.visible is False
-    assert shell.context_toggle.visible is False
+    assert shell.menu_button.visible is False
+    shell._toggle_sidebar(None)
+    assert shell.sidebar_collapsed is True
 
     page.width = 1440
     shell._on_resize(None)
-    assert shell.context_panel.visible is True
-    shell._on_keyboard_event(SimpleNamespace(key="Escape", ctrl=False))
-    assert shell.context_panel.visible is False
-    assert shell.context_panel_open is False
+    shell._toggle_sidebar(None)
+    assert shell.sidebar.width == 256
+    assert shell.workspace_region.padding.left == 256
+
+
+def test_home_refrigerant_shortcut_opens_property_query(shell, monkeypatch) -> None:
+    """首頁的常用冷媒捷徑以該流體開啟狀態查詢。
+
+參數：
+    shell: 工作區外殼。
+    monkeypatch: pytest monkeypatch；狀態查詢畫面未掛載到真實頁面，略過其重繪。
+
+回傳：
+    無。"""
+    monkeypatch.setattr(shell.views["thermo_properties"], "update", lambda: None)
+    home = shell.views["home"]
+    button = next(item for item in home.fluid_buttons if item.content == "R134a")
+
+    button.on_click(SimpleNamespace())
+
+    assert shell.state.route_key == "thermo_properties"
+    assert shell.views["thermo_properties"].fluid_tf.value == "R134a"
+    shell.navigate("home")
 
 
 def test_every_analysis_view_uses_the_shared_calculation_layout(shell) -> None:

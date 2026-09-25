@@ -113,7 +113,7 @@ class AnalysisResultView(ft.Column):
             border_radius=ft.BorderRadius.all(TOKENS.radius_md),
         )
 
-        self.raw_text = ft.Text("", font_family="Courier New", selectable=True,
+        self.raw_text = ft.Text("", font_family=TOKENS.mono_font, selectable=True,
                                 color=TOKENS.text_primary, size=TOKENS.caption + 1)
         self.raw_box = ft.Container(
             content=self.raw_text,

@@ -5,7 +5,10 @@ from collections.abc import Callable, Mapping
 
 from ..components.engineering_card import EngineeringCard
 from ..navigation import ROUTES, WorkspaceRoute
-from ..theme import TOKENS, card_shadow, section_colors
+from ..theme import TOKENS
+
+# 常用冷媒捷徑：點選後以該流體開啟狀態查詢；不代表 CoolProp 的完整支援清單。
+FLUID_SHORTCUTS = ("R32", "R410A", "R134a", "R290", "R600a", "R22")
 
 WORKFLOW_STEPS = (
     ("thermo_properties", "1", "查詢狀態點", "以兩個獨立性質取得焓、熵、比容等狀態值。"),
@@ -22,6 +25,7 @@ class HomeView(ft.Column):
         on_navigate: Callable[[str], None],
         analysis_counts: Mapping[str, int] | None = None,
         total_analyses: int | None = None,
+        on_fluid: Callable[[str], None] | None = None,
     ) -> None:
         """使用與側邊導覽相同的穩定路由清單建立首頁捷徑。
 
@@ -29,12 +33,14 @@ class HomeView(ft.Column):
     on_navigate: 點選捷徑時執行的路由切換回呼函式。
     analysis_counts: 選用的路由鍵對應已註冊分析項目數量；只顯示呼叫端實際提供的數字。
     total_analyses: 選用的分析註冊表項目總數；未提供時不顯示此統計。
+    on_fluid: 選用的常用冷媒捷徑回呼函式；未提供時不顯示冷媒捷徑。
 
 回傳：
     無。"""
         self.on_navigate = on_navigate
         self.analysis_counts = dict(analysis_counts or {})
         self.total_analyses = total_analyses
+        self.on_fluid = on_fluid
         self.tool_cards: dict[str, ft.Container] = {}
         tool_routes = [route for route in ROUTES if route.key != "home"]
         for route in tool_routes:
@@ -52,7 +58,8 @@ class HomeView(ft.Column):
                 self._hero(len(tool_routes)),
                 tools,
                 self._workflow_card(),
-            ],
+            ]
+            + ([self._fluid_card()] if on_fluid else []),
             spacing=TOKENS.spacing_lg,
             expand=True,
             scroll=ft.ScrollMode.AUTO,
@@ -75,7 +82,7 @@ class HomeView(ft.Column):
             icon=ft.Icons.ARROW_FORWARD,
             on_click=lambda _event: self.on_navigate("thermo_properties"),
             style=ft.ButtonStyle(
-                color=TOKENS.nav_background,
+                color=TOKENS.primary,
                 bgcolor=ft.Colors.WHITE,
                 shape=ft.RoundedRectangleBorder(radius=TOKENS.radius_sm),
                 padding=ft.Padding.symmetric(horizontal=20, vertical=14),
@@ -99,7 +106,7 @@ class HomeView(ft.Column):
                         [
                             ft.Container(
                                 content=ft.Text("HVAC ENGINEERING WORKSPACE", size=TOKENS.overline,
-                                                weight=ft.FontWeight.W_600, color=TOKENS.nav_accent),
+                                                weight=ft.FontWeight.W_600, color=ft.Colors.WHITE),
                                 padding=ft.Padding.symmetric(horizontal=10, vertical=4),
                                 bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.WHITE),
                                 border_radius=ft.BorderRadius.all(TOKENS.radius_pill),
@@ -110,7 +117,7 @@ class HomeView(ft.Column):
                                 "從冷媒狀態查詢、設備能量分析、濕空氣計算到熱力圖繪製，"
                                 "所有結果皆由既有 CoolProp 與 HVAC 計算服務提供。",
                                 size=TOKENS.body + 1,
-                                color=TOKENS.nav_text,
+                                color=ft.Colors.with_opacity(0.85, ft.Colors.WHITE),
                             ),
                             ft.Row([self.start_button, self.chart_button], spacing=TOKENS.spacing_sm,
                                    wrap=True, run_spacing=TOKENS.spacing_sm),
@@ -131,12 +138,7 @@ class HomeView(ft.Column):
             ),
             padding=TOKENS.spacing_xl,
             border_radius=ft.BorderRadius.all(TOKENS.radius_lg),
-            gradient=ft.LinearGradient(
-                begin=ft.Alignment.TOP_LEFT,
-                end=ft.Alignment.BOTTOM_RIGHT,
-                colors=[TOKENS.nav_background, "#1B4F86", "#1B6FA8"],
-            ),
-            shadow=card_shadow(),
+            bgcolor=TOKENS.primary,
         )
 
     @staticmethod
@@ -154,7 +156,8 @@ class HomeView(ft.Column):
                 [
                     ft.Text(value, size=TOKENS.title, weight=ft.FontWeight.W_700,
                             color=ft.Colors.WHITE),
-                    ft.Text(label, size=TOKENS.caption, color=TOKENS.nav_text, expand=True),
+                    ft.Text(label, size=TOKENS.caption, color=ft.Colors.with_opacity(0.85, ft.Colors.WHITE),
+                            expand=True),
                 ],
                 spacing=TOKENS.spacing_sm + 4,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -173,7 +176,7 @@ class HomeView(ft.Column):
 
 回傳：
     工具卡片容器。"""
-        accent, soft = section_colors(route.section)
+        accent, soft = TOKENS.primary, TOKENS.primary_soft
         footer: list[ft.Control] = []
         count = self.analysis_counts.get(route.key)
         if count and count > 1:
@@ -233,7 +236,6 @@ class HomeView(ft.Column):
             bgcolor=TOKENS.surface,
             border=ft.Border.all(1, TOKENS.border),
             border_radius=ft.BorderRadius.all(TOKENS.radius_md),
-            shadow=card_shadow(),
             on_click=lambda _event, key=route.key: self.on_navigate(key),
             tooltip=f"開啟{route.label}",
             ink=True,
@@ -287,4 +289,30 @@ class HomeView(ft.Column):
             ft.ResponsiveRow(steps, spacing=TOKENS.spacing_sm, run_spacing=TOKENS.spacing_sm),
             "典型的冷凍循環分析步驟；每一步都可直接開啟對應工具。",
             icon=ft.Icons.ROUTE_OUTLINED,
+        )
+
+    def _fluid_card(self) -> EngineeringCard:
+        """建立常用冷媒捷徑卡片，點選後以該流體開啟狀態查詢。
+
+回傳：
+    冷媒捷徑卡片。"""
+        self.fluid_buttons = [
+            ft.OutlinedButton(
+                fluid,
+                on_click=lambda _event, value=fluid: self.on_fluid(value),
+                tooltip=f"以 {fluid} 開啟狀態查詢",
+                style=ft.ButtonStyle(
+                    color=TOKENS.primary,
+                    side=ft.BorderSide(1, TOKENS.border_strong),
+                    shape=ft.RoundedRectangleBorder(radius=TOKENS.radius_sm),
+                    text_style=ft.TextStyle(font_family=TOKENS.mono_font, weight=ft.FontWeight.W_600),
+                ),
+            )
+            for fluid in FLUID_SHORTCUTS
+        ]
+        return EngineeringCard(
+            "常用冷媒",
+            ft.Row(self.fluid_buttons, spacing=TOKENS.spacing_sm, run_spacing=TOKENS.spacing_sm, wrap=True),
+            "點選即以該流體開啟狀態查詢；不代表 CoolProp 的完整支援清單。",
+            icon=ft.Icons.PROPANE_TANK_OUTLINED,
         )

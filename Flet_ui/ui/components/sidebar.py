@@ -1,4 +1,4 @@
-"""依工程工作流程分組並使用語意路由鍵的側邊導覽。"""
+"""依工程工作流程分組並使用語意路由鍵的淺色側邊導覽，可收合為圖示列。"""
 
 import flet as ft
 from collections.abc import Callable
@@ -60,7 +60,7 @@ class Sidebar(ft.Container):
             ),
             padding=TOKENS.spacing_md,
             margin=ft.Margin.only(top=TOKENS.spacing_md),
-            bgcolor=TOKENS.nav_surface,
+            bgcolor=TOKENS.surface_variant,
             border_radius=ft.BorderRadius.all(TOKENS.radius_sm),
         )
         super().__init__(
@@ -76,6 +76,7 @@ class Sidebar(ft.Container):
             ),
             padding=ft.Padding.symmetric(horizontal=TOKENS.spacing_sm + 4, vertical=TOKENS.spacing_sm),
             bgcolor=TOKENS.nav_background,
+            border=ft.Border.only(right=ft.BorderSide(1, TOKENS.border)),
         )
         self.set_selected(selected_key)
 
@@ -119,7 +120,7 @@ class Sidebar(ft.Container):
         for key, item in self.items.items():
             selected = key == route_key
             self._icons[key].color = TOKENS.nav_accent if selected else TOKENS.nav_text_muted
-            self._labels[key].color = ft.Colors.WHITE if selected else TOKENS.nav_text
+            self._labels[key].color = TOKENS.nav_accent if selected else TOKENS.nav_text
             self._labels[key].weight = ft.FontWeight.W_600 if selected else ft.FontWeight.W_400
             self._indicators[key].bgcolor = TOKENS.nav_accent if selected else ft.Colors.TRANSPARENT
             item.bgcolor = TOKENS.nav_selected if selected else None

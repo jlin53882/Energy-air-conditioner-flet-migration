@@ -79,7 +79,7 @@ class AnalysisWorkspace(ft.Column):
         self.analysis_title = ft.Text("", size=TOKENS.body + 1, weight=ft.FontWeight.W_600,
                                       color=TOKENS.text_primary)
         self.analysis_summary = ft.Text("", size=TOKENS.caption, color=TOKENS.text_muted)
-        self.formula_text = ft.Text("", size=TOKENS.caption + 1, font_family="Courier New",
+        self.formula_text = ft.Text("", size=TOKENS.caption + 1, font_family=TOKENS.mono_font,
                                     color=TOKENS.text_secondary, selectable=True)
         self.formula_box = ft.Container(
             content=self.formula_text,

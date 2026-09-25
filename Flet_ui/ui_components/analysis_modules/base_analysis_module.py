@@ -5,7 +5,7 @@ from math import isfinite
 
 import flet as ft
 from ..unit.UnitConverter import UnitConverter
-from ...ui.theme import TOKENS, style_text_field
+from ...ui.theme import TOKENS, mono_style, style_text_field
 
 class BaseAnalysisModule:
     """
@@ -98,6 +98,7 @@ class BaseAnalysisModule:
             hint_text="輸入數值",
             border=ft.InputBorder.NONE,
             text_size=TOKENS.body + 1,
+            text_style=mono_style(),
             cursor_color=TOKENS.primary,
             content_padding=ft.Padding.symmetric(horizontal=14, vertical=12),
         )

@@ -10,7 +10,7 @@
 import flet as ft
 
 from .ui.app_shell import AppShell
-from .ui.theme import TOKENS, workspace_theme
+from .ui.theme import MONO_FONT_URL, TOKENS, workspace_theme
 from .ui.state import WorkspaceState
 from .ui.views.home_view import HomeView
 from .ui.views.compressor_view import CompressorView
@@ -55,6 +55,7 @@ def main(page: ft.Page) -> None:
     page.theme_mode = ft.ThemeMode.LIGHT
     page.theme = workspace_theme()
     page.bgcolor = TOKENS.background
+    page.fonts = {TOKENS.mono_font: MONO_FONT_URL}
 
     unit_converter = UnitConverter()
     workspace_state = WorkspaceState()
@@ -123,10 +124,24 @@ def main(page: ft.Page) -> None:
     # 首頁統計只使用各 dedicated view 實際註冊的分析定義數量。
     analysis_counts = {key: len(view.adapter.definitions) for key, view in analysis_views.items()}
     shell_ref: dict[str, AppShell] = {}
+
+    def choose_fluid(fluid: str) -> None:
+        """將常用冷媒捷徑套用至熱力性質工作區。
+
+參數：
+    fluid: 要選取的流體名稱。
+
+回傳：
+    無。"""
+        shell_ref["shell"].navigate("thermo_properties")
+        property_view.fluid_tf.value = fluid
+        property_view.on_fluid_change(None)
+
     home_view = HomeView(
         lambda route_key: shell_ref["shell"].navigate(route_key),
         analysis_counts=analysis_counts,
         total_analyses=sum(analysis_counts.values()),
+        on_fluid=choose_fluid,
     )
     views = {
         "home": home_view,
@@ -155,23 +170,10 @@ def main(page: ft.Page) -> None:
         for view in analysis_views.values():
             view.set_output_unit_system(unit_system)
 
-    def choose_fluid(fluid: str) -> None:
-        """將常用冷媒捷徑套用至熱力性質工作區。
-
-參數：
-    fluid: 要選取的流體名稱。
-
-回傳：
-    無。"""
-        shell_ref["shell"].navigate("thermo_properties")
-        property_view.fluid_tf.value = fluid
-        property_view.on_fluid_change(None)
-
     shell = AppShell(
         page,
         views,
         on_unit_system_change=on_unit_system_change,
-        on_fluid_shortcut=choose_fluid,
         state=workspace_state,
     )
     shell_ref["shell"] = shell

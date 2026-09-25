@@ -1,4 +1,8 @@
-"""集中管理工程工作區的視覺設計權杖、主題與共用控制項樣式。"""
+"""集中管理工程工作區的視覺設計權杖、主題與共用控制項樣式。
+
+配色採暖灰白底、白色卡片細框線，搭配單一深青綠強調色；數值一律使用等寬字型，
+方便上下比較位數。
+"""
 
 from dataclasses import dataclass
 
@@ -24,40 +28,43 @@ class DesignTokens:
     content_max_width: int = 1480
     sidebar_width: int = 256
     sidebar_compact_width: int = 76
-    context_panel_width: int = 288
     top_bar_height: int = 64
 
-    # 品牌與語意色彩
-    primary: str = "#1B5FAA"
-    primary_hover: str = "#154C8A"
-    primary_soft: str = "#E6F0FB"
-    accent: str = "#0F9D9A"
-    accent_soft: str = "#E3F6F5"
-    background: str = "#F2F5F9"
+    # 品牌與語意色彩：暖灰白底＋單一深青綠強調色
+    primary: str = "#115E63"
+    primary_hover: str = "#0B4B4F"
+    primary_soft: str = "#E1EEEC"
+    accent: str = "#115E63"
+    accent_soft: str = "#E1EEEC"
+    background: str = "#EFEFEA"
     surface: str = "#FFFFFF"
-    surface_variant: str = "#F6F8FB"
-    surface_muted: str = "#EDF1F6"
-    border: str = "#DCE3EC"
-    border_strong: str = "#C3CEDB"
-    text_primary: str = "#0F1E2E"
-    text_secondary: str = "#4A5B6E"
-    text_muted: str = "#7A8898"
-    success: str = "#15803D"
-    success_soft: str = "#E7F6EC"
-    warning: str = "#B45309"
-    warning_soft: str = "#FDF3E4"
-    error: str = "#C0362C"
-    error_soft: str = "#FCEBEA"
-    info: str = "#1D63B8"
-    info_soft: str = "#E8F1FC"
+    surface_variant: str = "#F4F4F0"
+    surface_muted: str = "#ECECE6"
+    border: str = "#E2E2DB"
+    border_strong: str = "#CDCDC4"
+    text_primary: str = "#1E2421"
+    text_secondary: str = "#4D5550"
+    text_muted: str = "#878E89"
+    success: str = "#2E7D4F"
+    success_soft: str = "#E6F2EA"
+    warning: str = "#A15C07"
+    warning_soft: str = "#FBF1E1"
+    error: str = "#B4371F"
+    error_soft: str = "#FBEAE5"
+    info: str = "#115E63"
+    info_soft: str = "#E1EEEC"
+    # 圖表中「目前狀態點」與輔助線使用的橘紅色
+    highlight: str = "#C2410C"
 
-    # 深色導覽區
-    nav_background: str = "#0E2239"
-    nav_surface: str = "#15304F"
-    nav_selected: str = "#1F4B7A"
-    nav_text: str = "#C9D6E5"
-    nav_text_muted: str = "#7F97B2"
-    nav_accent: str = "#5CC8F0"
+    # 淺色導覽區
+    nav_background: str = "#F7F7F3"
+    nav_selected: str = "#E1EEEC"
+    nav_text: str = "#3E4541"
+    nav_text_muted: str = "#878E89"
+    nav_accent: str = "#115E63"
+
+    # 等寬數字字型（於 flet_app 以 page.fonts 註冊；無法載入時由系統字型替代）
+    mono_font: str = "IBM Plex Mono"
 
     # 字體層級
     display: int = 30
@@ -72,26 +79,19 @@ class DesignTokens:
 
 TOKENS = DesignTokens()
 
-# 依工作區分類使用的強調色，讓導覽、頁首與首頁卡片使用同一套語意。
-SECTION_COLORS: dict[str, tuple[str, str]] = {
-    "工作區": ("#1B5FAA", "#E6F0FB"),
-    "熱力學": ("#6D4BC4", "#F0EBFB"),
-    "冷凍系統": ("#0F7EA8", "#E3F3FA"),
-    "空氣處理": ("#0F9D9A", "#E3F6F5"),
-    "圖表": ("#C2620F", "#FCF0E3"),
-    "工具": ("#4A5B6E", "#EDF1F6"),
-}
+# 等寬字型來源（IBM Plex Mono，SIL Open Font License）。
+MONO_FONT_URL = "https://raw.githubusercontent.com/google/fonts/main/ofl/ibmplexmono/IBMPlexMono-Regular.ttf"
 
 
-def section_colors(section: str) -> tuple[str, str]:
-    """回傳工作區分類對應的強調色與淡色背景。
+def mono_style(**kwargs) -> ft.TextStyle:
+    """建立數值使用的等寬字型樣式。
 
 參數：
-    section: 導覽路由所屬的分類名稱。
+    kwargs: 其他 TextStyle 參數（例如 size、weight、color）。
 
 回傳：
-    由強調色與淡色背景組成的二元組；未知分類使用主要品牌色。"""
-    return SECTION_COLORS.get(section, (TOKENS.primary, TOKENS.primary_soft))
+    Flet TextStyle 物件。"""
+    return ft.TextStyle(font_family=TOKENS.mono_font, **kwargs)
 
 
 def card_shadow() -> ft.BoxShadow:
@@ -101,9 +101,9 @@ def card_shadow() -> ft.BoxShadow:
     Flet BoxShadow 物件。"""
     return ft.BoxShadow(
         spread_radius=0,
-        blur_radius=18,
-        color="#140F2A47",
-        offset=ft.Offset(0, 4),
+        blur_radius=4,
+        color="#0A1E2421",
+        offset=ft.Offset(0, 1),
     )
 
 
@@ -123,6 +123,7 @@ def style_text_field(control: ft.TextField, *, dense: bool = False) -> ft.TextFi
     control.filled = True
     control.fill_color = TOKENS.surface
     control.text_size = TOKENS.body
+    control.text_style = mono_style()
     control.cursor_color = TOKENS.primary
     control.content_padding = ft.Padding.symmetric(
         horizontal=12, vertical=8 if dense else 12

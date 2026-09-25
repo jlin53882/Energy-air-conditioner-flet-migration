@@ -196,7 +196,7 @@ def test_sidebar_highlights_only_the_selected_route() -> None:
 
 
 def test_shell_header_and_breadcrumb_follow_route() -> None:
-    """頁首標題、說明與麵包屑隨路由更新，情境面板顯示輸出偏好。
+    """頁首標題、說明與麵包屑隨路由更新，頂端列的單位切換反映輸出偏好。
 
 回傳：
     無。"""
@@ -208,7 +208,7 @@ def test_shell_header_and_breadcrumb_follow_route() -> None:
     assert shell.breadcrumb_label.value == "濕空氣性質"
 
     shell.set_output_unit_system("Imperial")
-    assert "Imperial" in shell.output_system_badge.value
+    assert shell.unit_toggle.selected == ["Imperial"]
 
 
 def test_property_preset_chip_tracks_current_property_pair() -> None:

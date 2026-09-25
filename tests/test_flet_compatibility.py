@@ -616,7 +616,6 @@ def test_app_shell_replaces_top_level_tabs_and_exposes_implemented_routes() -> N
     assert shell.sidebar is not None
     assert shell.top_bar is not None
     assert shell.workspace is not None
-    assert shell.context_panel is not None
     assert {"thermo_properties", "compressor", "evaporator", "condenser",
             "psychrometrics", "ph_chart", "ts_chart"} <= set(shell.views)
     assert shell.route_header.controls[0].value == "狀態查詢"
@@ -769,8 +768,8 @@ def test_property_query_hides_unsupported_third_condition_and_aligns_controls() 
         assert row["prop"].height == row["val"].height == row["unit"].height
 
 
-def test_responsive_shell_collapses_sidebar_and_context_panel() -> None:
-    """確認窄視窗會收合側邊導覽並隱藏選用情境面板。
+def test_responsive_shell_collapses_sidebar() -> None:
+    """確認窄視窗會收合側邊導覽，中版改為精簡圖示列。
 
 回傳：
     無。"""
@@ -781,14 +780,12 @@ def test_responsive_shell_collapses_sidebar_and_context_panel() -> None:
 
     assert isinstance(shell.content_row, ft.Stack)
     assert shell.sidebar.visible is False
-    assert shell.context_panel.visible is False
     assert shell.workspace_region.padding.left == 0
     page.width = 1024
     shell._on_resize(None)
     assert shell.sidebar.visible is True
     assert shell.sidebar.width == 76
     assert shell.workspace_region.padding.left == 76
-    assert shell.context_panel.visible is False
     page.width = 760
     shell._on_resize(None)
     shell._toggle_sidebar(None)

@@ -10,12 +10,13 @@
 
 `Flet_ui/flet_app.py` 是組合根，負責建立既有服務，並掛載 `Flet_ui/ui/app_shell.py`。
 
-`AppShell` 負責四個區域：
+`AppShell` 負責三個區域：
 
-- **頂端列**：左側品牌區延續深色導覽的底色；右側為「分類 › 路由」麵包屑、快捷鍵提示及全域結果輸出單位偏好。
-- **側邊欄**：深色、以穩定路由鍵值識別的分組導覽，不以翻譯後的顯示文字作為路由識別。選取樣式由 `Sidebar.set_selected()` 負責，外殼不得直接改寫導覽項目的內部控制項。
-- **工作區**：頁首（依分類著色的路由圖示、路由標題與 `WorkspaceRoute.description`）及目前選取的畫面。
-- **情境面板**：寬版的選用浮動抽屜，預設收起，由頂端列的資訊欄按鈕開關（Esc 可關閉）；開啟時覆蓋在工作區右側，不改變計算頁版面寬度。以堆疊小卡呈現目前輸出單位系統、常用冷媒捷徑、鍵盤快捷鍵及計算歷史。不得自行假造計算歷史；在歷史資料儲存介面尚未接通前，只能呈現明確的空狀態。
+- **頂端列**：左側品牌區（導覽收合按鈕、標誌與名稱）；右側為「分類 › 路由」麵包屑、快捷鍵提示及全域結果輸出單位偏好。
+- **側邊欄**：淺色、以穩定路由鍵值識別的分組導覽，不以翻譯後的顯示文字作為路由識別。寬版可由頂端列按鈕收合為圖示列（`AppShell.sidebar_collapsed`），讓計算頁取得更多寬度。選取樣式由 `Sidebar.set_selected()` 負責，外殼不得直接改寫導覽項目的內部控制項。
+- **工作區**：頁首（路由圖示、路由標題與 `WorkspaceRoute.description`）及目前選取的畫面。
+
+原本的右側情境面板已移除：常用冷媒捷徑移到首頁的「常用冷媒」卡片，快捷鍵提示位於頂端列。畫面不得顯示假造的計算歷史；歷史紀錄的存放方式決定前，不提供歷史入口。
 
 外殼會將每個唯一畫面固定掛載於同一個 `Stack`，切換路由時只改變可見狀態。這可避免圖表等昂貴子控制項在導覽時被銷毀重建，並減少 Flet 控制項生命週期變動。PR #4（Analysis Workspace Migration）之後，每個分析路由對應各自獨立的 dedicated view 實例（`CompressorView` / `EvaporatorView` / `CondenserView` / `RefrigerationCycleView` / `PsychrometricsView` / `AirProcessView` / `PsychrometricChartView` / `ThermoDiagramView`），彼此互不共享父容器；`AppShell` 不需要知道任何 analysis category 的細節，只依 `route.key` 決定要顯示哪一個已掛載的 view。
 
@@ -27,7 +28,7 @@
 
 ## 設計權杖與共用元件
 
-`Flet_ui/ui/theme.py` 集中管理間距、圓角、控制項尺寸、寬度建議、品牌／語意／深色導覽色彩、字體層級、分類強調色（`SECTION_COLORS`），以及共用的欄位、按鈕、膠囊按鈕與卡片陰影樣式（`style_text_field`、`style_dropdown`、`primary_button_style`、`secondary_button_style`、`chip_button_style`、`card_shadow`）。新增工作區畫面應重用這些設計權杖與樣式函式，不應在各畫面另行建立局部色盤或間距常數。樣式函式只改變外觀，不得改變控制項的值或事件。
+`Flet_ui/ui/theme.py` 集中管理間距、圓角、控制項尺寸、寬度建議、色彩、字體層級，以及共用的欄位、按鈕、膠囊按鈕、卡片陰影與等寬數字樣式（`style_text_field`、`style_dropdown`、`primary_button_style`、`secondary_button_style`、`chip_button_style`、`card_shadow`、`mono_style`）。配色為暖灰白底（`background`）、白色卡片細框線，搭配單一深青綠強調色（`primary`），圖表的目前狀態點使用 `highlight` 橘紅色；不再依導覽分類使用不同強調色。數值（關鍵數值、性質表、輸入欄位、公式與原始文字）一律使用 `TOKENS.mono_font`（IBM Plex Mono），由組合根以 `page.fonts` 從 `MONO_FONT_URL` 註冊；無法下載字型時由系統字型替代，不影響功能。新增工作區畫面應重用這些設計權杖與樣式函式，不應在各畫面另行建立局部色盤或間距常數。樣式函式只改變外觀，不得改變控制項的值或事件。
 
 `Flet_ui/ui/components/` 目前提供：
 
@@ -48,7 +49,7 @@
 
 ## 畫面職責與遷移界線
 
-- 首頁以橫幅、工具卡片格與建議工作流程呈現已實作工具。卡片上的分析數量與總數只來自各 dedicated view 的 `AnalysisModuleAdapter.definitions`，不得寫死或推估。
+- 首頁以橫幅、工具卡片格、建議工作流程與常用冷媒捷徑（點選即以該流體開啟狀態查詢）呈現已實作工具。卡片上的分析數量與總數只來自各 dedicated view 的 `AnalysisModuleAdapter.definitions`，不得寫死或推估。
 - 性質查詢工作區將既有的模式、流體、參考狀態及性質控制項組合成全寬計算設定卡，下方左欄為已知條件與選用廣延性質、右欄為結果；窄視窗時依序堆疊。水模式的理想氣體選項必須實際出現在計算設定卡中。常用組合以膠囊按鈕呈現，並標示與前兩列性質相符的組合。
 - 分析頁共用 `AnalysisWorkspace` 計算頁版型：左欄「輸入條件」卡（`ToolSelector` 分析項目下拉選單，只有一項分析時隱藏；分析名稱、說明與公式提示；模組輸入；全寬「計算」按鈕），右欄為 `AnalysisResultView` 結果區（關鍵數值列、圖表＋完整性質表、可展開的「顯示計算過程」、原始文字與複製）。欄寬固定為 `INPUT_COLUMN`／`RESULT_COLUMN`，窄視窗時上下堆疊。尚未計算或計算失敗時，結果區只顯示狀態卡；成功時狀態卡隱藏，由數值本身呈現結果。頁面標題與說明由 AppShell 頁首呈現，`AnalysisWorkspace.header` 預設隱藏。`AnalysisModuleAdapter` 保存模組回傳的原始 `result_text`；以「計算錯誤」或「計算失敗」開頭的文字以錯誤狀態呈現，不投影指標。
 - 分析定義可選擇提供 `result_chart`（通常為 `FigurePanel`），由 `definitions_from_module()` 帶入 `AnalysisDefinition.result_chart`；成功計算後顯示在結果區的圖表卡，寬版時與完整性質表並排，重設、切換工具或錯誤時隱藏，且不得沿用前一個分析的圖表。`FigurePanel` 持有長期存在的 Matplotlib figure，繪圖程式必須清除並重畫同一個 figure，再呼叫 `refresh()`。
@@ -86,11 +87,11 @@
 
 工作區外殼具有三種寬度模式：
 
-- **寬版**（約 1200 px 以上）：完整側邊欄與工作區；情境面板預設收起，可開啟為浮動抽屜。
-- **中版**（約 800–1200 px）：精簡圖示導覽列並隱藏情境面板。
-- **窄版**（低於約 800 px）：工作區使用全寬、側邊導覽改為可切換的覆蓋式抽屜，且不顯示情境面板；頂端列只保留抽屜按鈕、標誌、目前路由名稱及輸出單位切換。
+- **寬版**（約 1200 px 以上）：完整側邊欄與工作區；側邊欄可收合為圖示列。
+- **中版**（約 800–1200 px）：固定為精簡圖示導覽列。
+- **窄版**（低於約 800 px）：工作區使用全寬、側邊導覽改為可切換的覆蓋式抽屜；頂端列只保留抽屜按鈕、標誌、目前路由名稱及輸出單位切換。
 
-Flet `ResponsiveRow` 的斷點依頁面寬度判斷，而不是依父容器寬度。情境面板改為浮動抽屜，也是為了讓頁面寬度斷點與實際可用寬度一致。計算頁的輸入欄與結果欄欄寬由 `AnalysisWorkspace` 的 `INPUT_COLUMN`／`RESULT_COLUMN` 統一決定；關鍵數值依數量排滿一列（最多四張），寬版時圖表與完整性質表並排。
+Flet `ResponsiveRow` 的斷點依頁面寬度判斷，而不是依父容器寬度；移除右側情境面板後，頁面寬度斷點與計算頁實際可用寬度更接近。計算頁的輸入欄與結果欄欄寬由 `AnalysisWorkspace` 的 `INPUT_COLUMN`／`RESULT_COLUMN` 統一決定；關鍵數值依數量排滿一列（最多四張），寬版時圖表與完整性質表並排。
 
 捲動責任必須明確：工作區不得帶動整個外殼捲動；各計算畫面負責自己的捲動區域。性質查詢的底部操作列必須置於可捲動輸入／結果區域之外，讓使用者捲動時仍能操作「重設」及「執行計算」。
 

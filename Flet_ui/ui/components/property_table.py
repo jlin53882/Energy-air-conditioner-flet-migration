@@ -58,6 +58,7 @@ class PropertyTable(ft.Column):
                 [
                     ft.Text(row.label, size=TOKENS.body, color=TOKENS.text_primary, expand=True),
                     ft.Text(row.value, size=TOKENS.body + 1, weight=ft.FontWeight.W_500,
+                            font_family=TOKENS.mono_font,
                             color=TOKENS.text_primary, text_align=ft.TextAlign.RIGHT, selectable=True),
                     ft.Container(
                         content=ft.Text(row.unit, size=TOKENS.caption, color=TOKENS.text_muted),

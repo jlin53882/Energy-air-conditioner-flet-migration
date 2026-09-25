@@ -38,7 +38,8 @@ class PsyModule(BaseAnalysisModule):
         self.result_builder = PsychrometricResultBuilder(unit_converter, self.psy_calculator.service)
         self.last_structured_result = None
         # 海拔輸入即時換算大氣壓力，讓使用者在計算前就看到推導值。
-        self.pressure_hint = ft.Text("", size=TOKENS.caption, color=TOKENS.text_muted)
+        self.pressure_hint = ft.Text("", size=TOKENS.caption, color=TOKENS.text_muted,
+                                     font_family=TOKENS.mono_font)
         self.all_entries["psy_alt"]["val"].on_change = self.update_pressure_hint
         convert_altitude_unit = self.all_entries["psy_alt"]["unit"].on_select
 
