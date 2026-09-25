@@ -1,4 +1,4 @@
-"""壓縮機分析：欄位錯誤提示與㶲效率兩種算法的一致性。"""
+"""壓縮機、冷凝器、蒸發器分析的欄位錯誤提示，以及壓縮機㶲效率兩種算法的一致性。"""
 
 from __future__ import annotations
 
@@ -39,21 +39,30 @@ class DummyPage:
 
 
 @pytest.fixture(scope="module")
-def compressor_view():
-    """建構一次完整工作區並回傳壓縮機分析頁。
+def shell():
+    """建構一次完整工作區供本模組測試共用。
+
+回傳：
+    AppShell。"""
+    page = DummyPage()
+    flet_main(page)
+    return page.controls[0]
+
+
+@pytest.fixture(scope="module")
+def compressor_view(shell):
+    """回傳壓縮機分析頁。
 
 回傳：
     CompressorView。"""
-    page = DummyPage()
-    flet_main(page)
-    return page.controls[0].views["compressor"]
+    return shell.views["compressor"]
 
 
 def _run(view, analysis_key: str, entry_key: str, raw_value: str) -> tuple[str, str]:
     """把一個欄位改成指定文字後計算，回傳狀態與訊息，並還原欄位。
 
 參數：
-    view: 壓縮機分析頁。
+    view: 分析頁。
     analysis_key: 分析項目 key。
     entry_key: 要修改的輸入欄位 key。
     raw_value: 欄位文字。
@@ -107,9 +116,32 @@ def test_every_compressor_analysis_still_calculates_with_defaults(compressor_vie
         compressor_view.perform_calculation(None)
         if definition.key == "compressor.compression_ratio":
             assert compressor_view.result_panel.status == "error"
-            assert "請輸入「入口壓力 (Inlet Pressor)」" in compressor_view.result_panel.message
+            assert "請輸入「入口壓力 (Inlet Pressure)」" in compressor_view.result_panel.message
         else:
             assert compressor_view.result_panel.status == "success", definition.key
+
+
+@pytest.mark.parametrize(
+    ("view_key", "analysis_key", "entry_key", "label"),
+    [
+        ("condenser", "condenser.heat_rate", "qc_h1", "入口焓值 (Inlet Enthalpy, h1)"),
+        ("evaporator", "evaporator.heat_rate", "qe_m_dot", "質量流率 (Mass Flow Rate)"),
+    ],
+)
+def test_condenser_and_evaporator_fields_name_the_field(shell, view_key, analysis_key, entry_key, label) -> None:
+    """冷凝器與蒸發器的空白或無效欄位同樣以欄名提示；預設輸入仍能計算。
+
+回傳：
+    無。"""
+    view = shell.views[view_key]
+    status, message = _run(view, analysis_key, entry_key, "")
+    assert status == "error"
+    assert f"請輸入「{label}」" in message
+    status, message = _run(view, analysis_key, entry_key, "abc")
+    assert status == "error"
+    assert f"「{label}」請輸入有效數值（目前為「abc」）" in message
+    view.perform_calculation(None)
+    assert view.result_panel.status == "success"
 
 
 @pytest.mark.parametrize(

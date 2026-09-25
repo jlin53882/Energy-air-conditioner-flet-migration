@@ -144,8 +144,8 @@ class CompressorModule(BaseAnalysisModule):
             on_change=self.on_pressure_type_change,
         )
         self.create_input_row("cr_atm_p", "大氣壓力 (Atm. Pressure)", "101.325", "P", "kPa")
-        self.create_input_row("cr_pe", "入口壓力 (Inlet Pressor)", "", "P", "MPa")
-        self.create_input_row("cr_pc", "出口壓力 (Outlet Pressor)", "", "P", "MPa")
+        self.create_input_row("cr_pe", "入口壓力 (Inlet Pressure)", "", "P", "MPa")
+        self.create_input_row("cr_pc", "出口壓力 (Outlet Pressure)", "", "P", "MPa")
         
         self.cr_ui_container = ft.Container(
             content=ft.Column(

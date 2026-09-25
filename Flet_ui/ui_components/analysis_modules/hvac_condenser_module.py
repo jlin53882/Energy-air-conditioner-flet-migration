@@ -47,11 +47,11 @@ class CondenserModule(BaseAnalysisModule):
         )
         
     def calculate_qe(self, use_imperial: bool) -> str:
-        h1_val = float(self.all_entries["qc_h1"]["val"].value)
+        h1_val = self.read_float("qc_h1")
         h1_unit = self.all_entries["qc_h1"]["unit"].value
-        h2_val = float(self.all_entries["qc_h2"]["val"].value)
+        h2_val = self.read_float("qc_h2")
         h2_unit = self.all_entries["qc_h2"]["unit"].value
-        m_dot_val = float(self.all_entries["qc_m_dot"]["val"].value)
+        m_dot_val = self.read_float("qc_m_dot")
         m_dot_unit = self.all_entries["qc_m_dot"]["unit"].value
         
         h1_si = self.unit_converter.convert_to_si("H", h1_val, h1_unit)
