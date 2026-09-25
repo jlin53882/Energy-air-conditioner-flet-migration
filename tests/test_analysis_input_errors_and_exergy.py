@@ -1,4 +1,4 @@
-"""壓縮機、冷凝器、蒸發器分析的欄位錯誤提示，以及壓縮機㶲效率兩種算法的一致性。"""
+"""壓縮機、冷凝器、蒸發器與濕空氣性質分析的欄位錯誤提示，以及壓縮機㶲效率兩種算法的一致性。"""
 
 from __future__ import annotations
 
@@ -142,6 +142,46 @@ def test_condenser_and_evaporator_fields_name_the_field(shell, view_key, analysi
     assert f"「{label}」請輸入有效數值（目前為「abc」）" in message
     view.perform_calculation(None)
     assert view.result_panel.status == "success"
+
+
+@pytest.mark.parametrize(
+    ("analysis_key", "entry_key", "raw_value", "expected"),
+    [
+        ("psychrometrics.tdb_twb", "psy_twb", "", "請輸入「濕球溫度 (Wet-Bulb)」"),
+        ("psychrometrics.tdb_twb", "psy_tdb", "2S", "「乾球溫度 (Dry-Bulb)」請輸入有效數值（目前為「2S」）"),
+        ("psychrometrics.tdb_rh", "psy_rh", "", "請輸入「相對濕度 (Rel. Humidity)」"),
+        ("psychrometrics.tdb_rh", "psy_alt", "nan", "「高度 (Altitude)」必須是有限數字"),
+    ],
+)
+def test_psychrometric_fields_name_the_field(shell, analysis_key, entry_key, raw_value, expected) -> None:
+    """濕空氣性質兩種模式的空白或無效欄位以欄名提示；預設輸入仍能計算。
+
+回傳：
+    無。"""
+    view = shell.views["psychrometrics"]
+    status, message = _run(view, analysis_key, entry_key, raw_value)
+    assert status == "error"
+    assert expected in message
+    view.perform_calculation(None)
+    assert view.result_panel.status == "success"
+
+
+def test_altitude_hint_rejects_non_finite_altitude(shell) -> None:
+    """海拔下方的大氣壓力提示遇到非有限數值時顯示提示文字，而不是算出壓力。
+
+回傳：
+    無。"""
+    module = shell.views["psychrometrics"].psy_module
+    field = module.all_entries["psy_alt"]["val"]
+    original = field.value
+    try:
+        field.value = "inf"
+        module.update_pressure_hint(None)
+        assert "有效海拔" in module.pressure_hint.value
+    finally:
+        field.value = original
+        module.update_pressure_hint(None)
+    assert module.pressure_hint.value.startswith("→ 大氣壓力")
 
 
 @pytest.mark.parametrize(
