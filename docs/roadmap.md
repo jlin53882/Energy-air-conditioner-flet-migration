@@ -22,7 +22,12 @@
 **結果**：失效矩陣見 [`state-invalidation.md`](state-invalidation.md)，回歸測試見
 `tests/test_integration_hardening.py`。修正三個問題：切換單位時以計算後已修改的輸入
 重算、熱力圖重新進入同一路由時清除已繪製的圖、壓縮比頁違反錶壓契約；並移除
-legacy `AnalysisTab` 與其相容層。原規劃項目如下：
+legacy `AnalysisTab` 與其相容層。
+
+依確認結果一併完成：分析頁修改輸入後結果立即失效；錶壓換算的大氣壓力預設
+101.325 kPa，可選填海拔自動計算，大氣壓力改變時保留錶壓讀值；冷凝器 Exergy 頁
+支援錶壓輸入；冷凍循環與冷凝器 Exergy 各自提供 Reference State 選單，壓縮機不再
+跟隨物性查詢頁。原規劃項目如下：
 
 1. 失效矩陣：定義切頁、切 SI/Imperial、切 Reference State、切冷媒、大氣壓力改變時，
    輸入／結果／圖表各自保留或失效。
@@ -46,14 +51,15 @@ PR #6 已合併，以上項目皆可直接進行。PR #6 帶入的內容一併�
 - 冷凝器 Exergy 頁（`condenser.exergy`）納入跨頁、單位切換與 Reference State 測試。
   其結果只取狀態差值（Δh、Δs），切換 ASHRAE / IIR 後數值應完全相同，可作為
   不變量測試。
-- 冷凝器 Exergy 頁的壓力只接受絕對壓力，冷凍循環頁則可切換錶壓／絕對壓；
-  在失效矩陣中記錄此差異，是否統一另行決定，不在 #7 內修改。
+- 冷凝器 Exergy 頁原本只接受絕對壓力；已改為與冷凍循環頁相同，可切換錶壓／絕對壓。
 - 舊版 `hvac_calculations`（compressor／exergy／condenser_heat／throttling）仍有
   production caller，單位契約已由 `tests/test_legacy_hvac_unit_contract.py` 固定；
   死碼稽核不得移除它們。
 
 ### 階段 1 — #8 ThermoStatePoint 與基礎設施
 
+- 狀態點的 `reference_state` 取自產生它的那一頁（各頁各自選擇，見
+  [`state-invalidation.md`](state-invalidation.md)）。
 - 由既有 `domain/refrigeration/states.py` 的 `CycleState` 推廣，不另建平行模型；
   目前的使用者 `vapor_compression.py`、`condenser_exergy.py` 一併遷移。
 - 欄位：`fluid`、`reference_state`（必填）、P、T、h、s、ρ、Q、`source`（enum）、
@@ -97,10 +103,6 @@ PR #6 已合併，以上項目皆可直接進行。PR #6 帶入的內容一併�
 
 | 事項 | 影響 |
 |---|---|
-| 大氣壓力改變時，Gauge 輸入保留錶壓或保留絕對壓 | #7 已採用保留錶壓、計算時重算絕對壓，待確認 |
-| 壓縮機分析跟隨物性查詢頁的 Reference State，冷凍循環不跟隨，是否統一 | #8 狀態點的 `reference_state` 來源 |
-| 分析頁修改輸入時是否立即使結果失效（與物性查詢頁一致） | 分析頁的失效規則 |
-| 冷凝器 Exergy 頁是否支援錶壓輸入 | 壓力輸入一致性 |
 | 冷凍循環是否支援以狀態點作為輸入 | 階段 2 之後的跨工具傳遞 |
 
 ## 4. 範圍外（有需要再補）

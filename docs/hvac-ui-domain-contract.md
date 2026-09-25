@@ -16,7 +16,9 @@ Flet 呈現層不是另一套熱力計算引擎。它負責將使用者輸入的
 
 若未明確指定壓力基準，壓力值便有歧義。凡接受表壓的操作，壓力輸入都必須標示為 `Gauge`（表壓）或 `Absolute`（絕對壓）。熱力性質查詢與 CoolProp 狀態求解都要求絕對壓力。表壓轉絕對壓的轉接邏輯，必須一致採用已設定的大氣壓及所選壓力單位；不得把表壓讀值誤當成絕對壓力。
 
-單位標示必須與壓力基準一致：表壓輸入使用表壓單位（`kPag`、`psig`…，Flet `UnitConverter` 的 `PGauge` 量），絕對壓輸入使用絕對單位（`kPa`、`psia`…）。在同一欄位切換表壓／絕對壓時，數值必須換算為同一個實際絕對壓力（例如 900 kPag ↔ 1001.325 kPa，大氣壓 101.325 kPa），單位維持同尺度；大氣壓無法解析而無法換算時，必須維持原模式並提示，不得把原數值直接改當另一種基準。冷凍過熱度／過冷度判讀與壓縮機壓縮比已依此契約實作（共用 `BaseAnalysisModule.switch_pressure_basis`／`read_absolute_pressure_pa`）。在專用的共用 `PressureInput` 契約完成跨模組遷移前，既有 HVAC 分析器／模組的計算方式仍是實際執行依據。
+單位標示必須與壓力基準一致：表壓輸入使用表壓單位（`kPag`、`psig`…，Flet `UnitConverter` 的 `PGauge` 量），絕對壓輸入使用絕對單位（`kPa`、`psia`…）。在同一欄位切換表壓／絕對壓時，數值必須換算為同一個實際絕對壓力（例如 900 kPag ↔ 1001.325 kPa，大氣壓 101.325 kPa），單位維持同尺度；大氣壓無法解析而無法換算時，必須維持原模式並提示，不得把原數值直接改當另一種基準。冷凍過熱度／過冷度判讀、壓縮機壓縮比與冷凝器 Exergy 已依此契約實作（共用 `BaseAnalysisModule.switch_pressure_basis`／`read_absolute_pressure_pa`／`apply_pressure_basis`）。
+
+錶壓換算用的大氣壓力預設為標準大氣壓 101.325 kPa。錶壓模式另提供選填的海拔欄位：填入海拔時以共用濕空氣服務的標準大氣公式（`PsychrometricService.calculate_pressure_from_altitude`）自動計算大氣壓力，清空時恢復 101.325 kPa；大氣壓力欄位仍可手動修改（`BaseAnalysisModule.create_atmosphere_rows`）。大氣壓力改變時保留錶壓讀值，計算時才以新的大氣壓力換算絕對壓力。在專用的共用 `PressureInput` 契約完成跨模組遷移前，既有 HVAC 分析器／模組的計算方式仍是實際執行依據。
 
 ## 相對濕度與乾度
 
