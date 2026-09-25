@@ -29,18 +29,28 @@
    - P-h、T-s、冷凍循環 P-h、濕空氣線圖不殘留舊圖、不重複加入
    - 既有冷凍循環（`cycle.vapor_compression`、`cycle.superheat_subcooling`）一併納入
 3. 修正測試抓到的問題。
-4. `StructuredResult` / `structured_from_text()` 邊界稽核：列出仍靠文字解析的模組；
-   明定 `structured_from_text` 只供顯示，不得作為資料來源。
+4. `StructuredResult` / `structured_from_text()` 邊界稽核：目前只有 `PsyModule` 提供原生
+   `structured_result`，其餘分析（壓縮機、蒸發器、冷凝器含 Exergy、冷凍循環、空氣處理）
+   都靠文字解析。明定 `structured_from_text` 只供顯示，不得作為資料來源。
 5. 將 characterization tests 遷出 legacy `AnalysisTab` 後移除，連同
    `PsyModule._resolve_mode_key()` 相容層與零引用 helper。
 6. 修正 `docs/architecture.md` 仍把 `AnalysisTab` 描述為現行架構的內容。
 
-與 PR #6 重疊的模組（壓縮機、蒸發器、冷凝器、濕空氣計算、`base_analysis_module`）
-在 #6 合併後再處理。
+PR #6 已合併，以上項目皆可直接進行。PR #6 帶入的內容一併納入：
+
+- 冷凝器 Exergy 頁（`condenser.exergy`）納入跨頁、單位切換與 Reference State 測試。
+  其結果只取狀態差值（Δh、Δs），切換 ASHRAE / IIR 後數值應完全相同，可作為
+  不變量測試。
+- 冷凝器 Exergy 頁的壓力只接受絕對壓力，冷凍循環頁則可切換錶壓／絕對壓；
+  在失效矩陣中記錄此差異，是否統一另行決定，不在 #7 內修改。
+- 舊版 `hvac_calculations`（compressor／exergy／condenser_heat／throttling）仍有
+  production caller，單位契約已由 `tests/test_legacy_hvac_unit_contract.py` 固定；
+  死碼稽核不得移除它們。
 
 ### 階段 1 — #8 ThermoStatePoint 與基礎設施
 
-- 由既有 `domain/refrigeration/states.py` 的 `CycleState` 推廣，不另建平行模型。
+- 由既有 `domain/refrigeration/states.py` 的 `CycleState` 推廣，不另建平行模型；
+  目前的使用者 `vapor_compression.py`、`condenser_exergy.py` 一併遷移。
 - 欄位：`fluid`、`reference_state`（必填）、P、T、h、s、ρ、Q、`source`（enum）、
   理想氣體旗標；`v`、`phase` 由其他欄位推導。
 - 不同 `reference_state` 的狀態點禁止直接比較或相減。
@@ -71,7 +81,8 @@
 
 ### 階段 4 — #12 批次計算與比較
 
-- 批次計算引擎（以冷凍循環服務的結構化結果為輸入，不解析顯示文字）。
+- 批次計算引擎：只接 domain / application 服務的結構化結果（冷凍循環、冷凝器 Exergy），
+  不解析顯示文字，也不接舊版 `hvac_calculations`。
 - Parameter Sweep / What-if / 敏感度分析。
 - 冷媒比較（同一條件下在「冷媒」維度上 sweep；只比較 COP、壓縮比等與
   reference state 無關的量，或焓差，不比較絕對焓值）。
