@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from ...ui_components.analysis_modules.psy_process_module import PsyProcessModule
 from ..state import WorkspaceState
-from ..theme import section_colors
 from .dedicated_analysis_view import DedicatedAnalysisView
 
 
@@ -26,5 +25,4 @@ class AirProcessView(DedicatedAnalysisView):
             subtitle="氣流混合、顯熱加熱／冷卻、冷卻除濕與送風量估算",
             modules=[module],
             workspace_state=workspace_state,
-            accent=section_colors("空氣處理")[0],
         )

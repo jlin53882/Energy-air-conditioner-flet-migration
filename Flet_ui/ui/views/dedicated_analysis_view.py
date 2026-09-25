@@ -15,7 +15,7 @@ from ..analysis_presentation import presentation_for
 from ..components.analysis_workspace import AnalysisWorkspace
 from ..components.tool_selector import ToolSelector
 from ..state import WorkspaceState
-from ..theme import TOKENS
+from ..structured_result import structured_from_text
 
 
 class DedicatedAnalysisView(ft.Column):
@@ -34,7 +34,6 @@ class DedicatedAnalysisView(ft.Column):
         subtitle: str,
         modules: list[object],
         workspace_state: WorkspaceState | None = None,
-        accent: str = TOKENS.primary,
         tool_label: str = "分析項目",
     ) -> None:
         """組合 tool selector、輸入堆疊與結果面板。
@@ -44,7 +43,6 @@ class DedicatedAnalysisView(ft.Column):
             subtitle: 頁面副標題。
             modules: 此分類使用的既有分析模組實例清單。
             workspace_state: 選用的共用工作區狀態；用於讀取全域輸出單位。
-            accent: 此分類使用的強調色（通常取自導覽分類色）。
             tool_label: 分析項目選單的欄位名稱。
 
         回傳：
@@ -87,7 +85,6 @@ class DedicatedAnalysisView(ft.Column):
             on_calculate=self._handle_calculate,
             show_execute_button=self.adapter.active_definition.show_execute_button,
             show_tool_selector=len(tool_items) > 1,
-            accent=accent,
         )
         self.controls = [self.workspace]
         self._sync_presentation()
@@ -129,8 +126,18 @@ class DedicatedAnalysisView(ft.Column):
         """
         definition = self.adapter.active_definition
         structured = None
-        if self.adapter.result_panel.status == "success" and definition.structured_result:
-            structured = definition.structured_result()
+        if self.adapter.result_panel.status == "success":
+            if definition.structured_result:
+                structured = definition.structured_result()
+            else:
+                # 尚未直接提供結構化結果的模組：由格式化文字重新排版，關鍵數值
+                # 依分析說明表宣告的結果名稱挑選。
+                presentation = presentation_for(definition.key)
+                structured = structured_from_text(
+                    self.adapter.result_text,
+                    key_labels=presentation.key_metrics if presentation else (),
+                    chart_title=presentation.chart_title if presentation else "圖表",
+                )
         self.workspace.show_result(
             self.adapter.result_text, chart=definition.result_chart, structured=structured
         )

@@ -306,7 +306,6 @@ def test_psychrometric_property_modes_use_structured_result_view(shell) -> None:
     tab.perform_calculation(None)
 
     assert tab.result_panel.status == "success"
-    assert view.sections_card.visible is False
     assert view.status_card.visible is False
     kpis = {tile.label_control.value: tile for tile in view.kpi_row.controls}
     assert list(kpis) == ["相對濕度 RH", "露點溫度 Tdp", "焓值 h", "濕度比 W"]

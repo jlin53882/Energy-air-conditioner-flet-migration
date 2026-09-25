@@ -14,7 +14,6 @@ from ..theme import TOKENS, secondary_button_style
 from .kpi_tile import KpiTile
 from .property_table import PropertyTable
 from .result_panel import ResultPanel
-from .result_sections import build_result_section_controls, parse_result_text
 
 
 def result_card(title: str, content: ft.Control, trailing: ft.Control | None = None) -> ft.Container:
@@ -41,17 +40,8 @@ def result_card(title: str, content: ft.Control, trailing: ft.Control | None = N
     )
 
 
-def _kpi_columns(count: int) -> dict[str, int]:
-    """依關鍵數值數量決定每張卡片的欄寬，讓一列剛好排滿。
-
-    參數：
-        count: 關鍵數值數量。
-
-    回傳：
-        ResponsiveRow 欄寬設定。
-    """
-    per_row = max(1, min(count, 4))
-    return {"xs": 6, "md": 12 // per_row}
+# 關鍵數值卡固定為一列四張的寬度，數量較少時靠左排列，不拉寬卡片。
+KPI_COLUMN = {"xs": 6, "md": 3}
 
 
 class AnalysisResultView(ft.Column):
@@ -75,10 +65,6 @@ class AnalysisResultView(ft.Column):
             border_radius=ft.BorderRadius.all(TOKENS.radius_md),
         )
         self.kpi_row = ft.ResponsiveRow(spacing=TOKENS.spacing_md - 4, run_spacing=TOKENS.spacing_md - 4)
-
-        # 尚未提供結構化結果的分析，沿用由文字投影的分組指標卡片。
-        self.result_sections = ft.Column(spacing=TOKENS.spacing_sm + 4)
-        self.sections_card = result_card("分析結果", self.result_sections)
 
         self.property_table = PropertyTable()
         self.table_card = result_card("完整性質", self.property_table)
@@ -153,20 +139,18 @@ class AnalysisResultView(ft.Column):
                 self.status_card,
                 self.kpi_row,
                 self.body_row,
-                self.sections_card,
                 self.process_card,
                 self.actions_row,
                 self.raw_box,
             ],
             spacing=TOKENS.spacing_md,
         )
-        self.show(None, accent=TOKENS.primary)
+        self.show(None)
 
     def show(
         self,
         result_text: str | None,
         *,
-        accent: str,
         chart: ft.Control | None = None,
         structured: StructuredResult | None = None,
     ) -> None:
@@ -174,9 +158,8 @@ class AnalysisResultView(ft.Column):
 
         參數：
             result_text: 模組回傳的原始結果文字；尚未計算時為 None。
-            accent: 文字投影指標卡片使用的強調色。
             chart: 選用的結果圖表；成功時顯示並要求重繪。
-            structured: 選用的結構化結果；未提供時由文字投影分組指標。
+            structured: 成功時要呈現的結構化結果。
 
         回傳：
             無。
@@ -187,14 +170,7 @@ class AnalysisResultView(ft.Column):
         # 成功時由數值本身說明結果，狀態列只在尚未計算或失敗時出現。
         self.status_card.visible = not succeeded
 
-        use_structured = succeeded and structured is not None
-        self._show_structured(structured if use_structured else None, chart if succeeded else None)
-        self.sections_card.visible = succeeded and not use_structured
-        self.result_sections.controls = (
-            build_result_section_controls(parse_result_text(result_text), accent=accent)
-            if self.sections_card.visible
-            else []
-        )
+        self._show_structured(structured if succeeded else None, chart if succeeded else None)
 
         self.details_button.disabled = not has_text
         self.copy_button.disabled = not succeeded
@@ -214,10 +190,9 @@ class AnalysisResultView(ft.Column):
             無。
         """
         metrics = list(structured.key_metrics) if structured else []
-        columns = _kpi_columns(len(metrics))
         self.kpi_row.controls = []
         for metric in metrics:
-            tile = KpiTile(metric.label, col=columns)
+            tile = KpiTile(metric.label, col=dict(KPI_COLUMN))
             tile.set_value(metric.value, metric.unit)
             self.kpi_row.controls.append(tile)
         self.kpi_row.visible = bool(metrics)

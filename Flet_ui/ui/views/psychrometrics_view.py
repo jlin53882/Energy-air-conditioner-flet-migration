@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from ...ui_components.analysis_modules.psy_module import PsyModule
 from ..state import WorkspaceState
-from ..theme import section_colors
 from .dedicated_analysis_view import DedicatedAnalysisView
 
 
@@ -33,7 +32,6 @@ class PsychrometricsView(DedicatedAnalysisView):
             subtitle="依乾濕球或乾球與相對濕度計算濕空氣性質",
             modules=[module],
             workspace_state=workspace_state,
-            accent=section_colors("空氣處理")[0],
             tool_label="已知參數組合",
         )
         # 初始化時同步一次目前選取模式，維持既有 UI 顯示狀態。

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from ...ui_components.analysis_modules.hvac_compressor_module import CompressorModule
 from ..state import WorkspaceState
-from ..theme import section_colors
 from .dedicated_analysis_view import DedicatedAnalysisView
 
 
@@ -26,5 +25,4 @@ class CompressorView(DedicatedAnalysisView):
             subtitle="分析壓縮機壓力、功率與效率相關計算",
             modules=[module],
             workspace_state=workspace_state,
-            accent=section_colors("冷凍系統")[0],
         )

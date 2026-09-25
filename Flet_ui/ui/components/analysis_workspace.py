@@ -46,7 +46,6 @@ class AnalysisWorkspace(ft.Column):
         on_calculate: Callable[[ft.ControlEvent | None], None],
         show_execute_button: bool = True,
         show_tool_selector: bool = True,
-        accent: str = TOKENS.primary,
     ) -> None:
         """組合工作區版面。
 
@@ -60,13 +59,11 @@ class AnalysisWorkspace(ft.Column):
             show_execute_button: 是否顯示共用的「計算」按鈕；部分分析使用
                 專屬按鈕時應設為 False，避免重複的執行按鈕。
             show_tool_selector: 是否顯示工具選單；只有單一工具時可隱藏。
-            accent: 文字投影指標卡片使用的強調色。
 
         回傳：
             無。
         """
         super().__init__(spacing=TOKENS.spacing_md, expand=True, scroll=ft.ScrollMode.AUTO)
-        self.accent = accent
         self.header = ft.Column(
             [
                 ft.Text(title, size=TOKENS.title, weight=ft.FontWeight.W_700),
@@ -178,7 +175,7 @@ class AnalysisWorkspace(ft.Column):
         回傳：
             無。
         """
-        self.result_view.show(result_text, accent=self.accent, chart=chart, structured=structured)
+        self.result_view.show(result_text, chart=chart, structured=structured)
 
     def set_action_bar_visible(self, visible: bool) -> None:
         """切換共用計算按鈕的顯示，避免與模組內建按鈕重複。

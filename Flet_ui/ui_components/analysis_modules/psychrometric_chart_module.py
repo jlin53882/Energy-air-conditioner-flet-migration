@@ -35,7 +35,8 @@ class PsychrometricChartModule(BaseAnalysisModule):
         super().__init__(unit_converter, page, air_process_service=air_process_service)
         self.air = air_process_service
         self.chart_panel = FigurePanel(height=560, placeholder="按下「執行分析」繪製濕空氣線圖")
-        self.connect_points_cb = ft.Checkbox(label="依序連接狀態點（表示處理過程）", value=True,
+        self.connect_points_cb = ft.Checkbox(label="依序連接狀態點", value=True,
+                                             tooltip="以線段依序連接各點，表示處理過程",
                                              active_color=TOKENS.primary)
         altitude_row = self.create_input_row("pc_alt", "海拔高度（決定大氣壓力）", "0", "L", "m")["ui_row"]
         tdb_row = self.create_input_row("pc_tdb", "乾球溫度（逗號分隔多點）", "35, 26, 13", "T", "°C")["ui_row"]

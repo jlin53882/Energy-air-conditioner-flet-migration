@@ -1,6 +1,6 @@
 """分析模組共用的結果格式化：把 canonical SI 數值轉為「名稱: 數值 單位」文字行。
 
-輸出格式與 `ui.components.result_sections.parse_result_text` 對應，
+輸出格式與 `ui.structured_result.parse_result_text` 對應，
 `--- 標題 ---` 會成為結果分組。
 """
 

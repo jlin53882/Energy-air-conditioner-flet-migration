@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from ...ui_components.analysis_modules.refrigeration_cycle_module import RefrigerationCycleModule
 from ..state import WorkspaceState
-from ..theme import section_colors
 from .dedicated_analysis_view import DedicatedAnalysisView
 
 
@@ -28,5 +27,4 @@ class RefrigerationCycleView(DedicatedAnalysisView):
             subtitle="蒸氣壓縮循環 COP 與 P-h 圖，以及現場過熱度／過冷度判讀",
             modules=[module],
             workspace_state=workspace_state,
-            accent=section_colors("冷凍系統")[0],
         )

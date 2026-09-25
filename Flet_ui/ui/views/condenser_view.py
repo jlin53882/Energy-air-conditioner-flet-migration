@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from ...ui_components.analysis_modules.hvac_condenser_module import CondenserModule
 from ..state import WorkspaceState
-from ..theme import section_colors
 from .dedicated_analysis_view import DedicatedAnalysisView
 
 
@@ -26,5 +25,4 @@ class CondenserView(DedicatedAnalysisView):
             subtitle="分析冷凝器熱交換相關計算",
             modules=[module],
             workspace_state=workspace_state,
-            accent=section_colors("冷凍系統")[0],
         )

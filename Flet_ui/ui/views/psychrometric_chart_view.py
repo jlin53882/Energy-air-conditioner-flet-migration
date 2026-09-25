@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from ...ui_components.analysis_modules.psychrometric_chart_module import PsychrometricChartModule
 from ..state import WorkspaceState
-from ..theme import section_colors
 from .dedicated_analysis_view import DedicatedAnalysisView
 
 
@@ -28,5 +27,4 @@ class PsychrometricChartView(DedicatedAnalysisView):
             subtitle="依海拔繪製濕空氣線圖並標示多個狀態點",
             modules=[module],
             workspace_state=workspace_state,
-            accent=section_colors("圖表")[0],
         )

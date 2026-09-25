@@ -36,7 +36,8 @@
 - `ResultPanel`：以狀態橫幅明確呈現空白、載入中、成功、警告與錯誤狀態；指標卡只呈現計算轉接器實際提供的數值，中繼資料以標籤呈現。指標鍵值維持英文識別字，中文標籤與圖示只屬於呈現層。
 - `MetricTile`：單一結果的標籤、主數值與單位；只拆分既有格式化文字的開頭數字與單位，不重新計算。
 - `StatusBadge`：以圖示、文字與色彩同時表達狀態的膠囊標籤。
-- `result_sections`：將分析模組回傳的「名稱: 數值 單位」文字與 `--- 分組 ---` 標題投影為分組指標卡片；無法配對的文字保留為說明，不補上模組未提供的數值。
+- `structured_result`（`Flet_ui/ui/structured_result.py`，不依賴 Flet）：`StructuredResult` 資料類別，以及把分析模組回傳的「名稱: 數值 單位」文字與 `--- 分組 ---` 標題轉成結構化結果的 `structured_from_text()`；只重新排版、不改寫數值，無法配對的文字保留為說明列。
+- `KpiTile`、`PropertyTable`、`AnalysisResultView`：計算頁結果區的關鍵數值卡、分組性質表與整體結果版面。
 - `Sidebar`：帶有分組、選取指示、精簡圖示列與工具提示的路由控制項。
 
 `Flet_ui/ui/analysis_presentation.py` 以穩定 `analysis_id` 為鍵，提供分析項目的短標籤、說明與公式提示。此表只屬於呈現層，不得放入計算；公式文字必須與實際服務行為一致，實作與命名不一致的項目只保留文字說明。新增分析時應同步新增說明，測試會檢查註冊表與說明表的一致性。
@@ -51,7 +52,7 @@
 - 性質查詢工作區將既有的模式、流體、參考狀態及性質控制項組合成全寬計算設定卡，下方左欄為已知條件與選用廣延性質、右欄為結果；窄視窗時依序堆疊。水模式的理想氣體選項必須實際出現在計算設定卡中。常用組合以膠囊按鈕呈現，並標示與前兩列性質相符的組合。
 - 分析頁共用 `AnalysisWorkspace` 計算頁版型：左欄「輸入條件」卡（`ToolSelector` 分析項目下拉選單，只有一項分析時隱藏；分析名稱、說明與公式提示；模組輸入；全寬「計算」按鈕），右欄為 `AnalysisResultView` 結果區（關鍵數值列、圖表＋完整性質表、可展開的「顯示計算過程」、原始文字與複製）。欄寬固定為 `INPUT_COLUMN`／`RESULT_COLUMN`，窄視窗時上下堆疊。尚未計算或計算失敗時，結果區只顯示狀態卡；成功時狀態卡隱藏，由數值本身呈現結果。頁面標題與說明由 AppShell 頁首呈現，`AnalysisWorkspace.header` 預設隱藏。`AnalysisModuleAdapter` 保存模組回傳的原始 `result_text`；以「計算錯誤」或「計算失敗」開頭的文字以錯誤狀態呈現，不投影指標。
 - 分析定義可選擇提供 `result_chart`（通常為 `FigurePanel`），由 `definitions_from_module()` 帶入 `AnalysisDefinition.result_chart`；成功計算後顯示在結果區的圖表卡，寬版時與完整性質表並排，重設、切換工具或錯誤時隱藏，且不得沿用前一個分析的圖表。`FigurePanel` 持有長期存在的 Matplotlib figure，繪圖程式必須清除並重畫同一個 figure，再呼叫 `refresh()`。
-- 分析定義可提供 `structured_result`：無參數函式，回傳最近一次成功計算的 `StructuredResult`（`Flet_ui/ui/structured_result.py`：`key_metrics` 關鍵數值、`groups` 完整性質表、`process_groups` 計算過程、圖表標題與圖例）。資料類別只存放已格式化的文字，不依賴 Flet；結果區只負責排版，不重新計算或換算。未提供時結果區暫以文字投影的分組指標呈現。濕空氣性質的兩種模式由 `PsychrometricResultBuilder` 產生：四個關鍵數值（RH、露點、焓、濕度比）、帶濕球／露點輔助線的焓濕圖、分成「輸入值／計算結果」的完整性質表，以及飽和壓力、飽和濕度比等中間值；海拔欄位下方即時顯示推算的大氣壓力。結構化結果與文字結果必須來自同一份服務回傳的狀態。
+- 分析定義可提供 `structured_result`：無參數函式，回傳最近一次成功計算的 `StructuredResult`（`Flet_ui/ui/structured_result.py`：`key_metrics` 關鍵數值、`groups` 完整性質表、`process_groups` 計算過程、圖表標題與圖例）。資料類別只存放已格式化的文字，不依賴 Flet；結果區只負責排版，不重新計算或換算。未提供時由 `structured_from_text()` 轉換模組的格式化文字：關鍵數值依 `analysis_presentation` 中該分析宣告的 `key_metrics`（結果名稱，依序挑選、找不到的略過；未宣告時取前四個）挑選，完整性質表列出全部結果（所有結果都已是關鍵數值時省略），圖表卡標題取自 `chart_title`。新增分析時應在說明表宣告 `key_metrics`，測試會檢查宣告的名稱確實出現在預設輸入的計算結果中。濕空氣性質的兩種模式由 `PsychrometricResultBuilder` 產生：四個關鍵數值（RH、露點、焓、濕度比）、帶濕球／露點輔助線的焓濕圖、分成「輸入值／計算結果」的完整性質表，以及飽和壓力、飽和濕度比等中間值；海拔欄位下方即時顯示推算的大氣壓力。結構化結果與文字結果必須來自同一份服務回傳的狀態。
 - 分析模組的數值輸入列（`BaseAnalysisModule.create_input_row`）為「欄名在上、數值與單位合成同一外框」：單位選單位於欄位尾端，仍可逐欄切換；聚焦時外框以主要色加粗標示。
 - 空氣處理程序路由（`AirProcessView` + `PsyProcessModule`）：氣流混合、顯熱加熱／冷卻、冷卻除濕盤管與送風量估算，計算委派給 `AirProcessService`，過程標示在濕空氣線圖上。濕空氣性質路由（`PsychrometricsView`）維持原本的兩種模式。
 - 冷凍循環路由（`RefrigerationCycleView` + `RefrigerationCycleModule`）提供蒸氣壓縮循環（P-h 圖沿用 `generate_thermo_diagram`，與求解使用相同的 Auto reference-state policy）及過熱度／過冷度判讀（錶壓力需加上輸入的大氣壓力）。

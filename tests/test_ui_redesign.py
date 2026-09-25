@@ -10,10 +10,11 @@ import flet as ft
 from Flet_ui.flet_app import main as flet_main
 from Flet_ui.ui.analysis_presentation import ANALYSIS_PRESENTATION
 from Flet_ui.ui.components.metric_tile import split_value_and_unit
-from Flet_ui.ui.components.result_sections import parse_result_text
+from Flet_ui.ui.structured_result import parse_result_text, structured_from_text
 from Flet_ui.ui.components.sidebar import Sidebar
 from Flet_ui.ui.components.status_badge import StatusBadge
 from Flet_ui.ui.navigation import ROUTES
+from Flet_ui.ui.structured_result import PropertyRow
 from Flet_ui.ui.theme import TOKENS
 from Flet_ui.ui.views.home_view import HomeView
 
@@ -279,16 +280,20 @@ def test_analysis_result_renders_metric_tiles_and_error_state() -> None:
     view.perform_calculation(None)
 
     assert view.result_panel.status == "success"
-    assert result_view.result_sections.controls
+    (tile,) = result_view.kpi_row.controls
+    assert tile.label_control.value == "壓縮機功 (W_in)"
+    assert (tile.value_control.value, tile.unit_control.value) == ("5.0000", "kW")
+    # 唯一的結果已是關鍵數值，不再重複列出性質表。
+    assert result_view.table_column.visible is False
     assert result_view.copy_button.disabled is False
-    assert "kW" in view.adapter.result_text
 
     view.adapter._by_key["compressor.work"] = replace(
         view.adapter.active_definition, calculate=lambda _use_imperial: "計算錯誤: 無效流體"
     )
     view.perform_calculation(None)
     assert view.result_panel.status == "error"
-    assert result_view.result_sections.controls == []
+    assert result_view.kpi_row.visible is False
+    assert result_view.body_row.visible is False
     assert result_view.copy_button.disabled is True
 
     view._handle_tool_change("compressor.compression_ratio")
@@ -308,13 +313,13 @@ def test_analysis_invalid_input_shows_error_without_metrics() -> None:
     entries["cr_pe"]["val"].value = "0.3"
     entries["cr_pc"]["val"].value = "1.2"
     view.perform_calculation(None)
-    assert view.workspace.result_view.result_sections.controls
+    assert view.workspace.result_view.kpi_row.controls
 
     entries["cr_pe"]["val"].value = "abc"
     view.perform_calculation(None)
 
     assert view.result_panel.status == "error"
-    assert view.workspace.result_view.result_sections.controls == []
+    assert view.workspace.result_view.kpi_row.controls == []
     assert view.adapter.result_text is None
 
 
@@ -353,3 +358,61 @@ def test_status_badge_uses_icon_text_and_color() -> None:
         pass
     else:  # pragma: no cover - 防止未知狀態被默默接受
         raise AssertionError("unknown status should raise")
+
+
+def test_structured_from_text_promotes_declared_key_metrics() -> None:
+    """文字轉結構化結果時，依宣告的名稱挑選關鍵數值，性質表保留全部結果。
+
+回傳：
+    無。"""
+    text = (
+        "--- 性能 ---\n"
+        "冷房 COP: 3.87\n"
+        "壓縮功 w: 63.82 kJ/kg\n"
+        "--- 系統 ---\n"
+        "壓縮機功率: 2.582 kW\n"
+    )
+
+    result = structured_from_text(text, key_labels=("壓縮機功率", "不存在的名稱", "冷房 COP"),
+                                  chart_title="P-h 圖")
+
+    assert [(m.label, m.value, m.unit) for m in result.key_metrics] == [
+        ("壓縮機功率", "2.582", "kW"),
+        ("冷房 COP", "3.87", ""),
+    ]
+    assert [group.title for group in result.groups] == ["性能", "系統"]
+    assert result.groups[0].rows[1] == PropertyRow("壓縮功 w", "63.82", "kJ/kg")
+    assert result.chart_title == "P-h 圖"
+
+
+def test_structured_from_text_defaults_and_single_result() -> None:
+    """未宣告時取前四個結果；只有一個結果時不重複列出性質表。
+
+回傳：
+    無。"""
+    many = "\n".join(f"項目{i}: {i}.0 kW" for i in range(6))
+    assert [m.label for m in structured_from_text(many).key_metrics] == ["項目0", "項目1", "項目2", "項目3"]
+    assert len(structured_from_text(many).groups[0].rows) == 6
+
+    single = structured_from_text("壓縮比 (CR): 4.0000")
+    assert [m.value for m in single.key_metrics] == ["4.0000"]
+    assert single.groups == ()
+
+
+def test_every_analysis_with_declared_key_metrics_finds_them() -> None:
+    """每個宣告關鍵數值的分析，以預設輸入計算後至少能找到一個宣告的名稱。
+
+回傳：
+    無。"""
+    shell = _build_shell()
+    for view in _analysis_views(shell).values():
+        for definition in view.adapter.definitions:
+            presentation = ANALYSIS_PRESENTATION[definition.key]
+            if not presentation.key_metrics or definition.structured_result:
+                continue
+            if view.active_key != definition.key:
+                view._handle_tool_change(definition.key)
+            view.perform_calculation(None)
+            assert view.result_panel.status == "success", (definition.key, view.result_panel.message)
+            labels = [tile.label_control.value for tile in view.workspace.result_view.kpi_row.controls]
+            assert labels and set(labels) <= set(presentation.key_metrics), (definition.key, labels)

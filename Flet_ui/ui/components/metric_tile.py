@@ -2,26 +2,10 @@
 
 import flet as ft
 
+from ..structured_result import split_value_and_unit
 from ..theme import TOKENS
 
-
-def split_value_and_unit(text: str) -> tuple[str, str]:
-    """將「數值 單位」格式的結果文字拆成數值與單位，供排版使用。
-
-只拆分第一段可解析為數字的內容，不改寫或重新計算數值；無法辨識時整段視為數值。
-
-參數：
-    text: 計算轉接器提供的格式化結果文字。
-
-回傳：
-    由數值文字與單位文字組成的二元組。"""
-    stripped = text.strip()
-    head, _, tail = stripped.partition(" ")
-    try:
-        float(head)
-    except ValueError:
-        return stripped, ""
-    return head, tail.strip()
+__all__ = ["MetricTile", "split_value_and_unit"]
 
 
 class MetricTile(ft.Container):
