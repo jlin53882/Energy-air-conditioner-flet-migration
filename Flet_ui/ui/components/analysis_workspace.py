@@ -241,16 +241,17 @@ class AnalysisWorkspace(ft.Column):
         self.formula_text.value = formula
         self.formula_box.visible = bool(formula)
 
-    def show_result(self, result_text: str | None) -> None:
+    def show_result(self, result_text: str | None, *, chart: ft.Control | None = None) -> None:
         """以目前 ResultPanel 狀態重新呈現結果區。
 
         參數：
             result_text: 模組回傳的原始結果文字；尚未計算時為 None。
+            chart: 選用的結果圖表。
 
         回傳：
             無。
         """
-        self.result_view.show(result_text, accent=self.accent)
+        self.result_view.show(result_text, accent=self.accent, chart=chart)
 
     def set_action_bar_visible(self, visible: bool) -> None:
         """切換共用執行按鈕的顯示，避免與模組內建按鈕重複。

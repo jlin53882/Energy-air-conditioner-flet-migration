@@ -45,6 +45,10 @@ ROUTES = (
         description="依海拔與乾濕球溫度或相對濕度計算濕空氣完整性質。",
     ),
     WorkspaceRoute(
+        "air_processes", "空氣處理程序", "空氣處理", "HVAC_OUTLINED",
+        description="氣流混合、顯熱加熱／冷卻、冷卻除濕與送風量，並標示在濕空氣線圖上。",
+    ),
+    WorkspaceRoute(
         "ph_chart", "P-h 圖", "圖表", "SHOW_CHART_OUTLINED",
         description="繪製壓力－焓圖並標示狀態點或壓縮過程。",
     ),

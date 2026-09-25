@@ -1,6 +1,8 @@
 # ui_components/analysis_modules/base_analysis_module.py
 # (新介面 - 支援功能群組)
 
+from math import isfinite
+
 import flet as ft
 from ..unit.UnitConverter import UnitConverter
 from ...ui.theme import TOKENS, style_dropdown, style_text_field
@@ -132,6 +134,55 @@ class BaseAnalysisModule:
             "unit_label_control": unit_label_control,
         }
         return self.all_entries[key] # 返回字典
+
+    def read_si(self, key: str) -> float:
+        """讀取一個輸入列並換算為 canonical SI；無效數值以欄名提示錯誤。
+
+參數：
+    key: create_input_row 使用的識別鍵。
+
+回傳：
+    SI 數值。
+
+引發：
+    ValueError：欄位空白或不是有限數字時。"""
+        entry = self.all_entries[key]
+        label = entry["label_control"].value
+        raw_value = (entry["val"].value or "").strip()
+        try:
+            value = float(raw_value)
+        except ValueError:
+            raise ValueError(f"「{label}」請輸入有效數值。") from None
+        if not isfinite(value):
+            raise ValueError(f"「{label}」必須是有限數字。")
+        return self.unit_converter.convert_to_si(entry["prop_code"], value, entry["unit"].value)
+
+    def bind_independent_unit_sync(self, keys: list[str]) -> None:
+        """讓每個輸入列的單位選單獨立換算自己的數值。
+
+參數：
+    keys: 要綁定的輸入列識別鍵。
+
+回傳：
+    無。"""
+        for key in keys:
+            entry = self.all_entries[key]
+            entry["unit"].on_select = self._create_unit_sync_handler(entry["prop_code"], [key])
+
+    @staticmethod
+    def section_label(text: str) -> ft.Control:
+        """建立表單中的小節標題。
+
+參數：
+    text: 小節名稱。
+
+回傳：
+    小節標題控制項。"""
+        return ft.Container(
+            content=ft.Text(text, size=TOKENS.caption, weight=ft.FontWeight.W_600,
+                            color=TOKENS.text_muted),
+            padding=ft.Padding.only(top=TOKENS.spacing_xs),
+        )
 
     def _create_unit_sync_handler(self, prop_code, sync_group):
         """建立單位同步處理器

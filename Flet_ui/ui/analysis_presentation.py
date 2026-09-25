@@ -92,6 +92,26 @@ ANALYSIS_PRESENTATION: dict[str, AnalysisPresentation] = {
         None,
         "乾球 + 相對濕度",
     ),
+    "psychrometrics.mixing": AnalysisPresentation(
+        "兩股空氣（例如外氣與回風）在同一大氣壓力下絕熱混合；各股風量以自身比容換算為乾空氣質量。",
+        "W_m = Σ m_i · W_i / Σ m_i，h_m = Σ m_i · h_i / Σ m_i",
+        "氣流混合",
+    ),
+    "psychrometrics.sensible": AnalysisPresentation(
+        "濕度比不變的加熱或冷卻；出口低於入口露點時會凝結，請改用冷卻除濕盤管。",
+        "Q = m_da · (h2 − h1)",
+        "顯熱加熱／冷卻",
+    ),
+    "psychrometrics.cooling_coil": AnalysisPresentation(
+        "冷卻除濕盤管的全熱、顯熱、潛熱、顯熱比與冷凝水量（忽略冷凝水焓）。",
+        "Q_total = m_da · (h1 − h2)，Q_s = m_da · (h_x − h2)，h_x = h(T1, W2)",
+        "冷卻除濕",
+    ),
+    "psychrometrics.supply_airflow": AnalysisPresentation(
+        "依室內顯熱負荷與送風溫度估算送風量（送風與室內濕度比相同）。",
+        "m_da = Q_s / (h_room − h_supply)，V = m_da · v_supply",
+        "送風量估算",
+    ),
 }
 
 

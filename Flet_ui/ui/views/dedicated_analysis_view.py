@@ -118,7 +118,17 @@ class DedicatedAnalysisView(ft.Column):
             presentation.summary if presentation else "",
             presentation.formula if presentation and presentation.formula else "",
         )
-        self.workspace.show_result(self.adapter.result_text)
+        self._show_result()
+
+    def _show_result(self) -> None:
+        """以 adapter 目前的結果與選取分析的結果圖表重繪結果區。
+
+        回傳：
+            無。
+        """
+        self.workspace.show_result(
+            self.adapter.result_text, chart=self.adapter.active_definition.result_chart
+        )
 
     @property
     def active_key(self) -> str:
@@ -182,7 +192,7 @@ class DedicatedAnalysisView(ft.Column):
             無。
         """
         self.adapter.calculate()
-        self.workspace.show_result(self.adapter.result_text)
+        self._show_result()
         self._refresh()
 
     def perform_calculation(self, event: ft.ControlEvent | None) -> None:
@@ -206,7 +216,7 @@ class DedicatedAnalysisView(ft.Column):
             無。
         """
         self.adapter.set_output_unit_system(unit_system)
-        self.workspace.show_result(self.adapter.result_text)
+        self._show_result()
         self._refresh()
 
     def _refresh(self) -> None:

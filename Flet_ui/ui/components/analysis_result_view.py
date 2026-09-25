@@ -27,6 +27,8 @@ class AnalysisResultView(ft.Column):
         """
         self.result_panel = result_panel
         self.result_sections = ft.Column(spacing=TOKENS.spacing_sm + 4)
+        # 分析定義提供的結果圖表（例如 FigurePanel），只在成功計算後顯示。
+        self.chart_host = ft.Container(visible=False)
         self.raw_text = ft.Text("", font_family="Courier New", selectable=True,
                                 color=TOKENS.text_primary, size=TOKENS.caption + 1)
         self.raw_box = ft.Container(
@@ -48,16 +50,23 @@ class AnalysisResultView(ft.Column):
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
         super().__init__(
-            [self.result_panel, self.result_sections, self.actions_row, self.raw_box],
+            [self.result_panel, self.result_sections, self.chart_host, self.actions_row, self.raw_box],
             spacing=TOKENS.spacing_sm + 4,
         )
 
-    def show(self, result_text: str | None, *, accent: str) -> None:
-        """依目前狀態呈現結果；只有成功狀態才會投影指標。
+    def show(
+        self,
+        result_text: str | None,
+        *,
+        accent: str,
+        chart: ft.Control | None = None,
+    ) -> None:
+        """依目前狀態呈現結果；只有成功狀態才會投影指標與圖表。
 
         參數：
             result_text: 模組回傳的原始結果文字；尚未計算時為 None。
             accent: 指標卡片使用的強調色。
+            chart: 選用的結果圖表；成功時顯示並要求重繪。
 
         回傳：
             無。
@@ -70,11 +79,27 @@ class AnalysisResultView(ft.Column):
             if succeeded
             else []
         )
+        self._show_chart(chart if succeeded else None)
         self.details_button.disabled = not has_text
         self.copy_button.disabled = not succeeded
         if not has_text:
             self.raw_box.visible = False
         self.details_button.text = "隱藏原始文字" if self.raw_box.visible else "顯示原始文字"
+
+    def _show_chart(self, chart: ft.Control | None) -> None:
+        """放入或隱藏結果圖表；圖表提供 refresh() 時要求重繪。
+
+        參數：
+            chart: 要顯示的圖表；None 表示隱藏。
+
+        回傳：
+            無。
+        """
+        self.chart_host.content = chart
+        self.chart_host.visible = chart is not None
+        refresh = getattr(chart, "refresh", None)
+        if callable(refresh):
+            refresh()
 
     def _toggle_raw(self, _event: ft.ControlEvent | None) -> None:
         """顯示或隱藏模組回傳的原始結果文字。

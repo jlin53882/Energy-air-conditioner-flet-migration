@@ -35,6 +35,8 @@ class AnalysisDefinition:
             回傳的 ``calc_func`` 就已是這個簽章，任何模組專屬參數（例如
             ``PsyModule`` 的 ``mode_key``）都由該模組自己預先綁定完成。
         show_execute_button: 是否顯示共用的「執行分析」按鈕。
+        result_chart: 選用的結果圖表控制項（例如 ``FigurePanel``）；成功
+            計算後顯示於結果卡片，重設或失敗時隱藏。
     """
 
     key: str
@@ -42,6 +44,7 @@ class AnalysisDefinition:
     input_view: ft.Control
     calculate: Callable[[bool], str]
     show_execute_button: bool = True
+    result_chart: ft.Control | None = None
 
 
 def definitions_from_module(module: object) -> list[AnalysisDefinition]:
@@ -82,6 +85,7 @@ def definitions_from_module(module: object) -> list[AnalysisDefinition]:
                 input_view=raw["ui"],
                 calculate=raw_calc_func,
                 show_execute_button=raw.get("show_execute_button", True),
+                result_chart=raw.get("result_chart"),
             )
         )
     return definitions

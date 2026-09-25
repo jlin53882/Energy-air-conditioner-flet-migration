@@ -17,11 +17,13 @@ from .ui.views.compressor_view import CompressorView
 from .ui.views.evaporator_view import EvaporatorView
 from .ui.views.condenser_view import CondenserView
 from .ui.views.psychrometrics_view import PsychrometricsView
+from .ui.views.air_process_view import AirProcessView
 from .ui.views.thermo_diagram_view import ThermoDiagramView
 from .ui_components.analysis_modules.hvac_compressor_module import CompressorModule
 from .ui_components.analysis_modules.hvac_condenser_module import CondenserModule
 from .ui_components.analysis_modules.hvac_evaporator_module import EvaporatorModule
 from .ui_components.analysis_modules.psy_module import PsyModule
+from .ui_components.analysis_modules.psy_process_module import PsyProcessModule
 from .ui_components.analysis_modules.thermo_diagram_module import ThermoDiagramModule
 from .ui_components.property_tab import PropertyTab
 from .ui_components.unit.HVACAnalyzer import HVACAnalyzer
@@ -29,6 +31,7 @@ from .ui_components.unit.PropertyFormatter import PropertyFormatter
 from .ui_components.unit.PsychrometricCalculator import PsychrometricCalculator
 from .ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
 from .ui_components.unit.UnitConverter import UnitConverter
+from application.air_processes import AirProcessService
 from application.property_queries import PropertyQueryService
 
 
@@ -76,12 +79,18 @@ def main(page: ft.Page) -> None:
         unit_converter=unit_converter, page=page, analyzer=hvac_analyzer, state_calculator=state_calculator
     )
     psy_module = PsyModule(unit_converter=unit_converter, page=page, psy_calculator=psy_calculator)
+    air_process_module = PsyProcessModule(
+        unit_converter=unit_converter,
+        page=page,
+        air_process_service=AirProcessService(psy_calculator.service),
+    )
     diagram_module = ThermoDiagramModule(unit_converter, page, hvac_analyzer, state_calculator)
 
     compressor_view = CompressorView(compressor_module, workspace_state=workspace_state)
     evaporator_view = EvaporatorView(evaporator_module, workspace_state=workspace_state)
     condenser_view = CondenserView(condenser_module, workspace_state=workspace_state)
     psychrometrics_view = PsychrometricsView(psy_module, workspace_state=workspace_state)
+    air_process_view = AirProcessView(air_process_module, workspace_state=workspace_state)
     diagram_view = ThermoDiagramView(diagram_module)
 
     analysis_views = {
@@ -89,6 +98,7 @@ def main(page: ft.Page) -> None:
         "evaporator": evaporator_view,
         "condenser": condenser_view,
         "psychrometrics": psychrometrics_view,
+        "air_processes": air_process_view,
     }
     # 首頁統計只使用各 dedicated view 實際註冊的分析定義數量。
     analysis_counts = {key: len(view.adapter.definitions) for key, view in analysis_views.items()}
@@ -105,6 +115,7 @@ def main(page: ft.Page) -> None:
         "evaporator": evaporator_view,
         "condenser": condenser_view,
         "psychrometrics": psychrometrics_view,
+        "air_processes": air_process_view,
         "ph_chart": diagram_view,
         "ts_chart": diagram_view,
     }
