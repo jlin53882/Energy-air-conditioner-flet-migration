@@ -39,13 +39,13 @@ channel adapters / entrypoints
 
 負責請求模型與 `PropertyQueryService`、`AirProcessService`（空氣處理過程）、`RefrigerationService`（冷凍循環、飽和性質、過熱度判讀與其 reference-state policy）等協調工作。它驗證請求形狀並協調領域服務。不負責呈現控制項或訊息。
 
-`application/settings.py` 定義工作區基礎設定 `WorkspaceSettings`（預設冷媒、預設 Reference State、單位系統、大氣壓力／海拔、錶壓／絕對壓預設）與 `SettingsService`。保存透過 `DocumentStore` protocol，由組合根注入具體實作；application 不直接存取檔案系統。已保存的設定無效或版本不符時明確失敗，不以預設值覆蓋使用者的檔案。
+`application/settings.py` 定義工作區基礎設定 `WorkspaceSettings`（預設冷媒、預設 Reference State、單位系統、大氣壓力／海拔、錶壓／絕對壓預設）與 `SettingsService`。保存透過 `DocumentStore` protocol，由組合根注入具體實作；application 不直接存取檔案系統。已保存的設定無效或版本不符時明確失敗，不以預設值覆蓋使用者的檔案。`application/state_library.py` 的 `StateLibraryService` 同樣透過 `DocumentStore` 保存使用者的狀態點（契約見 `docs/domain-contracts.md` §11）。
 
 ### `infrastructure/`
 
 負責不屬於領域契約的具體整合。被排除的舊版濕空氣實作會在此透過 `LegacyPsychrometricModelAdapter` 存取。
 
-`infrastructure/storage/JsonDocumentStore` 是 `DocumentStore` 的 JSON 檔實作：每份文件存成 `<name>.json`，名稱只允許小寫英數、底線與連字號；寫入先寫暫存檔再原子替換；讀寫都只接受標準 JSON，拒絕 NaN／Infinity，錯誤一律以 `ValueError` 回報。`domain/` 與 `application/` 不得匯入 `infrastructure/`（由 `tests/test_settings_storage.py` 檢查）。
+`infrastructure/storage/JsonDocumentStore` 是 `DocumentStore` 的 JSON 檔實作：每份文件存成 `<name>.json`，名稱只允許小寫英數、底線與連字號；寫入先寫暫存檔再原子替換；讀寫都只接受標準 JSON，拒絕 NaN／Infinity，錯誤一律以 `ValueError` 回報。`infrastructure/storage/workspace.workspace_directory()` 回傳使用者工作區資料夾：預設為家目錄下的 `.hvac_workspace`，可由環境變數 `HVAC_WORKSPACE_DIR` 改用其他資料夾（測試由 `tests/conftest.py` 指向暫存資料夾，不寫入真正的家目錄）。`domain/` 與 `application/` 不得匯入 `infrastructure/`（由 `tests/test_settings_storage.py` 檢查）。
 
 ### `Flet_ui/`
 

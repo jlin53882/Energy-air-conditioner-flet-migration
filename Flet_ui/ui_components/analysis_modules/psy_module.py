@@ -1,6 +1,7 @@
 # ui_components/analysis_modules/psy_module.py
 
 import flet as ft
+from domain.state_points import AirStatePoint, StateSource
 from .base_analysis_module import BaseAnalysisModule
 from ..unit.PsychrometricCalculator import PsychrometricCalculator
 from ..unit.UnitConverter import UnitConverter
@@ -28,6 +29,7 @@ class PsyModule(BaseAnalysisModule):
         self._setup_unit_sync()
         self.result_builder = PsychrometricResultBuilder(unit_converter, self.psy_calculator.service)
         self.last_structured_result = None
+        self.last_air_state: AirStatePoint | None = None
         # 海拔輸入即時換算大氣壓力，讓使用者在計算前就看到推導值。
         self.pressure_hint = ft.Text("", size=TOKENS.caption, color=TOKENS.text_muted,
                                      font_family=TOKENS.mono_font)
@@ -79,6 +81,7 @@ class PsyModule(BaseAnalysisModule):
                 "analysis_id": self.MODE_TDB_TWB,
                 "result_chart": self.result_builder.chart_panel,
                 "structured_result": lambda: self.last_structured_result,
+                "state_points": lambda: (self.last_air_state,) if self.last_air_state else (),
                 "ui": self.ui_container,
                 "calc_func": self._calculate_tdb_twb,
             },
@@ -86,6 +89,7 @@ class PsyModule(BaseAnalysisModule):
                 "analysis_id": self.MODE_TDB_RH,
                 "result_chart": self.result_builder.chart_panel,
                 "structured_result": lambda: self.last_structured_result,
+                "state_points": lambda: (self.last_air_state,) if self.last_air_state else (),
                 "ui": self.ui_container,
                 "calc_func": self._calculate_tdb_rh,
             }
@@ -185,6 +189,7 @@ class PsyModule(BaseAnalysisModule):
         回傳：
             str：格式化後的計算結果文字。
         """
+        self.last_air_state = None
         # 1. 讀取通用值和單位
         alt_val = self.read_float("psy_alt")
         alt_unit = self.all_entries["psy_alt"]["unit"].value
@@ -214,6 +219,9 @@ class PsyModule(BaseAnalysisModule):
             known_input = KNOWN_WET_BULB if mode_key == self.MODE_TDB_TWB else KNOWN_RELATIVE_HUMIDITY
             self.last_structured_result = self.result_builder.build(
                 psy_results, known_input=known_input, use_imperial=use_imperial
+            )
+            self.last_air_state = AirStatePoint.from_state_mapping(
+                psy_results, source=StateSource.PSYCHROMETRICS, label="性質查詢"
             )
             result_lines = self._format_psy_results(psy_results, use_imperial)
             return "\n".join(result_lines)

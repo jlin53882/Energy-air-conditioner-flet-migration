@@ -15,7 +15,7 @@ PR #4 (Analysis Workspace Migration) 引入這個型別，讓 routing / dispatch
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import flet as ft
@@ -42,6 +42,8 @@ class AnalysisDefinition:
         structured_result: 選用的無參數函式，回傳最近一次成功計算的
             :class:`~Flet_ui.ui.structured_result.StructuredResult`（關鍵數值、
             性質表與計算過程）；未提供時結果區由文字投影分組指標。
+        state_points: 選用的無參數函式，回傳最近一次成功計算可保存到 State Library
+            的狀態點（``ThermoStatePoint``／``AirStatePoint``）；未提供時不顯示儲存選單。
     """
 
     key: str
@@ -51,6 +53,7 @@ class AnalysisDefinition:
     show_execute_button: bool = True
     result_chart: ft.Control | None = None
     structured_result: Callable[[], StructuredResult | None] | None = None
+    state_points: Callable[[], Sequence[object]] | None = None
 
 
 def definitions_from_module(module: object) -> list[AnalysisDefinition]:
@@ -93,6 +96,7 @@ def definitions_from_module(module: object) -> list[AnalysisDefinition]:
                 show_execute_button=raw.get("show_execute_button", True),
                 result_chart=raw.get("result_chart"),
                 structured_result=raw.get("structured_result"),
+                state_points=raw.get("state_points"),
             )
         )
     return definitions

@@ -25,6 +25,10 @@ ROUTES = (
         description="總覽所有已實作的熱力學與冷凍空調工具。",
     ),
     WorkspaceRoute(
+        "state_library", "狀態庫", "工作區", "BOOKMARKS_OUTLINED",
+        description="管理已保存的冷媒與濕空氣狀態點，並比較兩個狀態（B − A）。",
+    ),
+    WorkspaceRoute(
         "thermo_properties", "狀態查詢", "熱力學", "SCIENCE_OUTLINED",
         description="以兩個獨立性質查詢冷媒或水的熱力狀態，並可計算廣延性質。",
     ),

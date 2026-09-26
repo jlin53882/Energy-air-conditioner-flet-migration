@@ -120,7 +120,22 @@ Flet 與 Telegram 負責 label、display unit、string 以及 message/control re
 - `source` 是 `StateSource` 列舉（`property_query`、`refrigeration_cycle`、`condenser_exergy`、`saturation`、`superheat_check`、`psychrometrics`、`air_process`、`manual`），值會寫入保存的文件，不得任意更名。
 - 序列化：`to_dict()` 產生含 `schema`（`thermo_state_point`／`air_state_point`）與整數 `schema_version` 的標準 JSON 相容 dict；`from_dict()` 與 `state_point_from_dict()` 在種類不符、版本較新或較舊、欄位缺漏或多出、數值無效時明確失敗，不猜測資料意義（`domain/schema.py`）。
 
-## 11. Error contract
+## 11. State Library contract
+
+`domain/state_library.py` 定義使用者保存的狀態清單，`domain/state_points/comparison.py` 定義兩個狀態的比較；兩者都不做 I/O。
+
+- `SavedState`：穩定識別碼 `id`（改名不變）、使用者名稱 `name`（去除前後空白、不可空白、最多 80 字元）與狀態點 `point`（`ThermoStatePoint` 或 `AirStatePoint`，其他型別拒絕）。
+- `StateLibrary`：依保存順序排列、識別碼不可重複。`with_added`／`renamed`／`duplicated`／`removed` 都回傳新清單；複本緊接在原項目之後，名稱加「（複本）」且不超過長度上限。
+- 預設名稱：冷媒為「流體 · 顯示名稱」，濕空氣為「濕空氣 · 顯示名稱」。
+- 序列化：`to_dict()` 帶 `schema = state_library`、`schema_version = 1`，每個項目內含狀態點自己的 schema 文件；`from_dict()` 在種類或版本不符、欄位缺漏或多出、狀態點無效或識別碼重複時明確失敗。
+- 比較 `compare_states(a, b)`：差值一律為 B − A（canonical SI）。
+  - 冷媒：溫度、壓力、密度、比容直接相減。焓、熵只在流體、reference state 與性質模型都相同時以 `enthalpy_difference`／`entropy_difference` 相減；基準不同時列出兩邊數值、差值為 None 並說明原因。理想氣體模型不提供比熵，熵列不比較。乾度只在兩邊都是兩相／飽和（0–1）時相減，單相標記 -1 不比較。
+  - 濕空氣：乾球、濕球、露點溫度、相對濕度、濕度比、比焓與比容（每公斤乾空氣）、大氣壓力與海拔直接相減；濕空氣模型的基準固定。
+  - 冷媒與濕空氣狀態不能互相比較（`StateBasisMismatchError`）。
+
+`application/state_library.StateLibraryService` 透過注入的 `DocumentStore` 保存文件 `state_library`：每次變更先寫入、成功後才更新記憶體並通知訂閱者；寫入失敗以 `ValueError` 回報且清單不變。已保存的文件無效（損壞、版本較新）時記錄 `load_error`、清單視為空，並拒絕所有寫入，不以空清單覆蓋使用者的檔案。
+
+## 12. Error contract
 
 Invalid request shape、known property 不足、invalid fluid/policy 與 unknown canonical unit 都必須明確失敗。狀態查詢失敗分為三類：
 

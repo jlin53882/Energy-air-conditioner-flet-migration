@@ -8,6 +8,7 @@ from domain.schema import SCHEMA_KEY
 
 from .air import AIR_STATE_POINT_SCHEMA, AirStatePoint
 from .base import StateBasisMismatchError, StatePoint, StateSource
+from .comparison import PropertyComparison, StateComparison, compare_states
 from .thermo import (
     THERMO_STATE_POINT_SCHEMA,
     StatePhase,
@@ -39,6 +40,9 @@ def state_point_from_dict(data: object) -> ThermoStatePoint | AirStatePoint:
 
 __all__ = [
     "AirStatePoint",
+    "PropertyComparison",
+    "StateComparison",
+    "compare_states",
     "StateBasisMismatchError",
     "StatePhase",
     "StatePoint",

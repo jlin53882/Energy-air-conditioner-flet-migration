@@ -43,6 +43,7 @@ class RefrigerationCycleModule(BaseAnalysisModule):
     無。"""
         super().__init__(unit_converter, page, refrigeration_service=refrigeration_service)
         self.refrigeration = refrigeration_service
+        self.last_result = None
         self.chart_panel = FigurePanel(height=520, placeholder="執行分析後在 P-h 圖上繪製循環")
         self.cycle_ui = self._build_cycle_ui()
         self.bind_independent_unit_sync(list(self.all_entries))
@@ -58,6 +59,7 @@ class RefrigerationCycleModule(BaseAnalysisModule):
                 "ui": self.cycle_ui,
                 "calc_func": self.calculate_cycle,
                 "result_chart": self.chart_panel,
+                "state_points": lambda: tuple(self.last_result.states.values()) if self.last_result else (),
             },
         }
 
@@ -103,6 +105,7 @@ class RefrigerationCycleModule(BaseAnalysisModule):
 
 回傳：
     格式化結果文字。"""
+        self.last_result = None
         fluid = self.read_text("cyc_fluid")
         result = self.refrigeration.solve_cycle(RefrigerationCycleRequest(
             fluid=fluid,
@@ -114,6 +117,7 @@ class RefrigerationCycleModule(BaseAnalysisModule):
             refrigeration_capacity_w=self.read_si("cyc_capacity"),
             reference_state=self.cyc_ref_state.value,
         ))
+        self.last_result = result
         self._plot_cycle(result)
 
         formatter = ResultFormatter(self.unit_converter, use_imperial)
