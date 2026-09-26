@@ -134,6 +134,67 @@ def test_invalid_thermo_state_point_fails_explicitly(provider, overrides, messag
         replace(point, **overrides)
 
 
+@pytest.mark.parametrize(
+    ("quality", "phase"),
+    [
+        (-1.0, StatePhase.SINGLE_PHASE),
+        (0.0, StatePhase.SATURATED_LIQUID),
+        (0.4, StatePhase.TWO_PHASE),
+        (0.5, StatePhase.TWO_PHASE),
+        (1.0, StatePhase.SATURATED_VAPOR),
+    ],
+)
+def test_quality_within_coolprop_contract_is_accepted(provider, quality, phase) -> None:
+    """乾度 -1（CoolProp 單相標記）與 0–1 可以建立，並推導出對應相態。
+
+參數：
+    provider: 狀態服務。
+    quality: 合法乾度。
+    phase: 預期相態。
+
+回傳：
+    無。"""
+    point = replace(_point(provider, [("P", 1_000_000.0), ("T", 330.0)]), quality=quality)
+
+    assert point.quality == quality
+    assert point.phase is phase
+
+
+@pytest.mark.parametrize("quality", [-2.0, -1.01, -0.5, -1e-9, 1.01, 1.0 + 1e-9, 2.0, 999.0])
+def test_invalid_quality_outside_coolprop_contract_is_rejected(provider, quality) -> None:
+    """乾度不是 -1 也不在 0–1 之間時明確失敗，不被當成單相。
+
+參數：
+    provider: 狀態服務。
+    quality: 非法乾度。
+
+回傳：
+    無。"""
+    point = _point(provider, [("P", 1_000_000.0), ("T", 330.0)])
+    with pytest.raises(ValueError, match="乾度必須為 CoolProp 單相標記 -1"):
+        replace(point, quality=quality)
+
+
+@pytest.mark.parametrize("quality", [2, 999.0, -5])
+def test_persisted_document_with_invalid_quality_is_rejected(provider, quality) -> None:
+    """保存的文件含非法乾度時，讀取明確失敗；合法的 v1 文件仍可讀取。
+
+參數：
+    provider: 狀態服務。
+    quality: 非法乾度。
+
+回傳：
+    無。"""
+    document = _point(provider, [("P", 1_000_000.0), ("T", 330.0)]).to_dict()
+    assert ThermoStatePoint.from_dict(document).quality == -1.0
+
+    document["quality"] = quality
+    with pytest.raises(ValueError, match="乾度"):
+        ThermoStatePoint.from_dict(document)
+    with pytest.raises(ValueError, match="乾度"):
+        state_point_from_dict(document)
+
+
 def test_reference_state_aliases_are_normalized(provider) -> None:
     """Reference state 以 canonical code 保存（Default → DEF、小寫也接受）。
 
@@ -347,8 +408,36 @@ def test_vapor_compression_states_are_thermo_state_points(provider) -> None:
             "R134a", "IIR", StateSource.REFRIGERATION_CYCLE, key)
     assert enthalpy_difference(result.states["1"], result.states["3"]) == pytest.approx(
         result.refrigerating_effect_j_kg)
+    assert result.compressor_work_j_kg == pytest.approx(
+        enthalpy_difference(result.states["2"], result.states["1"]))
+    assert result.heat_rejection_j_kg == pytest.approx(
+        enthalpy_difference(result.states["2"], result.states["3"]))
     assert result.states["3"].phase is StatePhase.SINGLE_PHASE
     assert [point.key for point in result.cycle_path] == ["1", "2", "3", "4", "1"]
+
+
+def test_all_cycle_enthalpy_differences_go_through_basis_guard(provider, monkeypatch) -> None:
+    """冷凍效果、壓縮功與冷凝放熱三個焓差都經 enthalpy_difference 由循環狀態點相減。
+
+參數：
+    provider: 狀態服務。
+    monkeypatch: pytest 的屬性替換工具。
+
+回傳：
+    無。"""
+    import domain.refrigeration.vapor_compression as vapor_compression
+
+    pairs = []
+    original = vapor_compression.enthalpy_difference
+
+    def recording(first, second):
+        pairs.append((first.key, second.key))
+        return original(first, second)
+
+    monkeypatch.setattr(vapor_compression, "enthalpy_difference", recording)
+    solve_vapor_compression_cycle(provider, VaporCompressionInputs("R32", 278.15, 318.15, 5.0, 5.0, 0.7))
+
+    assert sorted(pairs) == [("1", "3"), ("2", "1"), ("2", "3")]
 
 
 def test_cycles_with_different_reference_states_cannot_be_mixed(provider) -> None:

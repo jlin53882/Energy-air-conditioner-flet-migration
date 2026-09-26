@@ -20,6 +20,8 @@ from .base import (
 
 THERMO_STATE_POINT_SCHEMA = "thermo_state_point"
 THERMO_STATE_POINT_VERSION = 1
+# CoolProp 以乾度 -1 表示單相（過冷液、過熱蒸氣或超臨界）。
+COOLPROP_SINGLE_PHASE_QUALITY = -1.0
 
 _FIELDS = {
     "fluid", "reference_state", "pressure_pa", "temperature_k", "enthalpy_j_kg", "entropy_j_kgk",
@@ -53,7 +55,7 @@ class ThermoStatePoint:
         enthalpy_j_kg: 比焓（J/kg）。
         entropy_j_kgk: 比熵（J/(kg·K)）；理想氣體模型不提供（值為 0）。
         density_kg_m3: 密度（kg/m³）。
-        quality: 乾度；CoolProp 以 -1 表示單相。
+        quality: 乾度；-1 為 CoolProp 單相標記，0–1 為合法乾度，其他值拒絕。
         source: 產生此狀態點的工具。
         is_ideal_gas: 是否由理想氣體模型計算。
         key: 所屬計算中的穩定鍵，例如循環的 ``"1"``、``"2s"``；可為空字串。
@@ -80,13 +82,17 @@ class ThermoStatePoint:
     無。
 
 引發：
-    ValueError：流體空白、reference state 不是明確基準、數值無效或來源未知時。"""
+    ValueError：流體空白、reference state 不是明確基準、數值無效、乾度不是 -1 或
+    0–1，或來源未知時。"""
         fluid = text("流體名稱", self.fluid).strip()
         if not fluid:
             raise ValueError("狀態點必須指定流體名稱。")
         reference_state = self._explicit_reference_state(self.reference_state)
         if not isinstance(self.is_ideal_gas, bool):
             raise ValueError("is_ideal_gas 必須是布林值。")
+        quality = finite_float("乾度", self.quality)
+        if quality != COOLPROP_SINGLE_PHASE_QUALITY and not 0.0 <= quality <= 1.0:
+            raise ValueError(f"乾度必須為 CoolProp 單相標記 -1，或介於 0 與 1 之間（目前為 {quality}）。")
         values = {
             "fluid": fluid,
             "reference_state": reference_state,
@@ -95,7 +101,7 @@ class ThermoStatePoint:
             "enthalpy_j_kg": finite_float("比焓", self.enthalpy_j_kg),
             "entropy_j_kgk": finite_float("比熵", self.entropy_j_kgk),
             "density_kg_m3": positive_float("密度", self.density_kg_m3),
-            "quality": finite_float("乾度", self.quality),
+            "quality": quality,
             "source": parse_source(self.source),
             "key": text("狀態鍵", self.key),
             "label": text("顯示名稱", self.label),
@@ -183,8 +189,8 @@ class ThermoStatePoint:
     def phase(self) -> StatePhase:
         """由乾度推導的相態分類。
 
-乾度 0 為飽和液、1 為飽和蒸氣、介於兩者之間為兩相；其他值（CoolProp 以 -1 表示
-過冷液、過熱蒸氣或超臨界）一律視為單相。
+乾度 0 為飽和液、1 為飽和蒸氣、介於兩者之間為兩相；-1 為 CoolProp 的單相標記
+（過冷液、過熱蒸氣或超臨界）。其他乾度在建立狀態點時已被拒絕。
 
 回傳：
     StatePhase。"""

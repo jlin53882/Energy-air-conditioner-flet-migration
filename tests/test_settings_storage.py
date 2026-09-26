@@ -188,14 +188,13 @@ def test_store_rejects_non_standard_json_and_leaves_no_file(tmp_path) -> None:
     無。"""
     store = JsonDocumentStore(tmp_path)
 
-    with pytest.raises(ValueError, match="標準 JSON"):
-        store.write("bad", {"value": float("nan")})
-    with pytest.raises(ValueError, match="標準 JSON"):
-        store.write("bad", {"value": object()})
+    for value in (float("nan"), float("inf"), float("-inf"), object()):
+        with pytest.raises(ValueError, match="標準 JSON"):
+            store.write("bad", {"value": value})
     assert list(tmp_path.iterdir()) == []
 
 
-@pytest.mark.parametrize(("content", "message"), [("{not json", "有效的 JSON"), ("[1, 2]", "JSON 物件")])
+@pytest.mark.parametrize(("content", "message"), [("{not json", "標準 JSON"), ("[1, 2]", "JSON 物件")])
 def test_store_reports_corrupt_files(tmp_path, content, message) -> None:
     """損壞或最外層不是物件的檔案明確失敗並指出檔案。
 
@@ -209,6 +208,52 @@ def test_store_reports_corrupt_files(tmp_path, content, message) -> None:
     (tmp_path / "settings.json").write_text(content, encoding="utf-8")
     with pytest.raises(ValueError, match=message):
         JsonDocumentStore(tmp_path).read("settings")
+
+
+@pytest.mark.parametrize(
+    "content",
+    ['{"value": NaN}', '{"value": Infinity}', '{"value": -Infinity}', '{"nested": [1, {"x": NaN}]}'],
+)
+def test_store_rejects_non_standard_json_constants_on_read(tmp_path, content) -> None:
+    """讀取也只接受標準 JSON：NaN／Infinity 以 ValueError 拒絕，與寫入契約一致。
+
+參數：
+    tmp_path: pytest 暫存資料夾。
+    content: 含非標準常數的檔案內容。
+
+回傳：
+    無。"""
+    (tmp_path / "settings.json").write_text(content, encoding="utf-8")
+    with pytest.raises(ValueError, match="標準 JSON") as error:
+        JsonDocumentStore(tmp_path).read("settings")
+    assert type(error.value) is ValueError
+
+
+def test_store_reports_non_utf8_file_as_value_error(tmp_path) -> None:
+    """不是 UTF-8 的檔案同樣以 ValueError 回報，不讓解碼細節傳到上層。
+
+參數：
+    tmp_path: pytest 暫存資料夾。
+
+回傳：
+    無。"""
+    (tmp_path / "settings.json").write_bytes('{"名稱": "冷媒"}'.encode("big5"))
+    with pytest.raises(ValueError, match="UTF-8") as error:
+        JsonDocumentStore(tmp_path).read("settings")
+    assert type(error.value) is ValueError
+
+
+def test_store_reads_standard_json_numbers(tmp_path) -> None:
+    """標準 JSON 的數值（含小數、指數與負數）照常讀取。
+
+參數：
+    tmp_path: pytest 暫存資料夾。
+
+回傳：
+    無。"""
+    (tmp_path / "settings.json").write_text('{"value": 1.5, "big": 1e300, "neg": -2}', encoding="utf-8")
+
+    assert JsonDocumentStore(tmp_path).read("settings") == {"value": 1.5, "big": 1e300, "neg": -2}
 
 
 def test_state_point_documents_can_be_stored(tmp_path) -> None:

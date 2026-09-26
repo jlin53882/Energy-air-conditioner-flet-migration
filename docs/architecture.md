@@ -45,7 +45,7 @@ channel adapters / entrypoints
 
 負責不屬於領域契約的具體整合。被排除的舊版濕空氣實作會在此透過 `LegacyPsychrometricModelAdapter` 存取。
 
-`infrastructure/storage/JsonDocumentStore` 是 `DocumentStore` 的 JSON 檔實作：每份文件存成 `<name>.json`，名稱只允許小寫英數、底線與連字號；寫入先寫暫存檔再原子替換，並拒絕 NaN／Infinity。`domain/` 與 `application/` 不得匯入 `infrastructure/`（由 `tests/test_settings_storage.py` 檢查）。
+`infrastructure/storage/JsonDocumentStore` 是 `DocumentStore` 的 JSON 檔實作：每份文件存成 `<name>.json`，名稱只允許小寫英數、底線與連字號；寫入先寫暫存檔再原子替換；讀寫都只接受標準 JSON，拒絕 NaN／Infinity，錯誤一律以 `ValueError` 回報。`domain/` 與 `application/` 不得匯入 `infrastructure/`（由 `tests/test_settings_storage.py` 檢查）。
 
 ### `Flet_ui/`
 

@@ -13,11 +13,25 @@ from pathlib import Path
 _DOCUMENT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
+def _reject_non_standard_constant(constant: str) -> float:
+    """拒絕 Python json 預設接受、但不屬於標準 JSON 的常數。
+
+參數：
+    constant: ``NaN``、``Infinity`` 或 ``-Infinity``。
+
+回傳：
+    無（一律引發例外）。
+
+引發：
+    ValueError：一律引發。"""
+    raise ValueError(f"含非標準 JSON 常數 {constant}")
+
+
 class JsonDocumentStore:
     """在單一資料夾中以 ``<name>.json`` 保存文件。
 
     寫入時先寫到同資料夾的暫存檔再原子替換，程式中斷時不會留下寫了一半的檔案；
-    拒絕 NaN／Infinity，保存的檔案一律是標準 JSON。
+    讀寫都拒絕 NaN／Infinity，只接受標準 JSON。
     """
 
     def __init__(self, root: Path | str) -> None:
@@ -55,16 +69,20 @@ class JsonDocumentStore:
     文件內容 dict；檔案不存在時回傳 None。
 
 引發：
-    ValueError：檔案不是有效 JSON 或最外層不是物件時。"""
+    ValueError：檔案不是 UTF-8、不是有效的標準 JSON（含 NaN／Infinity 等非標準常數）或最外層
+    不是物件時。"""
         path = self.path_for(name)
         try:
             raw = path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return None
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"{path} 不是 UTF-8 編碼的標準 JSON：{exc}") from None
         try:
-            document = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{path} 不是有效的 JSON：{exc}") from None
+            document = json.loads(raw, parse_constant=_reject_non_standard_constant)
+        except ValueError as exc:
+            # JSONDecodeError 是 ValueError 的子類別；語法錯誤與非標準常數統一以同一種錯誤回報。
+            raise ValueError(f"{path} 不是有效的標準 JSON：{exc}") from None
         if not isinstance(document, dict):
             raise ValueError(f"{path} 的最外層必須是 JSON 物件。")
         return document

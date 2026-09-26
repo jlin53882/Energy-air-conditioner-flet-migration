@@ -167,10 +167,10 @@ def solve_vapor_compression_cycle(
         "3": point("3", "冷凝器出口", s3),
         "4": point("4", "蒸發器入口", s4),
     }
-    # 經基準防護相減；h1、h3 與狀態點的焓值相同。
+    # 性能指標的焓差一律經基準防護，由循環狀態點相減。
     refrigerating_effect = enthalpy_difference(states["1"], states["3"])
-    compressor_work = h2 - h1
-    heat_rejection = h2 - h3
+    compressor_work = enthalpy_difference(states["2"], states["1"])
+    heat_rejection = enthalpy_difference(states["2"], states["3"])
     if refrigerating_effect <= 0 or compressor_work <= 0:
         raise ValueError("此條件無法形成有效的冷凍循環，請確認溫度與過熱／過冷設定。")
 
