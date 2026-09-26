@@ -126,8 +126,8 @@ Invalid request shape、known property 不足、invalid fluid/policy 與 unknown
 
 | 類別 | 產生處 | 例外 | 處理 |
 |---|---|---|---|
-| 已知性質無法唯一決定狀態（目前只有壓力與溫度落在飽和邊界） | `ThermodynamicStateService.calculate_state_si` 在 (P, T) 求解失敗後，以物理條件判斷：該溫度的泡點或露點飽和壓力與給定壓力的相對差不超過 `PT_SATURATION_RELATIVE_TOLERANCE`（1e-5；CoolProp 自身的拒絕門檻為 1e-6），不解析 CoolProp 錯誤文字 | 服務層 `IndeterminateStateError`（`RuntimeError` 子類別）→ `query_state` 轉為 `StateAmbiguityError`（`StateQueryError` 子類別） | 只有過熱度判讀的量測點可以攔截並略過，其他流程照常失敗 |
-| 一般狀態查詢失敗（超出適用範圍、流體無效、backend 失敗等） | 狀態服務的其他 `RuntimeError` | `query_state` 轉為 `StateQueryError`（`ValueError` 子類別，既有以 `ValueError` 處理的呼叫端不受影響） | 不得被吞掉 |
+| 已知性質無法唯一決定狀態（目前只有壓力與溫度落在飽和邊界） | `ThermodynamicStateService.calculate_state_si`，且兩個條件都要成立：(1) 失敗來自 CoolProp 狀態求解本身（`PropsSI`／`PhaseSI` 的 `ValueError`，服務內部包裝為 `CoolPropStateCalculationError`）；(2) 以物理條件確認 (P, T) 在飽和邊界：該溫度的泡點或露點飽和壓力與給定壓力的相對差不超過 `PT_SATURATION_RELATIVE_TOLERANCE`（1e-5；CoolProp 自身的拒絕門檻為 1e-6）。不解析 CoolProp 錯誤文字 | 服務層 `IndeterminateStateError`（`RuntimeError` 子類別）→ `query_state` 轉為 `StateAmbiguityError`（`StateQueryError` 子類別） | 只有過熱度判讀的量測點可以攔截並略過，其他流程照常失敗 |
+| 一般狀態查詢失敗（超出適用範圍、流體無效、backend 異常、reference-state 設定失敗等） | 狀態服務的其他 `RuntimeError`，包括不屬於狀態求解的內部錯誤 | `query_state` 轉為 `StateQueryError`（`ValueError` 子類別，既有以 `ValueError` 處理的呼叫端不受影響） | 不得被吞掉 |
 | 狀態資料不合法 | `ThermoStatePoint.from_state_mapping` | `ValueError`（不是 `StateQueryError`） | 屬於程式錯誤，不得被吞掉 |
 
-不得以寬泛的 `ValueError`、`RuntimeError` 或 `StateQueryError` 攔截來處理「狀態無法唯一決定」。Compatibility facade 可以增加 channel-specific error presentation，但不得吞掉 canonical contract error，也不得默默替換成另一種 physical meaning。
+「輸入接近飽和」本身不是失敗原因：reference-state 設定、backend 異常或程式錯誤即使發生在飽和邊界上的 (P, T)，也不得被重新分類為 `IndeterminateStateError`。不得以寬泛的 `ValueError`、`RuntimeError` 或 `StateQueryError` 攔截來處理「狀態無法唯一決定」。Compatibility facade 可以增加 channel-specific error presentation，但不得吞掉 canonical contract error，也不得默默替換成另一種 physical meaning。

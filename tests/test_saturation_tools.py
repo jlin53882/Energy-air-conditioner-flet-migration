@@ -21,7 +21,11 @@ from domain.refrigeration.saturation import (
 )
 from domain.refrigeration.states import StateAmbiguityError, StateQueryError, query_state
 from domain.state_points import StatePhase, StateSource, ThermoStatePoint
-from domain.thermodynamics.state_service import IndeterminateStateError, ThermodynamicStateService
+from domain.thermodynamics.state_service import (
+    CoolPropStateCalculationError,
+    IndeterminateStateError,
+    ThermodynamicStateService,
+)
 from domain.units import CanonicalUnitConverter
 from Flet_ui.flet_app import main as flet_main
 from Flet_ui.ui.navigation import ROUTES
@@ -457,6 +461,111 @@ def test_state_service_does_not_mark_other_failures_as_indeterminate(provider, f
     with pytest.raises(RuntimeError) as error:
         provider.calculate_state_si(fluid, known, "ASHRAE")
     assert not isinstance(error.value, IndeterminateStateError)
+
+
+def _boundary_pressure_and_temperature() -> tuple[float, float]:
+    """回傳 R32 落在露點飽和邊界上的 (P, T)，其物理條件會通過飽和邊界判定。
+
+回傳：
+    (壓力 Pa, 溫度 K)。"""
+    pressure = 1_000_000.0
+    return pressure, _coolprop("T", "P", pressure, "Q", 1, "R32")
+
+
+def test_near_saturation_unrelated_backend_failure_is_not_ambiguity(monkeypatch) -> None:
+    """(P, T) 剛好在飽和邊界，但狀態求解途中的失敗與飽和無關：不得標記為無法唯一決定。
+
+參數：
+    monkeypatch: pytest monkeypatch。
+
+回傳：
+    無。"""
+    service = ThermodynamicStateService(CanonicalUnitConverter())
+    pressure, temperature = _boundary_pressure_and_temperature()
+    real_props = CP.PropsSI
+
+    def failing_props(output, name1, value1, name2, value2, fluid):
+        """(P, T) 求解時模擬 backend 異常；其他查詢（含飽和壓力）照常。
+
+參數：
+    output: 輸出性質。
+    name1: 第一個輸入性質。
+    value1: 第一個輸入值。
+    name2: 第二個輸入性質。
+    value2: 第二個輸入值。
+    fluid: 流體名稱。
+
+回傳：
+    CoolProp 計算值。"""
+        if {name1, name2} == {"P", "T"}:
+            raise RuntimeError("unexpected backend failure")
+        return real_props(output, name1, value1, name2, value2, fluid)
+
+    monkeypatch.setattr(CP, "PropsSI", failing_props)
+    known = [("P", pressure), ("T", temperature)]
+    assert service._is_pt_on_saturation_boundary("R32", known)
+
+    with pytest.raises(RuntimeError) as error:
+        service.calculate_state_si("R32", known, "ASHRAE")
+    assert not isinstance(error.value, IndeterminateStateError)
+
+    with pytest.raises(StateQueryError) as query_error:
+        query_state(service, "R32", known, "ASHRAE", "量測狀態")
+    assert not isinstance(query_error.value, StateAmbiguityError)
+
+
+def test_near_saturation_reference_state_failure_is_not_ambiguity(monkeypatch) -> None:
+    """(P, T) 剛好在飽和邊界，但 reference-state 設定失敗：維持一般失敗，不得標記為無法唯一決定。
+
+參數：
+    monkeypatch: pytest monkeypatch。
+
+回傳：
+    無。"""
+    service = ThermodynamicStateService(CanonicalUnitConverter())
+    pressure, temperature = _boundary_pressure_and_temperature()
+
+    def failing_setup(fluid, policy):
+        """模擬 reference-state 設定失敗。
+
+參數：
+    fluid: 流體名稱。
+    policy: policy code。
+
+回傳：
+    無（一律引發例外）。"""
+        raise ValueError(f"reference-state setup failed for {fluid}/{policy}")
+
+    monkeypatch.setattr(service.reference_state, "_set_unlocked", failing_setup)
+    known = [("P", pressure), ("T", temperature)]
+    # 飽和邊界判定不需要設定 reference state，仍判定為邊界；失敗原因卻不是狀態求解。
+    assert service._is_pt_on_saturation_boundary("R32", known)
+
+    with pytest.raises(RuntimeError) as error:
+        service.calculate_state_si("R32", known, "ASHRAE")
+    assert not isinstance(error.value, IndeterminateStateError)
+    assert isinstance(error.value.__cause__, ValueError)
+    assert "reference-state setup failed" in str(error.value.__cause__)
+
+
+def test_true_saturation_ambiguity_flows_to_measured_state_fallback(provider) -> None:
+    """真正的飽和邊界：狀態求解失敗 → IndeterminateStateError → StateAmbiguityError → 判讀成功、量測點為 None。
+
+回傳：
+    無。"""
+    pressure, temperature = _boundary_pressure_and_temperature()
+    known = [("P", pressure), ("T", temperature + 1e-9)]
+
+    with pytest.raises(IndeterminateStateError) as error:
+        provider.calculate_state_si("R32", known, "ASHRAE")
+    assert isinstance(error.value.__cause__, CoolPropStateCalculationError)
+    with pytest.raises(StateAmbiguityError):
+        query_state(provider, "R32", known, "ASHRAE", "量測狀態")
+
+    result = evaluate_superheat_subcooling(provider, "R32", pressure, temperature + 1e-9, "ASHRAE")
+    assert result.region == REGION_SUPERHEATED
+    assert result.superheat_k == pytest.approx(1e-9, abs=1e-6)
+    assert result.measured_state is None
 
 
 def test_state_query_error_is_a_value_error(provider) -> None:
