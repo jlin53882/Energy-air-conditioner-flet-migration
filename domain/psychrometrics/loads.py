@@ -68,7 +68,11 @@ def split_sensible_latent(
     dry_air_mass_flow_kg_s: 乾空氣質量流率（kg/s）。
 
 回傳：
-    SensibleLatentSplit。"""
+    SensibleLatentSplit。
+
+引發：
+    ValueError：乾空氣質量流率不為正時（負值會讓所有符號反轉，看似正常卻錯誤）。"""
+    _require_positive(dry_air_mass_flow_kg_s, "乾空氣質量流率必須大於 0。")
     intermediate_h = service.enthalpy_at(float(entering["Tdb"]), float(leaving["W"]))
     entering_h, leaving_h = float(entering["H"]), float(leaving["H"])
     return SensibleLatentSplit(
@@ -126,7 +130,10 @@ Q = ṁ(h_外氣 − h_室內)；正值為冷卻負荷（夏季），負值為�
 # ======================================================
 @dataclass(frozen=True)
 class HumidificationResult:
-    """把空氣由入口加濕到目標濕度比所需的水量與蒸汽熱量。
+    """把空氣由入口加濕到目標濕度比所需的水量與蒸汽熱量（需求估算，不是加濕過程模擬）。
+
+    ``target`` 是設計目標狀態，只用來取得目標濕度比 W_target；本計算不以蒸汽能量平衡
+    求解實際出口乾球溫度或相對濕度，因此 target 不代表單純噴入蒸汽必然會到達的出口狀態。
 
     ``steam_heat_w`` 以蒸汽加濕估算：加濕水量 × 水在當地大氣壓力下的蒸發潛熱
     （由呼叫端提供），即產生常壓飽和蒸汽所需熱量的下限，不含給水預熱與設備損失；

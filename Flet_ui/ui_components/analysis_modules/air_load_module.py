@@ -1,7 +1,8 @@
 """空調負荷分析：新風負荷、加濕負荷、風量與冷量換算。
 
-本模組只負責表單、單位換算與結果呈現；計算委派給 `AirLoadService`。新風與加濕
-過程標示在濕空氣線圖上。熱量符號：正值為冷卻（從空氣移除熱）、負值為加熱。
+本模組只負責表單、單位換算與結果呈現；計算委派給 `AirLoadService`。新風過程標示在
+濕空氣線圖上；加濕只標示入口與設計目標兩點（不連線），因為加濕計算是水量與蒸汽需求
+估算，不是蒸汽加濕的熱力過程模擬。熱量符號：正值為冷卻（從空氣移除熱）、負值為加熱。
 """
 
 from __future__ import annotations
@@ -65,7 +66,7 @@ class AirLoadModule(BaseAnalysisModule):
             ("加濕前空氣", [("hum_in_tdb", "入口乾球溫度", "22", "T", "°C"),
                             ("hum_in_rh", "入口相對濕度", "20", "RH", "%"),
                             ("hum_flow", "風量（入口狀態）", "1000", "VolumeFlow", "m³/h")]),
-            ("加濕目標", [("hum_target_tdb", "目標乾球溫度", "22", "T", "°C"),
+            ("設計目標（用來取得目標濕度比）", [("hum_target_tdb", "目標乾球溫度", "22", "T", "°C"),
                           ("hum_target_rh", "目標相對濕度", "45", "RH", "%")]),
         ])
         self.capacity_ui = self._build_capacity_ui()
@@ -165,7 +166,7 @@ class AirLoadModule(BaseAnalysisModule):
             ("cap_out_rh", "出風相對濕度", "90", "RH", "%"),
             ("cap_dt", "進出風溫差 ΔT", "10", "DeltaT", "K"),
             ("cap_flow", "風量", "1000", "VolumeFlow", "m³/h"),
-            ("cap_load", "冷量", "5", "Power", "kW"),
+            ("cap_load", "顯熱容量（大小）", "5", "Power", "kW"),
         ]
         controls: list[ft.Control] = [
             ft.Column([ft.Text("計算方式（快算：標準空氣；精算：濕空氣狀態）", size=TOKENS.body, weight=ft.FontWeight.W_500,
@@ -207,7 +208,8 @@ class AirLoadModule(BaseAnalysisModule):
         self.all_entries["cap_flow"]["ui_row"].visible = known_airflow
         self.all_entries["cap_load"]["ui_row"].visible = not known_airflow
         self.all_entries["cap_flow"]["label_control"].value = "風量（進風狀態）" if state_mode else "風量"
-        self.all_entries["cap_load"]["label_control"].value = "全熱量" if state_mode else "顯熱量"
+        # 容量輸入一律取大小（正值）；精算結果的全熱／顯熱／潛熱才帶冷卻（正）／加熱（負）符號。
+        self.all_entries["cap_load"]["label_control"].value = "全熱容量（取大小）" if state_mode else "顯熱容量（大小）"
         self.cap_standard_note.visible = not state_mode
         self._update_controls(self.capacity_ui)
 
@@ -235,19 +237,20 @@ class AirLoadModule(BaseAnalysisModule):
     # ======================================================
     # 圖表與狀態點
     # ======================================================
-    def _plot(self, altitude_m: float, markers: list[ChartMarker]) -> None:
-        """在共用圖表上畫出由第一點到最後一點的過程。
+    def _plot(self, altitude_m: float, markers: list[ChartMarker], *, connect: bool = True) -> None:
+        """在共用圖表上標示狀態點；connect 為 True 時畫出由第一點到最後一點的過程線。
 
 參數：
     altitude_m: 海拔（m）。
     markers: 狀態點（依過程順序）。
+    connect: 是否以連線表示過程；只比較狀態、不代表過程軌跡時為 False。
 
 回傳：
     無。"""
         key = round(altitude_m, 3)
         if key not in self._chart_cache:
             self._chart_cache[key] = build_psychrometric_chart_data(self.loads.psychrometrics, altitude_m)
-        self.chart_panel.draw(self._chart_cache[key], markers=markers, paths=[markers])
+        self.chart_panel.draw(self._chart_cache[key], markers=markers, paths=[markers] if connect else [])
         self.chart_panel.refresh()
 
     @staticmethod
@@ -311,7 +314,7 @@ class AirLoadModule(BaseAnalysisModule):
         return formatter.text()
 
     def calculate_humidification(self, use_imperial: bool) -> str:
-        """計算加濕水量與蒸汽加濕熱量並標示加濕過程。
+        """計算加濕水量與蒸汽需求，並在線圖上標示入口與設計目標（不連線）。
 
 參數：
     use_imperial: 是否以英制輸出。
@@ -324,12 +327,13 @@ class AirLoadModule(BaseAnalysisModule):
             altitude, self._air_state("hum_in_tdb", "hum_in_rh"), self._air_state("hum_target_tdb", "hum_target_rh"),
             self.read_si("hum_flow"),
         ))
+        # 目標是設計狀態，不是蒸汽噴入後的出口；只標示兩點，不畫過程線。
         self._plot(altitude, [ChartMarker.from_state("1 入口", result.inlet),
-                              ChartMarker.from_state("2 目標", result.target)])
+                              ChartMarker.from_state("2 設計目標", result.target)], connect=False)
         self.last_states["humidification"] = self._points(("加濕前", result.inlet), ("加濕目標", result.target))
 
         formatter = ResultFormatter(self.unit_converter, use_imperial)
-        formatter.section("加濕負荷")
+        formatter.section("加濕水量／蒸汽需求估算")
         mass_unit = "lbm" if use_imperial else "kg"
         water_per_hour = self.unit_converter.convert_from_si("MassFlow", result.water_kg_s, f"{mass_unit}/s") * 3600
         formatter.add_text("加濕水量", f"{water_per_hour:.2f} {mass_unit}/h")
@@ -343,6 +347,8 @@ class AirLoadModule(BaseAnalysisModule):
         formatter.add("水蒸發潛熱 h_fg（當地大氣壓力）", "H", result.steam_latent_heat_j_kg, 1)
         formatter.lines.append("蒸汽加濕熱量為產生常壓飽和蒸汽所需熱量的下限，不含給水預熱與設備損失；"
                                "滴濾、噴霧等等焓加濕不適用。")
+        formatter.lines.append("目標狀態是設計目標，只用來取得目標濕度比；本計算不以蒸汽能量平衡預測實際出口乾球溫度，"
+                               "線圖上的入口與設計目標兩點僅供比較，不代表實際蒸汽加濕過程的軌跡。")
         return formatter.text()
 
     def calculate_airflow_capacity(self, use_imperial: bool) -> str:
@@ -361,11 +367,12 @@ class AirLoadModule(BaseAnalysisModule):
             result = (self.loads.standard_air_capacity(self.read_si("cap_flow"), delta_t) if known_airflow
                       else self.loads.standard_air_airflow(self.read_si("cap_load"), delta_t))
             formatter.section("標準空氣快算（近似）")
-            formatter.add("顯熱量", "Power", result.sensible_capacity_w, 3)
+            formatter.add("顯熱容量（大小）", "Power", result.sensible_capacity_w, 3)
             formatter.add("風量", "VolumeFlow", result.volume_flow_m3_s, 1)
             formatter.add("溫差 ΔT", "DeltaT", result.temperature_difference_k, 1)
             formatter.lines.append(
-                f"以標準空氣 ρ = {result.density_kg_m3} kg/m³、cp = {result.cp_j_kgk / 1000:.3f} kJ/(kg·K) 計算，只含顯熱。"
+                f"以標準空氣 ρ = {result.density_kg_m3} kg/m³、cp = {result.cp_j_kgk / 1000:.3f} kJ/(kg·K) 計算，只含顯熱；"
+                "容量為大小，不區分冷卻或加熱。"
             )
             return formatter.text()
 

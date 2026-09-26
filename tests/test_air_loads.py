@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import CoolProp.CoolProp as CP
@@ -16,6 +17,7 @@ from application.models import (
     OutdoorAirLoadRequest,
     StateAirflowCapacityRequest,
 )
+from application.state_library import StateLibraryService
 from domain.psychrometrics.loads import (
     MODE_COOLING,
     MODE_HEATING,
@@ -33,8 +35,10 @@ from domain.state_points import AirStatePoint, StateSource
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units import CanonicalUnitConverter
 from Flet_ui.flet_app import main as flet_main
+from Flet_ui.ui.analysis_presentation import ANALYSIS_PRESENTATION
 from Flet_ui.ui.navigation import ROUTES
 from Flet_ui.ui_components.unit.PsychrometricCalculator import PsychrometricCalculator
+from infrastructure.storage import JsonDocumentStore, workspace_directory
 
 CMH = 1 / 3600  # 1 m³/h 換算為 m³/s
 
@@ -302,11 +306,18 @@ class DummyPage:
 
 
 @pytest.fixture
-def view():
+def view(isolated_workspace):
     """建構完整工作區並切到「空調負荷」頁。
+
+依賴 conftest 的 ``isolated_workspace``（``HVAC_WORKSPACE_DIR`` 指向本測試的暫存資料夾），
+工作區的 State Library 只讀寫該資料夾，不碰使用者真正的工作區。
+
+參數：
+    isolated_workspace: 本測試的暫存工作區。
 
 回傳：
     AirLoadView。"""
+    assert workspace_directory() == isolated_workspace
     page = DummyPage()
     flet_main(page)
     shell = page.controls[0]
@@ -366,10 +377,12 @@ def test_outdoor_air_page_reports_signed_split_and_offers_states(view) -> None:
     assert values["新風量（外氣狀態）"] == "1000.0 m³/h"
     assert view.workspace.result_view.chart_column.visible is True
 
+    service = view.save_menu.service
+    before = len(service.entries)
     view.save_menu.save(view.save_menu.points)
-    points = [entry.point for entry in view.save_menu.service.entries]
-    assert all(isinstance(point, AirStatePoint) and point.source is StateSource.AIR_PROCESS for point in points)
-    assert [point.label for point in points] == ["外氣", "室內設計"]
+    added = [entry.point for entry in service.entries[before:]]
+    assert all(isinstance(point, AirStatePoint) and point.source is StateSource.AIR_PROCESS for point in added)
+    assert [point.label for point in added] == ["外氣", "室內設計"]
 
 
 def test_humidification_page_in_imperial_and_no_need_case(view) -> None:
@@ -410,7 +423,8 @@ def test_capacity_page_modes_switch_rows_and_invalidate(view) -> None:
 
     assert visible() == {"cap_dt", "cap_flow"}
     view.perform_calculation(None)
-    assert _result(view)["顯熱量"] == "3.353 kW"
+    assert module.all_entries["cap_load"]["label_control"].value == "顯熱容量（大小）"
+    assert _result(view)["顯熱容量（大小）"] == "3.353 kW"
     assert view.save_menu.visible is False
 
     _select(module.cap_known, "capacity")
@@ -421,7 +435,7 @@ def test_capacity_page_modes_switch_rows_and_invalidate(view) -> None:
 
     _select(module.cap_method, "state")
     assert visible() == {"cap_alt", "cap_in_tdb", "cap_in_rh", "cap_out_tdb", "cap_out_rh", "cap_load"}
-    assert module.all_entries["cap_load"]["label_control"].value == "全熱量"
+    assert module.all_entries["cap_load"]["label_control"].value == "全熱容量（取大小）"
     view.perform_calculation(None)
     assert _result(view)["全熱量"] == "5.000 kW"
     assert view.save_menu.visible is True
@@ -450,3 +464,149 @@ def test_standard_mode_does_not_offer_states_from_a_previous_state_calculation(v
 
     assert view.result_panel.status == "success"
     assert view.save_menu.visible is False
+
+
+# ======================================================
+# Review hardening
+# ======================================================
+@pytest.mark.parametrize("mass_flow", [0.0, -1.0])
+def test_split_sensible_latent_rejects_non_positive_mass_flow(service, mass_flow) -> None:
+    """分解函式自己守住質量流率為正：0 或負值（會讓所有符號反轉）明確失敗。
+
+參數：
+    service: 空調負荷服務。
+    mass_flow: 乾空氣質量流率。
+
+回傳：
+    無。"""
+    with pytest.raises(ValueError, match="質量流率"):
+        split_sensible_latent(service.psychrometrics, _state(service, 35, 0.6), _state(service, 26, 0.5), mass_flow)
+
+
+def test_air_load_saves_go_only_to_the_isolated_workspace(isolated_workspace, tmp_path, monkeypatch) -> None:
+    """狀態庫已有資料時，儲存只新增本次狀態、只寫入隔離工作區；正式預設路徑（家目錄）不被建立或讀取。
+
+參數：
+    isolated_workspace: conftest 提供的暫存工作區。
+    tmp_path: pytest 暫存資料夾（作為假的家目錄）。
+    monkeypatch: pytest monkeypatch。
+
+回傳：
+    無。"""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    existing = StateLibraryService(JsonDocumentStore(isolated_workspace)).save(
+        AirStatePoint(altitude_m=0.0, pressure_pa=101_325.0, dry_bulb_k=298.15, wet_bulb_k=291.15,
+                      dew_point_k=288.15, relative_humidity=0.5, humidity_ratio_kg_kg=0.01,
+                      enthalpy_j_kg=50_000.0, specific_volume_m3_kg=0.86,
+                      source=StateSource.MANUAL, label="既有"))
+
+    page = DummyPage()
+    flet_main(page)
+    view = page.controls[0].views["air_loads"]
+    view._handle_tool_change("airside.outdoor_air_load")
+    view.perform_calculation(None)
+    view.save_menu.save(view.save_menu.points)
+    plt.close("all")
+
+    reloaded = StateLibraryService(JsonDocumentStore(isolated_workspace)).entries
+    assert reloaded[0] == existing
+    assert [entry.point.label for entry in reloaded[1:]] == ["外氣", "室內設計"]
+    assert list(fake_home.iterdir()) == []
+
+
+def _record_chart_draws(module, monkeypatch) -> list[dict]:
+    """攔截線圖面板的 draw，記錄每次傳入的 markers 與 paths（仍照常繪圖）。
+
+參數：
+    module: 空調負荷模組。
+    monkeypatch: pytest monkeypatch。
+
+回傳：
+    每次呼叫的關鍵字參數清單。"""
+    calls: list[dict] = []
+    original = module.chart_panel.draw
+
+    def spy(*args, **kwargs):
+        calls.append(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module.chart_panel, "draw", spy)
+    return calls
+
+
+def test_humidification_page_states_it_is_a_demand_estimate_not_a_process_model(view, monkeypatch) -> None:
+    """加濕頁說明目標是設計狀態、不預測出口，線圖只標示兩點而不畫過程線。
+
+參數：
+    view: 空調負荷頁。
+    monkeypatch: pytest monkeypatch。
+
+回傳：
+    無。"""
+    view._handle_tool_change("airside.humidification")
+    draws = _record_chart_draws(view.adapter.modules[0], monkeypatch)
+    view.perform_calculation(None)
+
+    text = view.adapter.result_text
+    assert "蒸汽需求估算" in text
+    assert "設計目標" in text and "不代表實際蒸汽加濕過程" in text
+    assert draws[-1]["paths"] == []
+    assert [marker.label for marker in draws[-1]["markers"]] == ["1 入口", "2 設計目標"]
+    presentation = ANALYSIS_PRESENTATION["airside.humidification"]
+    assert "設計目標" in presentation.summary and "不代表實際蒸汽加濕" in presentation.summary
+
+
+def test_outdoor_air_chart_still_draws_the_process_line(view, monkeypatch) -> None:
+    """新風負荷仍以連線表示外氣處理到室內（只有加濕改為不連線）。
+
+參數：
+    view: 空調負荷頁。
+    monkeypatch: pytest monkeypatch。
+
+回傳：
+    無。"""
+    view._handle_tool_change("airside.outdoor_air_load")
+    draws = _record_chart_draws(view.adapter.modules[0], monkeypatch)
+    view.perform_calculation(None)
+
+    assert len(draws[-1]["paths"]) == 1
+
+
+def test_capacity_labels_follow_the_method(view) -> None:
+    """快算與精算的容量欄位標明取大小；精算結果保留冷卻正、加熱負的符號說明。
+
+參數：
+    view: 空調負荷頁。
+
+回傳：
+    無。"""
+    view._handle_tool_change("airside.airflow_capacity")
+    module = view.adapter.modules[0]
+    _select(module.cap_known, "capacity")
+    label = module.all_entries["cap_load"]["label_control"]
+
+    assert label.value == "顯熱容量（大小）"
+    _select(module.cap_method, "state")
+    assert label.value == "全熱容量（取大小）"
+    view.perform_calculation(None)
+    assert "正值為冷卻、負值為加熱" in view.adapter.result_text
+    _select(module.cap_method, "standard")
+    assert label.value == "顯熱容量（大小）"
+    view.perform_calculation(None)
+    assert "不區分冷卻或加熱" in view.adapter.result_text
+
+
+def test_domain_contract_documents_humidification_as_a_demand_estimate() -> None:
+    """domain contract 明寫加濕是需求估算：目標為設計目標、不代表實際蒸汽加濕過程；分解要求質量流率為正。
+
+回傳：
+    無。"""
+    contracts = (Path(__file__).resolve().parents[1] / "docs" / "domain-contracts.md").read_text(encoding="utf-8")
+    humidification = next(line for line in contracts.splitlines() if "`humidification_load`" in line)
+    assert "不是加濕過程模擬" in humidification
+    assert "設計目標" in humidification and "W_target" in humidification
+    assert "不代表實際蒸汽加濕過程" in humidification
+    split = next(line for line in contracts.splitlines() if "`split_sensible_latent`" in line)
+    assert "質量流率必須為正" in split
