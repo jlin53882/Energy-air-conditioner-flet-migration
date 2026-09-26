@@ -82,6 +82,37 @@ class SupplyAirflowRequest:
 
 
 @dataclass(frozen=True)
+class OutdoorAirLoadRequest:
+    """新風負荷：外氣處理到室內設計狀態；新風量以外氣狀態量測。"""
+
+    altitude_m: float
+    outdoor: AirStateInput
+    room: AirStateInput
+    outdoor_volume_flow_m3_s: float
+
+
+@dataclass(frozen=True)
+class HumidificationRequest:
+    """加濕負荷：入口加濕到目標狀態；風量以入口狀態量測。"""
+
+    altitude_m: float
+    inlet: AirStateInput
+    target: AirStateInput
+    volume_flow_m3_s: float
+
+
+@dataclass(frozen=True)
+class StateAirflowCapacityRequest:
+    """依進出風狀態換算風量與冷量；風量（以進風狀態量測）與全熱量恰好提供一個。"""
+
+    altitude_m: float
+    entering: AirStateInput
+    leaving: AirStateInput
+    entering_volume_flow_m3_s: float | None = None
+    total_capacity_w: float | None = None
+
+
+@dataclass(frozen=True)
 class RefrigerationCycleRequest:
     """單級蒸氣壓縮循環；reference_state 為 None 時依流體套用預設 policy。"""
 
