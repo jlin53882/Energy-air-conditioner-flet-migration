@@ -17,6 +17,8 @@ from .ui.views.compressor_view import CompressorView
 from .ui.views.evaporator_view import EvaporatorView
 from .ui.views.condenser_view import CondenserView
 from .ui.views.refrigeration_cycle_view import RefrigerationCycleView
+from .ui.views.saturation_view import SaturationView
+from .ui.views.superheat_subcooling_view import SuperheatSubcoolingView
 from .ui.views.psychrometrics_view import PsychrometricsView
 from .ui.views.air_process_view import AirProcessView
 from .ui.views.psychrometric_chart_view import PsychrometricChartView
@@ -29,6 +31,8 @@ from .ui_components.analysis_modules.psy_module import PsyModule
 from .ui_components.analysis_modules.psy_process_module import PsyProcessModule
 from .ui_components.analysis_modules.psychrometric_chart_module import PsychrometricChartModule
 from .ui_components.analysis_modules.refrigeration_cycle_module import RefrigerationCycleModule
+from .ui_components.analysis_modules.saturation_module import SaturationModule
+from .ui_components.analysis_modules.superheat_subcooling_module import SuperheatSubcoolingModule
 from .ui_components.analysis_modules.thermo_diagram_module import ThermoDiagramModule
 from .ui_components.property_tab import PropertyTab
 from .ui_components.unit.HVACAnalyzer import HVACAnalyzer
@@ -98,6 +102,17 @@ def main(page: ft.Page) -> None:
         unit_converter=unit_converter,
         page=page,
         refrigeration_service=refrigeration_service,
+    )
+    saturation_module = SaturationModule(
+        unit_converter=unit_converter,
+        page=page,
+        refrigeration_service=refrigeration_service,
+        pressure_from_altitude=pressure_from_altitude,
+    )
+    superheat_module = SuperheatSubcoolingModule(
+        unit_converter=unit_converter,
+        page=page,
+        refrigeration_service=refrigeration_service,
         pressure_from_altitude=pressure_from_altitude,
     )
     psy_module = PsyModule(unit_converter=unit_converter, page=page, psy_calculator=psy_calculator)
@@ -115,6 +130,8 @@ def main(page: ft.Page) -> None:
     evaporator_view = EvaporatorView(evaporator_module, workspace_state=workspace_state)
     condenser_view = CondenserView(condenser_module, workspace_state=workspace_state)
     cycle_view = RefrigerationCycleView(cycle_module, workspace_state=workspace_state)
+    saturation_view = SaturationView(saturation_module, workspace_state=workspace_state)
+    superheat_view = SuperheatSubcoolingView(superheat_module, workspace_state=workspace_state)
     psychrometrics_view = PsychrometricsView(psy_module, workspace_state=workspace_state)
     air_process_view = AirProcessView(air_process_module, workspace_state=workspace_state)
     psychrometric_chart_view = PsychrometricChartView(
@@ -127,6 +144,8 @@ def main(page: ft.Page) -> None:
         "evaporator": evaporator_view,
         "condenser": condenser_view,
         "refrigeration_cycle": cycle_view,
+        "saturation": saturation_view,
+        "superheat_subcooling": superheat_view,
         "psychrometrics": psychrometrics_view,
         "air_processes": air_process_view,
         "psychrometric_chart": psychrometric_chart_view,
@@ -160,6 +179,8 @@ def main(page: ft.Page) -> None:
         "evaporator": evaporator_view,
         "condenser": condenser_view,
         "refrigeration_cycle": cycle_view,
+        "saturation": saturation_view,
+        "superheat_subcooling": superheat_view,
         "psychrometrics": psychrometrics_view,
         "air_processes": air_process_view,
         "ph_chart": diagram_view,

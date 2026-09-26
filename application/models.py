@@ -96,12 +96,30 @@ class RefrigerationCycleRequest:
 
 
 @dataclass(frozen=True)
+class SaturationPropertiesRequest:
+    """以已知絕對壓力或已知溫度（擇一）查詢飽和液體與飽和蒸氣狀態。
+
+    reference_state 為 None 或 "Auto" 時依流體套用預設 policy；只影響焓、熵的基準。
+    """
+
+    fluid: str
+    pressure_pa: float | None = None
+    temperature_k: float | None = None
+    reference_state: str | None = None
+
+
+@dataclass(frozen=True)
 class SuperheatCheckRequest:
-    """以量測絕對壓力與管溫判斷過熱度／過冷度。"""
+    """以量測絕對壓力與管溫判斷過熱度／過冷度。
+
+    reference_state 為 None 或 "Auto" 時依流體套用預設 policy；只影響狀態點的焓、熵，
+    不影響飽和溫度與過熱度／過冷度。
+    """
 
     fluid: str
     pressure_pa: float
     measured_temperature_k: float
+    reference_state: str | None = None
 
 
 @dataclass(frozen=True)

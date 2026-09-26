@@ -13,6 +13,11 @@ from ..unit.UnitConverter import (
 )
 from ...ui.theme import TOKENS, mono_style, style_dropdown, style_text_field
 
+# 現場工具提供的常用冷媒快捷；全部為 CoolProp 可直接計算的名稱。
+COMMON_REFRIGERANTS = (
+    "R32", "R410A", "R134a", "R22", "R404A", "R407C", "R290", "R1234yf", "R600a", "R717", "R744",
+)
+
 # 未填海拔時，錶壓換算使用的標準大氣壓力（Pa）。
 STANDARD_ATMOSPHERE_PA = 101_325.0
 
@@ -205,6 +210,54 @@ class BaseAnalysisModule:
             "ui_row": ft.Column([label_control, field], spacing=6),
         }
         return field
+
+    def create_fluid_row(self, key: str, label: str, default_val: str, hint: str = "") -> ft.Column:
+        """建立冷媒文字輸入列，下方附常用冷媒快捷按鈕。
+
+點選快捷按鈕等同使用者修改冷媒：填入名稱後觸發欄位目前的 ``on_change``，
+因此既有結果會依失效規則清除（見 ``docs/state-invalidation.md``）。
+
+參數：
+    key: 此輸入在模組中的識別鍵（存於 ``self.text_entries``）。
+    label: 欄位名稱。
+    default_val: 預設冷媒。
+    hint: 選用的提示文字。
+
+回傳：
+    包含文字欄位與快捷按鈕的輸入列。"""
+        field = self.create_text_row(key, label, default_val, hint)
+
+        def pick(event: ft.ControlEvent, fluid: str) -> None:
+            """填入所選冷媒並觸發欄位的變更處理。
+
+參數：
+    event: 按鈕點擊事件。
+    fluid: 冷媒名稱。
+
+回傳：
+    無。"""
+            field.value = fluid
+            if field.on_change is not None:
+                field.on_change(event)
+            self._update_controls(field)
+
+        shortcuts = ft.Row(
+            [
+                ft.TextButton(
+                    fluid,
+                    on_click=lambda event, fluid=fluid: pick(event, fluid),
+                    style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=8, vertical=0)),
+                )
+                for fluid in COMMON_REFRIGERANTS
+            ],
+            wrap=True,
+            spacing=0,
+            run_spacing=0,
+        )
+        self.text_entries[key]["shortcuts"] = shortcuts
+        row = ft.Column([self.text_entries[key]["ui_row"], shortcuts], spacing=2)
+        self.text_entries[key]["ui_row"] = row
+        return row
 
     def read_text(self, key: str) -> str:
         """讀取文字輸入列，空白時以欄名提示錯誤。

@@ -547,11 +547,12 @@ def test_analysis_selection_clears_cached_result_before_unit_refresh() -> None:
     無。"""
     page = DummyPage()
     flet_main(page)
-    view = page.controls[0].views["refrigeration_cycle"]
+    view = page.controls[0].views["compressor"]
+    view._handle_tool_change("compressor.work")
     view.perform_calculation(None)
     assert view.adapter._has_calculated_result is True
 
-    view._handle_tool_change("cycle.superheat_subcooling")
+    view._handle_tool_change("compressor.isentropic_efficiency")
     view.set_output_unit_system("Imperial")
 
     assert view.adapter._has_calculated_result is False

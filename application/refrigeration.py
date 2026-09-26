@@ -5,17 +5,24 @@ from __future__ import annotations
 from domain.refrigeration import (
     CondenserExergyResult,
     SaturationCheckResult,
+    SaturationPropertiesResult,
     ThermodynamicStateProvider,
     VaporCompressionInputs,
     VaporCompressionResult,
     analyze_condenser_exergy,
     evaluate_superheat_subcooling,
+    saturation_properties,
     solve_vapor_compression_cycle,
 )
 from domain.thermodynamics.fluid_policy import resolve_reference_state_policy
 from domain.thermodynamics.reference_state import normalize_reference_state_policy
 
-from .models import CondenserExergyRequest, RefrigerationCycleRequest, SuperheatCheckRequest
+from .models import (
+    CondenserExergyRequest,
+    RefrigerationCycleRequest,
+    SaturationPropertiesRequest,
+    SuperheatCheckRequest,
+)
 
 
 class RefrigerationService:
@@ -75,6 +82,22 @@ class RefrigerationService:
             ),
         )
 
+    def saturation_properties(self, request: SaturationPropertiesRequest) -> SaturationPropertiesResult:
+        """查詢飽和液體與飽和蒸氣狀態。
+
+參數：
+    request: 飽和性質 request。
+
+回傳：
+    SaturationPropertiesResult。"""
+        return saturation_properties(
+            self.state_provider,
+            request.fluid,
+            pressure_pa=request.pressure_pa,
+            temperature_k=request.temperature_k,
+            reference_state=self.resolve_policy(request.fluid, request.reference_state),
+        )
+
     def check_superheat(self, request: SuperheatCheckRequest) -> SaturationCheckResult:
         """判讀量測點的過熱度／過冷度。
 
@@ -88,7 +111,7 @@ class RefrigerationService:
             request.fluid,
             request.pressure_pa,
             request.measured_temperature_k,
-            self.resolve_policy(request.fluid, None),
+            self.resolve_policy(request.fluid, request.reference_state),
         )
 
     def analyze_condenser_exergy(self, request: CondenserExergyRequest) -> CondenserExergyResult:

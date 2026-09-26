@@ -42,7 +42,15 @@ ROUTES = (
     ),
     WorkspaceRoute(
         "refrigeration_cycle", "冷凍循環", "冷凍系統", "LOOP",
-        description="蒸氣壓縮循環 COP、流量與 P-h 圖，以及現場過熱度／過冷度判讀。",
+        description="蒸氣壓縮循環 COP、流量與 P-h 圖。",
+    ),
+    WorkspaceRoute(
+        "saturation", "飽和性質", "冷凍系統", "WATER_DROP_OUTLINED",
+        description="已知壓力或溫度查詢冷媒泡點、露點、溫度滑移與蒸發潛熱。",
+    ),
+    WorkspaceRoute(
+        "superheat_subcooling", "過熱／過冷", "冷凍系統", "THERMOSTAT_OUTLINED",
+        description="以現場量測壓力（錶壓或絕對）與管溫判讀過熱度或過冷度。",
     ),
     WorkspaceRoute(
         "psychrometrics", "濕空氣性質", "空氣處理", "AIR_OUTLINED",

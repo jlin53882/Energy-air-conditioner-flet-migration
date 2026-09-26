@@ -84,6 +84,12 @@ PR #6 已合併，以上項目皆可直接進行。PR #6 帶入的內容一併�
 - **#9 飽和性質工具 + SH/SC 現場工具**：沿用 `domain/refrigeration/saturation.py`；
   SH/SC 由循環頁移為獨立入口並提供現場輸入（錶壓、常用冷媒）。兩者輸出
   `ThermoStatePoint`，作為狀態點模型的第一批使用者。
+
+  **結果**：`saturation_properties`（已知壓力或溫度 → 泡點／露點 `ThermoStatePoint`、溫度滑移、
+  泡點／露點壓力差、經基準防護的潛熱）與 `evaluate_superheat_subcooling` 的露點／泡點／量測點
+  狀態點；`StateSource` 新增 `saturation`、`superheat_check`。UI 新增「飽和性質」與「過熱／過冷」
+  兩個冷凍系統路由（各自的 Reference State 選單、錶壓輸入、常用冷媒快捷、原生結構化結果），
+  冷凍循環頁只保留循環分析。狀態點尚未保存，保存與比較屬於 #10。
 - **#10 State Library + 狀態比較**：Save / Rename / Duplicate / Delete，A vs B 比較。
 
 ### 階段 3 — #11 空調側計算

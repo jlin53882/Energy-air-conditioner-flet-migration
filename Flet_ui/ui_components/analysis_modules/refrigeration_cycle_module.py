@@ -1,31 +1,24 @@
-"""冷凍循環分析：蒸氣壓縮循環（含 P-h 圖）與過熱度／過冷度判讀。
+"""冷凍循環分析：蒸氣壓縮循環（含 P-h 圖）。
 
 計算委派給 `RefrigerationService`；P-h 圖沿用既有 `generate_thermo_diagram`，
 並使用循環結果攜帶的 reference-state policy（求解時實際使用的那一個）繪製，
-不在繪圖時重新解析。
+不在繪圖時重新解析。現場過熱度／過冷度判讀已移到獨立工具
+（`superheat_subcooling_module.py`）。
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 import flet as ft
 
-from application.models import RefrigerationCycleRequest, SuperheatCheckRequest
+from application.models import RefrigerationCycleRequest
 from application.refrigeration import RefrigerationService
-from domain.refrigeration.saturation import REGION_SUBCOOLED, REGION_SUPERHEATED
 
 from ...ui.components.figure_panel import FigurePanel
-from ...ui.theme import TOKENS
-from ..unit.UnitConverter import GAUGE_PRESSURE, UnitConverter
+from ..unit.UnitConverter import UnitConverter
 from ..unit.thermo_draw.coolprop_utils import generate_thermo_diagram
 from .base_analysis_module import BaseAnalysisModule
 from .result_formatting import ResultFormatter
 
-REGION_LABELS = {
-    REGION_SUPERHEATED: "過熱蒸氣",
-    REGION_SUBCOOLED: "過冷液體",
-}
 CYCLE_STATE_LABELS = {
     "1": "1 壓縮機入口",
     "2": "2 壓縮機出口（排氣）",
@@ -38,26 +31,21 @@ class RefrigerationCycleModule(BaseAnalysisModule):
     """冷凍循環相關分析。"""
 
     def __init__(self, unit_converter: UnitConverter, page: ft.Page,
-                 refrigeration_service: RefrigerationService,
-                 pressure_from_altitude: Callable[[float], float] | None = None) -> None:
-        """建立循環與過熱度判讀表單。
+                 refrigeration_service: RefrigerationService) -> None:
+        """建立蒸氣壓縮循環表單。
 
 參數：
     unit_converter: 共用單位轉換器。
     page: Flet 頁面。
     refrigeration_service: 冷凍 application service。
-    pressure_from_altitude: 選用的「海拔（m）→ 大氣壓力（Pa）」換算；未提供時使用預設濕空氣服務。
 
 回傳：
     無。"""
-        super().__init__(unit_converter, page, refrigeration_service=refrigeration_service,
-                         pressure_from_altitude=pressure_from_altitude)
+        super().__init__(unit_converter, page, refrigeration_service=refrigeration_service)
         self.refrigeration = refrigeration_service
         self.chart_panel = FigurePanel(height=520, placeholder="執行分析後在 P-h 圖上繪製循環")
         self.cycle_ui = self._build_cycle_ui()
-        self.superheat_ui = self._build_superheat_ui()
         self.bind_independent_unit_sync(list(self.all_entries))
-        self.on_pressure_type_change(None)
 
     def get_analysis_definitions(self) -> dict:
         """回報冷凍循環分析。
@@ -70,11 +58,6 @@ class RefrigerationCycleModule(BaseAnalysisModule):
                 "ui": self.cycle_ui,
                 "calc_func": self.calculate_cycle,
                 "result_chart": self.chart_panel,
-            },
-            "過熱度／過冷度判讀": {
-                "analysis_id": "cycle.superheat_subcooling",
-                "ui": self.superheat_ui,
-                "calc_func": self.calculate_superheat,
             },
         }
 
@@ -108,50 +91,6 @@ class RefrigerationCycleModule(BaseAnalysisModule):
                 controls.append(self.section_label("系統容量"))
             controls.append(self.create_input_row(key, label, default, prop_code, unit)["ui_row"])
         return ft.Container(content=ft.Column(controls, spacing=12), visible=False)
-
-    def _build_superheat_ui(self) -> ft.Container:
-        """建立過熱度／過冷度判讀表單（支援錶壓力輸入）。
-
-回傳：
-    預設隱藏的表單容器。"""
-        self.create_text_row("sh_fluid", "冷媒", "R32", "例如 R32、R410A、R134a")
-        self.sh_pressure_type = ft.SegmentedButton(
-            allow_empty_selection=False,
-            segments=[
-                ft.Segment(value="Gauge", label=ft.Text("錶壓力 (Gauge)")),
-                ft.Segment(value="Absolute", label=ft.Text("絕對壓力 (Absolute)")),
-            ],
-            selected=["Gauge"],
-            on_change=self.on_pressure_type_change,
-        )
-        controls: list[ft.Control] = [
-            self.text_entries["sh_fluid"]["ui_row"],
-            self.section_label("現場量測"),
-            ft.Column([
-                ft.Text("壓力類型", size=TOKENS.body, weight=ft.FontWeight.W_500,
-                        color=TOKENS.text_primary),
-                self.sh_pressure_type,
-            ], spacing=6),
-            # 預設為錶壓力模式，因此量測壓力以錶壓單位（kPag、psig…）輸入。
-            self.create_input_row("sh_p", "量測壓力", "900", GAUGE_PRESSURE, "kPag")["ui_row"],
-            *self.create_atmosphere_rows("sh_alt", "sh_atm"),
-            self.create_input_row("sh_t", "量測管溫", "20", "T", "°C")["ui_row"],
-        ]
-        return ft.Container(content=ft.Column(controls, spacing=12), visible=False)
-
-    def on_pressure_type_change(self, _event: ft.ControlEvent | None) -> None:
-        """切換錶壓力／絕對壓力：量測壓力改用對應語意的單位，並維持相同的實際壓力。
-
-錶壓力模式使用錶壓單位（kPag、psig…）並顯示海拔與大氣壓力欄位；絕對壓力模式
-使用絕對單位（kPa、psia…）。大氣壓力無法解析而無法換算時，維持原模式並在大氣
-壓力欄位提示（換算規則見 ``BaseAnalysisModule.switch_pressure_basis``）。
-
-參數：
-    _event: Flet 事件；初始化時為 None。
-
-回傳：
-    無。"""
-        self.apply_pressure_basis(self.sh_pressure_type, ["sh_p"], "sh_alt", "sh_atm", self.superheat_ui)
 
     # ======================================================
     # 計算
@@ -231,32 +170,3 @@ class RefrigerationCycleModule(BaseAnalysisModule):
             figure=self.chart_panel.figure,
         )
         self.chart_panel.refresh()
-
-    def calculate_superheat(self, use_imperial: bool) -> str:
-        """依量測壓力與管溫判讀過熱度或過冷度。
-
-參數：
-    use_imperial: 是否以英制輸出。
-
-回傳：
-    格式化結果文字。"""
-        # 錶壓力只在通道層處理：application／domain 一律收到絕對壓力 Pa。
-        pressure = self.read_absolute_pressure_pa("sh_p", "sh_atm")
-        result = self.refrigeration.check_superheat(SuperheatCheckRequest(
-            fluid=self.read_text("sh_fluid"),
-            pressure_pa=pressure,
-            measured_temperature_k=self.read_si("sh_t"),
-        ))
-        formatter = ResultFormatter(self.unit_converter, use_imperial)
-        formatter.section("判讀")
-        formatter.add_text("狀態", REGION_LABELS.get(result.region, "兩相（飽和區）"))
-        if result.superheat_k is not None:
-            formatter.add("過熱度", "DeltaT", result.superheat_k, 1)
-        if result.subcooling_k is not None:
-            formatter.add("過冷度", "DeltaT", result.subcooling_k, 1)
-        formatter.section("飽和溫度")
-        formatter.add("露點（飽和蒸氣）", "T", result.dew_point_k, 1)
-        formatter.add("泡點（飽和液體）", "T", result.bubble_point_k, 1)
-        formatter.add("溫度滑移", "DeltaT", result.temperature_glide_k, 2)
-        formatter.add("絕對壓力", "P", result.pressure_pa)
-        return formatter.text()
