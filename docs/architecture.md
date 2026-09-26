@@ -37,7 +37,7 @@ channel adapters / entrypoints
 
 ### `application/`
 
-負責請求模型與 `PropertyQueryService`、`AirProcessService`（空氣處理過程）、`RefrigerationService`（冷凍循環、飽和性質、過熱度判讀與其 reference-state policy）等協調工作。它驗證請求形狀並協調領域服務。不負責呈現控制項或訊息。
+負責請求模型與 `PropertyQueryService`、`AirProcessService`（空氣處理過程）、`AirLoadService`（新風、加濕負荷與風量／冷量換算）、`RefrigerationService`（冷凍循環、飽和性質、過熱度判讀與其 reference-state policy）等協調工作。它驗證請求形狀並協調領域服務。不負責呈現控制項或訊息。
 
 `application/settings.py` 定義工作區基礎設定 `WorkspaceSettings`（預設冷媒、預設 Reference State、單位系統、大氣壓力／海拔、錶壓／絕對壓預設）與 `SettingsService`。保存透過 `DocumentStore` protocol，由組合根注入具體實作；application 不直接存取檔案系統。已保存的設定無效或版本不符時明確失敗，不以預設值覆蓋使用者的檔案。`application/state_library.py` 的 `StateLibraryService` 同樣透過 `DocumentStore` 保存使用者的狀態點（契約見 `docs/domain-contracts.md` §11）。
 

@@ -154,6 +154,29 @@ ANALYSIS_PRESENTATION: dict[str, AnalysisPresentation] = {
         "SH = T − T_dew(P);  SC = T_bubble(P) − T",
         "過熱／過冷判讀",
     ),
+    "airside.outdoor_air_load": AnalysisPresentation(
+        "把外氣處理到室內設計狀態所需的負荷（焓差法），以「外氣乾球、室內濕度比」的中間點拆成顯熱與潛熱；"
+        "正值為冷卻、負值為加熱。新風量以外氣狀態量測。",
+        "Q = ṁ(h_OA − h_room);  Q_s = ṁ(h_x − h_room);  Q_L = ṁ(h_OA − h_x)",
+        "新風負荷",
+        key_metrics=("全熱負荷", "顯熱負荷", "潛熱負荷", "新風量（外氣狀態）"),
+        chart_title="濕空氣線圖",
+    ),
+    "airside.humidification": AnalysisPresentation(
+        "加濕水量／蒸汽需求估算：以入口與設計目標的濕度比差求加濕水量，並以當地大氣壓力的水蒸發潛熱估算"
+        "蒸汽加濕熱量（下限，不含給水預熱與設備損失）。設計目標只用來取得目標濕度比，不代表實際蒸汽加濕的出口狀態或過程。",
+        "m_w = ṁ(W_target − W_in);  Q_steam = m_w · h_fg",
+        "加濕負荷",
+        key_metrics=("加濕水量", "蒸汽加濕熱量", "入口濕度比", "目標濕度比"),
+        chart_title="濕空氣線圖（入口與設計目標）",
+    ),
+    "airside.airflow_capacity": AnalysisPresentation(
+        "標準空氣快算：以固定 ρ、cp 由風量與溫差求顯熱容量（大小，不分冷卻或加熱）或反算風量。狀態精算：以進出風狀態的焓差"
+        "求全熱／顯熱／潛熱（正值為冷卻、負值為加熱），或由全熱容量（取大小）反算風量（以進風狀態比容換算）。",
+        "Q_s ≈ ρ·V·cp·ΔT;  Q = ṁ(h_in − h_out)",
+        "風量／冷量",
+        key_metrics=("顯熱容量（大小）", "風量", "全熱量", "風量（進風狀態）"),
+    ),
     "psychrometric_chart.plot": AnalysisPresentation(
         "依海拔計算大氣壓力並繪製飽和線、等相對濕度線與等焓線；乾球溫度與相對濕度以逗號分隔可標示多點。",
         None,

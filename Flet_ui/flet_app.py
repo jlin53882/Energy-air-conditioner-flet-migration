@@ -21,10 +21,12 @@ from .ui.views.saturation_view import SaturationView
 from .ui.views.state_library_view import StateLibraryView
 from .ui.views.superheat_subcooling_view import SuperheatSubcoolingView
 from .ui.views.psychrometrics_view import PsychrometricsView
+from .ui.views.air_load_view import AirLoadView
 from .ui.views.air_process_view import AirProcessView
 from .ui.views.psychrometric_chart_view import PsychrometricChartView
 from .ui.views.thermo_diagram_view import ThermoDiagramView
 from .ui.views.unit_converter_view import UnitConverterView
+from .ui_components.analysis_modules.air_load_module import AirLoadModule
 from .ui_components.analysis_modules.hvac_compressor_module import CompressorModule
 from .ui_components.analysis_modules.hvac_condenser_module import CondenserModule
 from .ui_components.analysis_modules.hvac_evaporator_module import EvaporatorModule
@@ -41,6 +43,7 @@ from .ui_components.unit.PropertyFormatter import PropertyFormatter
 from .ui_components.unit.PsychrometricCalculator import PsychrometricCalculator
 from .ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
 from .ui_components.unit.UnitConverter import UnitConverter
+from application.air_loads import AirLoadService
 from application.air_processes import AirProcessService
 from application.property_queries import PropertyQueryService
 from application.refrigeration import RefrigerationService
@@ -124,6 +127,10 @@ def main(page: ft.Page) -> None:
     air_process_module = PsyProcessModule(
         unit_converter=unit_converter, page=page, air_process_service=air_process_service
     )
+    air_load_module = AirLoadModule(
+        unit_converter=unit_converter, page=page,
+        air_load_service=AirLoadService(air_process_service, state_calculator.state_service),
+    )
     psychrometric_chart_module = PsychrometricChartModule(
         unit_converter=unit_converter, page=page, air_process_service=air_process_service
     )
@@ -137,6 +144,7 @@ def main(page: ft.Page) -> None:
     superheat_view = SuperheatSubcoolingView(superheat_module, workspace_state=workspace_state)
     psychrometrics_view = PsychrometricsView(psy_module, workspace_state=workspace_state)
     air_process_view = AirProcessView(air_process_module, workspace_state=workspace_state)
+    air_load_view = AirLoadView(air_load_module, workspace_state=workspace_state)
     psychrometric_chart_view = PsychrometricChartView(
         psychrometric_chart_module, workspace_state=workspace_state
     )
@@ -145,7 +153,7 @@ def main(page: ft.Page) -> None:
     # 使用者保存的狀態點（家目錄下的工作區資料夾）；可保存狀態點的畫面共用同一個服務。
     state_library = StateLibraryService(JsonDocumentStore(workspace_directory()))
     for view in (property_view, condenser_view, cycle_view, saturation_view, superheat_view,
-                 psychrometrics_view):
+                 psychrometrics_view, air_load_view):
         view.attach_state_library(state_library)
     state_library_view = StateLibraryView(state_library, unit_converter)
 
@@ -158,6 +166,7 @@ def main(page: ft.Page) -> None:
         "superheat_subcooling": superheat_view,
         "psychrometrics": psychrometrics_view,
         "air_processes": air_process_view,
+        "air_loads": air_load_view,
         "psychrometric_chart": psychrometric_chart_view,
     }
     # 首頁統計只使用各 dedicated view 實際註冊的分析定義數量。
@@ -194,6 +203,7 @@ def main(page: ft.Page) -> None:
         "superheat_subcooling": superheat_view,
         "psychrometrics": psychrometrics_view,
         "air_processes": air_process_view,
+        "air_loads": air_load_view,
         "ph_chart": diagram_view,
         "ts_chart": diagram_view,
         "psychrometric_chart": psychrometric_chart_view,

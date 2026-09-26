@@ -90,6 +90,14 @@ Flet 與 Telegram 負責 label、display unit、string 以及 message/control re
 
 `domain/psychrometrics/processes.py` 提供絕熱混合、顯熱加熱／冷卻、冷卻除濕與依顯熱負荷估算送風量。所有流量以乾空氣質量流率（kg/s）表示，熱量以 W 表示；過程只做質量／能量平衡，狀態一律由 `PsychrometricService` 取得。冷卻除濕以「入口乾球、出口濕度比」的中間點分解顯熱與潛熱，並忽略冷凝水焓。
 
+`domain/psychrometrics/loads.py` 提供空調側負荷（只含不需要外部規範數值的計算）。熱量符號：正值為冷卻（從空氣移除熱）、負值為加熱；顯熱與潛熱可能符號不同。
+
+- 顯熱／潛熱分解 `split_sensible_latent`：全熱 = ṁ(h_in − h_out)，以「進入乾球、離開濕度比」的中間點 x 分解，顯熱 = ṁ(h_x − h_out)、潛熱 = ṁ(h_in − h_x)，與冷卻盤管相同。乾空氣質量流率必須為正（0 或負值明確失敗；負值會讓所有符號反轉，看似正常卻錯誤）。
+- 新風負荷 `outdoor_air_load`：外氣處理到室內設計狀態，Q = ṁ(h_OA − h_room)，再依上式分解。新風量以外氣狀態量測（application 以外氣比容換算為乾空氣質量流率）。
+- 加濕負荷 `humidification_load` 是**加濕水量／蒸汽需求估算，不是加濕過程模擬**。目標 T/RH 是設計目標，只用來取得目標濕度比 W_target；本計算不以蒸汽能量平衡求解實際出口乾球溫度或相對濕度，因此設計目標不代表實際蒸汽加濕過程會到達的出口狀態。線圖上的入口與設計目標兩點僅供比較，不畫連線，不代表實際蒸汽加濕過程的軌跡。加濕水量 ṁ_w = ṁ(W_target − W_in)，目標不高於入口時為 0（不需加濕）。蒸汽加濕熱量 = ṁ_w × h_fg，h_fg 由 application 以 `saturation_properties` 查詢水在當地大氣壓力下的同壓蒸發潛熱；這是產生常壓飽和蒸汽所需熱量的下限，不含給水預熱與設備損失，不適用於滴濾、噴霧等等焓加濕。
+- 標準空氣快算 `standard_air_capacity`／`standard_air_airflow`：以固定 ρ = 1.2 kg/m³、cp = 1.006 kJ/(kg·K)，Q_s = ρ·V·cp·ΔT 或反算風量；只含顯熱，屬近似值。輸入與輸出的顯熱容量都是大小（正值），不區分冷卻或加熱，UI 標示為「顯熱容量（大小）」。
+- 狀態精算 `state_capacity_from_airflow`／`state_airflow_from_capacity`：以進出風狀態的焓差求全熱／顯熱／潛熱，或由全熱量（取正值，方向由焓差決定）反算乾空氣質量流率 ṁ = Q / |h_in − h_out|；體積風量以進風狀態比容換算。反算的輸入是全熱容量的大小（UI 標示「全熱容量（取大小）」），結果的全熱／顯熱／潛熱則保留符號（正值為冷卻、負值為加熱）。進出風焓值幾乎相同時無法反算，明確失敗。
+
 ## 9. Refrigeration cycle contract
 
 `domain/refrigeration/` 透過 `ThermodynamicStateProvider` 協定（由 `ThermodynamicStateService.calculate_state_si` 實作）取得 canonical SI 狀態，不直接呼叫 CoolProp，也不自行修改 reference state。

@@ -109,6 +109,10 @@ PR #6 已合併，以上項目皆可直接進行。PR #6 帶入的內容一併�
 
 需要規範數值的換氣量計算（ASHRAE 62.1、台灣法規）暫緩，見〈範圍外〉。
 
+**結果**：`domain/psychrometrics/loads.py`（顯熱／潛熱分解、新風負荷、加濕水量、標準空氣快算與
+狀態精算）與 `application/air_loads.AirLoadService`（蒸汽加濕熱量以 `saturation_properties` 查詢當地
+大氣壓力下水的蒸發潛熱）。UI 新增「空調負荷」路由；三項分析的空氣狀態可保存到狀態庫。
+
 ### 階段 4 — #12 批次計算與比較
 
 - 批次計算引擎：只接 domain / application 服務的結構化結果（冷凍循環、冷凝器 Exergy），
