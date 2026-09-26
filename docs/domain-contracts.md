@@ -99,7 +99,7 @@ Flet 與 Telegram 負責 label、display unit、string 以及 message/control re
   - 已知壓力：泡點與露點同壓，提供同壓下飽和液→飽和蒸氣的焓差 `enthalpy_difference(vapor, liquid)`，經基準防護相減，與 reference state 無關。
   - 已知溫度：泡點與露點壓力不同（非共沸冷媒尤其明顯），同溫不同壓兩個狀態的焓差不是潛熱，因此為 `None`；需要潛熱時以該溫度對應的壓力改用已知壓力查詢。
   高於臨界點等無法飽和的條件明確失敗。
-- `evaluate_superheat_subcooling`：以量測絕對壓力與管溫判斷過熱蒸氣、過冷液體或兩相，過熱度以露點、過冷度以泡點為基準，並回報非共沸冷媒的溫度滑移。結果附露點（`dew_state`）、泡點（`bubble_state`）狀態點，以及量測壓力與管溫對應的量測點（`measured_state`，`source=superheat_check`）。`measured_state` 只在兩種情況為 None，且都不影響判讀：量測點落在兩相區；或狀態服務無法由壓力與溫度求解（`query_state` 引發 `StateQueryError`，例如管溫與飽和溫度相差極小而無法唯一決定狀態）。狀態服務回傳的資料不合法（缺少性質、乾度或密度無效、非有限值等，`ThermoStatePoint.from_state_mapping` 引發的 `ValueError`）屬於程式錯誤，照常引發，不得降級為 None。reference state 只影響狀態點的焓、熵。
+- `evaluate_superheat_subcooling`：以量測絕對壓力與管溫判斷過熱蒸氣、過冷液體或兩相，過熱度以露點、過冷度以泡點為基準，並回報非共沸冷媒的溫度滑移。結果附露點（`dew_state`）、泡點（`bubble_state`）狀態點，以及量測壓力與管溫對應的量測點（`measured_state`，`source=superheat_check`）。`measured_state` 只在兩種情況為 None，且都不影響判讀：量測點落在兩相區；或壓力與管溫落在飽和邊界、無法唯一決定狀態（`StateAmbiguityError`）。量測點查詢的其他失敗（一般 `StateQueryError`，例如與飽和邊界無關的 backend 失敗）與狀態資料不合法（缺少性質、乾度或密度無效、非有限值等，`ThermoStatePoint.from_state_mapping` 引發的 `ValueError`）都照常引發，不得降級為 None。reference state 只影響狀態點的焓、熵。
 - `condenser_exergy_balance`／`analyze_condenser_exergy`：冷凝器的能量、熵與㶲平衡（忽略冷凝器壓降）。放熱量 `Q_H = ṁ·(h1 − h2)`，熱帶走的㶲 `Ex_Q = Q_H·(1 − T0/T_b)`，㶲破壞 `X_dest = ṁ·(ex1 − ex2) − Ex_Q = T0·S_gen`，㶲效率 `η = Ex_Q / [ṁ·(ex1 − ex2)]`。`T_b` 是熱量穿越所選分析控制邊界時的等效傳熱邊界溫度，不一定等於外部熱匯（外氣、熱水、室內空氣）的 bulk temperature：控制容積只涵蓋冷凝器本體時，`T_b` 應是該邊界對應的等效溫度，不可直接把外氣溫度當成冷凝器本體的 `T_b`；只有把分析邊界定義為「冷凝器直到最終向環境排熱的整體系統」時，`T_b = T0` 才代表熱最終排到環境（`η = 0`，冷媒減少的㶲在這個整體邊界內全部被破壞）。`T_b` 沒有預設值，必須由呼叫端依所選控制邊界明確指定。`T_b` 必須介於 `T0` 與冷媒平均放熱溫度 `(h1 − h2)/(s1 − s2)` 之間，超過上限時熵產生為負而拒絕；出口大量過冷時，平均放熱溫度可能低於飽和溫度，因此不得把飽和溫度當成預設邊界。`coolant_mean_temperature_k` 由冷卻介質（冷卻水、熱回收熱水或空冷空氣）進出口溫度計算熱力學平均溫度 `(T_out − T_in)/ln(T_out/T_in)`，可作為只涵蓋冷凝器本體時的 `T_b`；比熱視為定值時此 `T_b` 使 `Ex_Q` 等於冷卻介質獲得的㶲，`η` 即熱交換器㶲效率，且與冷卻介質流率、比熱無關；不適用於蒸發式冷凝器等有相變的冷卻介質。舊版 `condenser_heat.exergy_efficiency_condenser` 委派此函式，不再把 `T` 固定為 `T0`。
 
 狀態服務無法計算的狀態（例如高於臨界壓力）必須轉為明確的 `ValueError`，不得回傳部分結果。
@@ -122,4 +122,12 @@ Flet 與 Telegram 負責 label、display unit、string 以及 message/control re
 
 ## 11. Error contract
 
-Invalid request shape、known property 不足、invalid fluid/policy 與 unknown canonical unit 都必須明確失敗。`domain/refrigeration/states.query_state` 把狀態服務的計算失敗轉為 `StateQueryError`（`ValueError` 的子類別，既有以 `ValueError` 處理的呼叫端不受影響）；只有明確容許「狀態無法求解」的流程（目前為過熱度判讀的量測點）可以攔截它，且只能攔截它，不得以寬泛的 `ValueError` 吞掉狀態資料的契約錯誤。Compatibility facade 可以增加 channel-specific error presentation，但不得吞掉 canonical contract error，也不得默默替換成另一種 physical meaning。
+Invalid request shape、known property 不足、invalid fluid/policy 與 unknown canonical unit 都必須明確失敗。狀態查詢失敗分為三類：
+
+| 類別 | 產生處 | 例外 | 處理 |
+|---|---|---|---|
+| 已知性質無法唯一決定狀態（目前只有壓力與溫度落在飽和邊界） | `ThermodynamicStateService.calculate_state_si` 在 (P, T) 求解失敗後，以物理條件判斷：該溫度的泡點或露點飽和壓力與給定壓力的相對差不超過 `PT_SATURATION_RELATIVE_TOLERANCE`（1e-5；CoolProp 自身的拒絕門檻為 1e-6），不解析 CoolProp 錯誤文字 | 服務層 `IndeterminateStateError`（`RuntimeError` 子類別）→ `query_state` 轉為 `StateAmbiguityError`（`StateQueryError` 子類別） | 只有過熱度判讀的量測點可以攔截並略過，其他流程照常失敗 |
+| 一般狀態查詢失敗（超出適用範圍、流體無效、backend 失敗等） | 狀態服務的其他 `RuntimeError` | `query_state` 轉為 `StateQueryError`（`ValueError` 子類別，既有以 `ValueError` 處理的呼叫端不受影響） | 不得被吞掉 |
+| 狀態資料不合法 | `ThermoStatePoint.from_state_mapping` | `ValueError`（不是 `StateQueryError`） | 屬於程式錯誤，不得被吞掉 |
+
+不得以寬泛的 `ValueError`、`RuntimeError` 或 `StateQueryError` 攔截來處理「狀態無法唯一決定」。Compatibility facade 可以增加 channel-specific error presentation，但不得吞掉 canonical contract error，也不得默默替換成另一種 physical meaning。

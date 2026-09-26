@@ -19,9 +19,9 @@ from domain.refrigeration.saturation import (
     evaluate_superheat_subcooling,
     saturation_properties,
 )
-from domain.refrigeration.states import StateQueryError
+from domain.refrigeration.states import StateAmbiguityError, StateQueryError, query_state
 from domain.state_points import StatePhase, StateSource, ThermoStatePoint
-from domain.thermodynamics.state_service import ThermodynamicStateService
+from domain.thermodynamics.state_service import IndeterminateStateError, ThermodynamicStateService
 from domain.units import CanonicalUnitConverter
 from Flet_ui.flet_app import main as flet_main
 from Flet_ui.ui.navigation import ROUTES
@@ -297,21 +297,21 @@ def test_malformed_measured_state_mapping_is_not_swallowed(provider, corrupt) ->
     assert not isinstance(error.value, StateQueryError)
 
 
-def test_unsolvable_measured_state_keeps_classification(provider) -> None:
-    """狀態服務無法由壓力與溫度求解時（StateQueryError），判讀照常完成、measured_state 為 None。
+def test_ambiguous_measured_state_keeps_classification(provider) -> None:
+    """狀態服務標記量測點無法唯一決定（IndeterminateStateError）時，判讀照常完成、measured_state 為 None。
 
 回傳：
     無。"""
 
     def unsolvable(_state):
-        """模擬狀態服務無法計算。
+        """模擬狀態服務標記壓力與溫度落在飽和邊界。
 
 參數：
     _state: 真正的狀態 dict（不使用）。
 
 回傳：
     無（一律引發例外）。"""
-        raise RuntimeError("input pair is ambiguous near saturation")
+        raise IndeterminateStateError("P/T on saturation boundary")
 
     result = evaluate_superheat_subcooling(
         _MeasuredStateOverride(provider, unsolvable), "R32", 1_000_000.0, 300.0, "ASHRAE")
@@ -339,6 +339,124 @@ def test_pure_refrigerant_measurement_at_saturation_boundary(provider, side, off
 
     assert result.region == (REGION_SUPERHEATED if side == "dew" else REGION_SUBCOOLED)
     assert result.measured_state is None
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [RuntimeError("unexpected backend failure"), RuntimeError("backend initialization failed")],
+    ids=["backend-failure", "initialization-failure"],
+)
+def test_unexpected_measured_state_failure_is_not_swallowed(provider, failure) -> None:
+    """量測點查詢的其他狀態服務失敗不是飽和邊界歧義，必須往上引發，不得以 measured_state=None 成功返回。
+
+參數：
+    provider: 狀態服務。
+    failure: 狀態服務引發的例外。
+
+回傳：
+    無。"""
+
+    def broken(_state):
+        """模擬與飽和邊界無關的狀態服務失敗。
+
+參數：
+    _state: 真正的狀態 dict（不使用）。
+
+回傳：
+    無（一律引發例外）。"""
+        raise failure
+
+    with pytest.raises(StateQueryError) as error:
+        evaluate_superheat_subcooling(_MeasuredStateOverride(provider, broken), "R32", 1_000_000.0, 300.0, "ASHRAE")
+    assert not isinstance(error.value, StateAmbiguityError)
+    assert error.value.__cause__ is failure
+
+
+class _RaisingProvider:
+    """每次查詢都引發指定例外的狀態服務。"""
+
+    def __init__(self, error: Exception) -> None:
+        """記錄要引發的例外。
+
+參數：
+    error: 例外。
+
+回傳：
+    無。"""
+        self.error = error
+
+    def calculate_state_si(self, fluid, known_si, reference_state="DEF"):
+        """一律引發例外。
+
+參數：
+    fluid: 流體名稱。
+    known_si: SI 已知性質。
+    reference_state: reference-state policy。
+
+回傳：
+    無（一律引發例外）。"""
+        raise self.error
+
+
+def test_query_state_distinguishes_ambiguity_from_general_failure() -> None:
+    """query_state 把狀態服務的歧義標記轉為 StateAmbiguityError，其他失敗轉為一般 StateQueryError。
+
+回傳：
+    無。"""
+    known = [("P", 1e6), ("T", 300.0)]
+
+    with pytest.raises(StateAmbiguityError):
+        query_state(_RaisingProvider(IndeterminateStateError("boundary")), "R32", known, "ASHRAE", "量測狀態")
+    with pytest.raises(StateQueryError) as general:
+        query_state(_RaisingProvider(RuntimeError("backend")), "R32", known, "ASHRAE", "量測狀態")
+    assert not isinstance(general.value, StateAmbiguityError)
+    # 狀態服務自己的輸入錯誤不是查詢失敗，原樣引發。
+    with pytest.raises(ValueError) as invalid:
+        query_state(_RaisingProvider(ValueError("bad request")), "R32", known, "ASHRAE", "量測狀態")
+    assert not isinstance(invalid.value, StateQueryError)
+
+
+@pytest.mark.parametrize(("side", "offset_k"), [("dew", 1e-9), ("bubble", -1e-6)])
+def test_state_service_marks_pt_saturation_boundary_as_indeterminate(provider, side, offset_k) -> None:
+    """狀態服務以物理條件（飽和壓力與給定壓力的相對差）把飽和邊界上的 (P, T) 失敗標記為 IndeterminateStateError。
+
+參數：
+    provider: 狀態服務。
+    side: 靠近露點或泡點。
+    offset_k: 與飽和溫度的差（K）。
+
+回傳：
+    無。"""
+    pressure = 1_000_000.0
+    temperature = _coolprop("T", "P", pressure, "Q", 1 if side == "dew" else 0, "R32") + offset_k
+
+    with pytest.raises(IndeterminateStateError):
+        provider.calculate_state_si("R32", [("P", pressure), ("T", temperature)], "ASHRAE")
+
+
+@pytest.mark.parametrize(
+    ("fluid", "known"),
+    [
+        ("R32", [("P", -1.0), ("T", 300.0)]),
+        ("R32X", [("P", 1e6), ("T", 300.0)]),
+        ("R32", [("P", 1e6), ("T", 50.0)]),
+        ("R32", [("T", 400.0), ("Q", 0.0)]),
+    ],
+    ids=["negative-pressure", "unknown-fluid", "below-triple-point", "supercritical-saturation"],
+)
+def test_state_service_does_not_mark_other_failures_as_indeterminate(provider, fluid, known) -> None:
+    """與飽和邊界無關的計算失敗仍是一般 RuntimeError，不被分類為無法唯一決定。
+
+參數：
+    provider: 狀態服務。
+    fluid: 流體名稱。
+    known: SI 已知性質。
+
+回傳：
+    無。"""
+    with pytest.raises(RuntimeError) as error:
+        provider.calculate_state_si(fluid, known, "ASHRAE")
+    assert not isinstance(error.value, IndeterminateStateError)
 
 
 def test_state_query_error_is_a_value_error(provider) -> None:

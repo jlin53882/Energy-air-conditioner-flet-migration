@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from domain.thermodynamics.reference_state import ReferenceStatePolicy
+from domain.thermodynamics.state_service import IndeterminateStateError
 
 
 class StateQueryError(ValueError):
@@ -17,6 +18,15 @@ class StateQueryError(ValueError):
 
     只由 :func:`query_state` 引發；狀態資料本身不合法（缺少性質、數值無效等）不屬於此類，
     仍以一般 ``ValueError`` 引發。繼承 ``ValueError``，既有以 ``ValueError`` 處理的呼叫端不受影響。
+    """
+
+
+class StateAmbiguityError(StateQueryError):
+    """已知性質無法唯一決定狀態（目前為壓力與溫度落在飽和邊界）。
+
+    由狀態服務以 :class:`~domain.thermodynamics.state_service.IndeterminateStateError` 標記，
+    :func:`query_state` 轉為此型別。只有明確容許「狀態無法唯一決定」的流程可以攔截它；
+    一般 :class:`StateQueryError` 不得被吞掉。
     """
 
 
@@ -51,8 +61,13 @@ def query_state(
     狀態 dict。
 
 引發：
-    StateQueryError：狀態服務無法計算時。"""
+    StateAmbiguityError：狀態服務表示已知性質無法唯一決定狀態時。
+    StateQueryError：狀態服務因其他原因無法計算時。"""
     try:
         return provider.calculate_state_si(fluid, known_si, reference_state)
+    except IndeterminateStateError as exc:
+        raise StateAmbiguityError(
+            f"{description}無法由已知性質唯一決定（接近飽和邊界）：{exc}"
+        ) from exc
     except RuntimeError as exc:
         raise StateQueryError(f"無法計算{description}，請確認流體與溫度／壓力是否在適用範圍：{exc}") from exc

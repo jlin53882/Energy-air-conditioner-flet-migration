@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from domain.state_points import StateSource, ThermoStatePoint, enthalpy_difference
 from domain.thermodynamics.reference_state import ReferenceStatePolicy, normalize_reference_state_policy
 
-from .states import StateQueryError, ThermodynamicStateProvider, query_state
+from .states import StateAmbiguityError, ThermodynamicStateProvider, query_state
 
 REGION_SUPERHEATED = "superheated_vapor"
 REGION_SUBCOOLED = "subcooled_liquid"
@@ -143,9 +143,9 @@ class SaturationCheckResult:
     """量測點相對於飽和狀態的判讀。
 
     ``dew_state``／``bubble_state`` 是量測壓力下的飽和蒸氣與飽和液體狀態點；
-    ``measured_state`` 是量測壓力與管溫對應的狀態點，量測點落在兩相區，或狀態服務
-    無法由壓力與溫度求解（太接近飽和而無法唯一決定）時為 None；狀態服務回傳的資料
-    不合法時不會降級為 None，而是引發 ValueError。
+    ``measured_state`` 是量測壓力與管溫對應的狀態點，量測點落在兩相區，或壓力與溫度
+    落在飽和邊界而無法唯一決定狀態（``StateAmbiguityError``）時為 None；其他查詢失敗
+    （``StateQueryError``）與狀態資料不合法（``ValueError``）照常引發，不降級為 None。
     """
 
     fluid: str
@@ -251,9 +251,9 @@ def evaluate_superheat_subcooling(
             measured_mapping = query_state(
                 provider, fluid, [("P", pressure_pa), ("T", measured_temperature_k)], reference_state,
                 "量測狀態")
-        except StateQueryError:
-            # 只容許狀態服務無法由壓力與溫度求解（管溫極接近飽和溫度時無法唯一決定狀態）；
-            # 判讀結果不受影響。狀態資料不合法等其他錯誤照常引發。
+        except StateAmbiguityError:
+            # 只容許壓力與溫度落在飽和邊界、無法唯一決定狀態；判讀結果不受影響。
+            # 其他查詢失敗（StateQueryError）與狀態資料不合法（ValueError）照常引發。
             measured_mapping = None
         if measured_mapping is not None:
             measured_state = point(measured_mapping, "measured", "量測點")
