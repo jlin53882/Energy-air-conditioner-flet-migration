@@ -3,8 +3,39 @@
 import flet as ft
 import flet_charts as fch
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
 
 from ..theme import TOKENS
+
+# 常見作業系統內建或常裝的中文字型；Matplotlib 預設字型（DejaVu Sans）沒有中文字，
+# 圖表標題與座標軸的中文會變成方框。
+CJK_FONT_CANDIDATES = (
+    "Microsoft JhengHei", "Microsoft YaHei", "PingFang TC", "Heiti TC",
+    "Noto Sans CJK TC", "Noto Sans TC", "Source Han Sans TC", "WenQuanYi Zen Hei", "WenQuanYi Zen Hei Mono",
+)
+
+
+def use_cjk_fallback_fonts(installed: set[str] | None = None) -> list[str]:
+    """把已安裝的中文字型接在 Matplotlib ``font.family`` 之後，作為逐字的備援字型。
+
+Matplotlib 只在 ``font.family`` 的各個項目之間逐字備援（``sans-serif`` 這類通用字族只會解析成
+一個字型），因此中文字型必須加在 ``font.family``：拉丁字母與符號仍用原字族，中文字找不到
+字形時依序改用清單中的中文字型。可重複呼叫。
+
+參數：
+    installed: 已安裝字型名稱；None 時由 Matplotlib 字型管理器查詢（供測試注入）。
+
+回傳：
+    設定後的 ``font.family``。"""
+    if installed is None:
+        installed = {font.name for font in font_manager.fontManager.ttflist}
+    families = [name for name in plt.rcParams["font.family"] if name not in CJK_FONT_CANDIDATES]
+    families += [name for name in CJK_FONT_CANDIDATES if name in installed]
+    plt.rcParams["font.family"] = families
+    return families
+
+
+use_cjk_fallback_fonts()
 
 
 class FigurePanel(ft.Container):

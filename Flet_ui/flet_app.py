@@ -22,11 +22,13 @@ from .ui.views.state_library_view import StateLibraryView
 from .ui.views.superheat_subcooling_view import SuperheatSubcoolingView
 from .ui.views.psychrometrics_view import PsychrometricsView
 from .ui.views.air_load_view import AirLoadView
+from .ui.views.batch_view import BatchView
 from .ui.views.air_process_view import AirProcessView
 from .ui.views.psychrometric_chart_view import PsychrometricChartView
 from .ui.views.thermo_diagram_view import ThermoDiagramView
 from .ui.views.unit_converter_view import UnitConverterView
 from .ui_components.analysis_modules.air_load_module import AirLoadModule
+from .ui_components.analysis_modules.batch_module import BatchModule
 from .ui_components.analysis_modules.hvac_compressor_module import CompressorModule
 from .ui_components.analysis_modules.hvac_condenser_module import CondenserModule
 from .ui_components.analysis_modules.hvac_evaporator_module import EvaporatorModule
@@ -44,6 +46,7 @@ from .ui_components.unit.PsychrometricCalculator import PsychrometricCalculator
 from .ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
 from .ui_components.unit.UnitConverter import UnitConverter
 from application.air_loads import AirLoadService
+from application.batch import BatchService
 from application.air_processes import AirProcessService
 from application.property_queries import PropertyQueryService
 from application.refrigeration import RefrigerationService
@@ -121,6 +124,9 @@ def main(page: ft.Page) -> None:
         refrigeration_service=refrigeration_service,
         pressure_from_altitude=pressure_from_altitude,
     )
+    batch_module = BatchModule(
+        unit_converter=unit_converter, page=page, batch_service=BatchService(refrigeration_service)
+    )
     psy_module = PsyModule(unit_converter=unit_converter, page=page, psy_calculator=psy_calculator)
     # 空氣處理與濕空氣線圖共用同一個 application service。
     air_process_service = AirProcessService(psy_calculator.service)
@@ -142,6 +148,7 @@ def main(page: ft.Page) -> None:
     cycle_view = RefrigerationCycleView(cycle_module, workspace_state=workspace_state)
     saturation_view = SaturationView(saturation_module, workspace_state=workspace_state)
     superheat_view = SuperheatSubcoolingView(superheat_module, workspace_state=workspace_state)
+    batch_view = BatchView(batch_module, workspace_state=workspace_state)
     psychrometrics_view = PsychrometricsView(psy_module, workspace_state=workspace_state)
     air_process_view = AirProcessView(air_process_module, workspace_state=workspace_state)
     air_load_view = AirLoadView(air_load_module, workspace_state=workspace_state)
@@ -164,6 +171,7 @@ def main(page: ft.Page) -> None:
         "refrigeration_cycle": cycle_view,
         "saturation": saturation_view,
         "superheat_subcooling": superheat_view,
+        "batch": batch_view,
         "psychrometrics": psychrometrics_view,
         "air_processes": air_process_view,
         "air_loads": air_load_view,
@@ -201,6 +209,7 @@ def main(page: ft.Page) -> None:
         "refrigeration_cycle": cycle_view,
         "saturation": saturation_view,
         "superheat_subcooling": superheat_view,
+        "batch": batch_view,
         "psychrometrics": psychrometrics_view,
         "air_processes": air_process_view,
         "air_loads": air_load_view,

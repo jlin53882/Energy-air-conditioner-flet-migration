@@ -57,6 +57,10 @@ ROUTES = (
         description="以現場量測壓力（錶壓或絕對）與管溫判讀過熱度或過冷度。",
     ),
     WorkspaceRoute(
+        "batch", "批次與比較", "冷凍系統", "QUERY_STATS",
+        description="冷凍循環與冷凝器 Exergy 的參數掃描、冷媒比較與敏感度分析（龍捲風圖）。",
+    ),
+    WorkspaceRoute(
         "psychrometrics", "濕空氣性質", "空氣處理", "AIR_OUTLINED",
         description="依海拔與乾濕球溫度或相對濕度計算濕空氣完整性質。",
     ),

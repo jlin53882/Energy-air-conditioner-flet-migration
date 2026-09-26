@@ -33,11 +33,11 @@ channel adapters / entrypoints
 
 負責規範性的物理量、單位定義、熱力學計算、HVAC 方程式、濕空氣中立結果模型，以及程序全域的參考狀態政策。它不知道 Flet 控制項、Telegram 更新或顯示格式。
 
-`domain/refrigeration/` 負責蒸氣壓縮循環、飽和性質、過熱度／過冷度判讀與冷凝器能量／熵／㶲平衡，透過 `ThermodynamicStateProvider` 協定取得 canonical SI 狀態；`domain/psychrometrics/processes.py` 負責空氣處理過程的質量／能量平衡。`domain/state_points/` 定義跨工具共用的 `ThermoStatePoint`／`AirStatePoint`、基準防護與序列化（契約見 `docs/domain-contracts.md` §10）；`domain/schema.py` 提供可保存文件共用的 schema 種類與版本檢查。
+`domain/refrigeration/` 負責蒸氣壓縮循環、飽和性質、過熱度／過冷度判讀與冷凝器能量／熵／㶲平衡，透過 `ThermodynamicStateProvider` 協定取得 canonical SI 狀態；`domain/psychrometrics/processes.py` 負責空氣處理過程的質量／能量平衡。`domain/state_points/` 定義跨工具共用的 `ThermoStatePoint`／`AirStatePoint`、基準防護與序列化（契約見 `docs/domain-contracts.md` §10）；`domain/schema.py` 提供可保存文件共用的 schema 種類與版本檢查。`domain/batch.py` 是與計算無關的批次引擎（參數掃描、類別維度比較、單因子敏感度），只處理「輸入 dict → 計算函式 → 數值指標」（契約見 `docs/domain-contracts.md` §13）。
 
 ### `application/`
 
-負責請求模型與 `PropertyQueryService`、`AirProcessService`（空氣處理過程）、`AirLoadService`（新風、加濕負荷與風量／冷量換算）、`RefrigerationService`（冷凍循環、飽和性質、過熱度判讀與其 reference-state policy）等協調工作。它驗證請求形狀並協調領域服務。不負責呈現控制項或訊息。
+負責請求模型與 `PropertyQueryService`、`AirProcessService`（空氣處理過程）、`AirLoadService`（新風、加濕負荷與風量／冷量換算）、`RefrigerationService`（冷凍循環、飽和性質、過熱度判讀與其 reference-state policy）、`BatchService`（把冷凍循環與冷凝器 Exergy 的結構化結果接上批次引擎，做參數掃描、冷媒比較與敏感度分析）等協調工作。它驗證請求形狀並協調領域服務。不負責呈現控制項或訊息。
 
 `application/settings.py` 定義工作區基礎設定 `WorkspaceSettings`（預設冷媒、預設 Reference State、單位系統、大氣壓力／海拔、錶壓／絕對壓預設）與 `SettingsService`。保存透過 `DocumentStore` protocol，由組合根注入具體實作；application 不直接存取檔案系統。已保存的設定無效或版本不符時明確失敗，不以預設值覆蓋使用者的檔案。`application/state_library.py` 的 `StateLibraryService` 同樣透過 `DocumentStore` 保存使用者的狀態點（契約見 `docs/domain-contracts.md` §11）。
 
