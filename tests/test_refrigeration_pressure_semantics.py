@@ -7,7 +7,7 @@ import pytest
 from application.refrigeration import RefrigerationService
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units.converter import CanonicalUnitConverter
-from Flet_ui.ui_components.analysis_modules.refrigeration_cycle_module import RefrigerationCycleModule
+from Flet_ui.ui_components.analysis_modules.superheat_subcooling_module import SuperheatSubcoolingModule
 from Flet_ui.ui_components.unit.UnitConverter import (
     ABSOLUTE_TO_GAUGE_UNIT,
     GAUGE_PRESSURE,
@@ -60,12 +60,12 @@ class RecordingRefrigerationService(RefrigerationService):
 
 @pytest.fixture
 def module_and_service():
-    """建立使用記錄服務的冷凍循環模組。
+    """建立使用記錄服務的過熱度／過冷度判讀模組。
 
 回傳：
-    (RefrigerationCycleModule, RecordingRefrigerationService)。"""
+    (SuperheatSubcoolingModule, RecordingRefrigerationService)。"""
     service = RecordingRefrigerationService()
-    module = RefrigerationCycleModule(UnitConverter(), DummyPage(), service)
+    module = SuperheatSubcoolingModule(UnitConverter(), DummyPage(), service)
     return module, service
 
 
@@ -73,7 +73,7 @@ def _set(module, key: str, value: str, unit: str | None = None) -> None:
     """設定輸入列的數值（與選用的單位，不經換算）。
 
 參數：
-    module: 冷凍循環模組。
+    module: 過熱度／過冷度判讀模組。
     key: 輸入列識別鍵。
     value: 數值文字。
     unit: 選用的單位。
@@ -91,7 +91,7 @@ def _switch_mode(module, mode: str) -> None:
     """以使用者操作的方式切換壓力類型。
 
 參數：
-    module: 冷凍循環模組。
+    module: 過熱度／過冷度判讀模組。
     mode: "Gauge" 或 "Absolute"。
 
 回傳：
@@ -104,7 +104,7 @@ def _select_unit(module, key: str, unit: str) -> None:
     """以使用者操作的方式切換輸入列單位（觸發單位換算處理器）。
 
 參數：
-    module: 冷凍循環模組。
+    module: 過熱度／過冷度判讀模組。
     key: 輸入列識別鍵。
     unit: 新單位。
 

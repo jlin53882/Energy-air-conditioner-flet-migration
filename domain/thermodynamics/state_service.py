@@ -12,6 +12,26 @@ from .reference_state import ReferenceStatePolicy, ReferenceStateService
 
 KnownProperty = tuple[str, float, str]
 
+# 壓力與溫度落在飽和邊界的判定容差（相對壓力差）。CoolProp 在 |p_sat(T) − p| / p 小於
+# 1e-6（「within 1e-4 %」）時拒絕以 (P, T) 求解；此處放寬為 1e-5，只作為失敗後的分類依據。
+PT_SATURATION_RELATIVE_TOLERANCE = 1e-5
+
+
+class IndeterminateStateError(RuntimeError):
+    """已知性質無法唯一決定狀態：目前只有「壓力與溫度落在飽和邊界」一種。
+
+    繼承 ``RuntimeError``，維持狀態服務「無法計算時引發 RuntimeError」的既有契約；
+    其他計算失敗仍是一般 ``RuntimeError``。
+    """
+
+
+class CoolPropStateCalculationError(RuntimeError):
+    """CoolProp 無法由已知性質求出熱力狀態（內部使用）。
+
+    只包裝狀態求解本身（``PropsSI``／``PhaseSI``）引發的 ``ValueError``；reference-state 設定、
+    同步鎖與其他內部錯誤不屬於此類。只有此類失敗才會交給飽和邊界分類判斷。
+    """
+
 
 class ThermodynamicStateService:
     """使用 canonical SI inputs 與 outputs 計算 thermodynamic states。"""
@@ -132,14 +152,54 @@ transaction 中完成。
 
 引發：
     ValueError：已知性質少於兩組時。
-    RuntimeError：CoolProp 無法計算此狀態時。"""
+    IndeterminateStateError：CoolProp 狀態求解本身失敗，且已知性質為壓力與溫度、經物理條件確認
+    兩者落在飽和邊界（無法唯一決定狀態）時。
+    RuntimeError：其他計算失敗時，包括 reference-state 設定失敗等內部錯誤；即使輸入剛好接近
+    飽和也不歸類為 IndeterminateStateError。"""
         known = list(known_si)
         if len(known) < 2:
             raise ValueError("請至少提供兩組已知的性質。")
+        fluid = fluid.strip()
         try:
-            return self._calculate_coolprop(fluid.strip(), known[:2], reference_state)
+            return self._calculate_coolprop(fluid, known[:2], reference_state)
         except Exception as exc:
-            raise RuntimeError(f"在計算 '{fluid}' 的性質時發生錯誤: {exc}") from exc
+            message = f"在計算 '{fluid}' 的性質時發生錯誤: {exc}"
+            # 只有「狀態求解本身失敗」且 (P, T) 經物理條件確認落在飽和邊界，才是無法唯一決定狀態；
+            # reference-state 設定或其他內部錯誤即使輸入剛好接近飽和，也不重新分類。
+            if isinstance(exc, CoolPropStateCalculationError) and self._is_pt_on_saturation_boundary(
+                fluid, known[:2]
+            ):
+                raise IndeterminateStateError(message) from exc
+            raise RuntimeError(message) from exc
+
+    def _is_pt_on_saturation_boundary(self, fluid: str, known_si: Sequence[tuple[str, float]]) -> bool:
+        """判斷一次失敗的 (P, T) 查詢是否因兩者落在飽和邊界（無法唯一決定狀態）。
+
+以物理條件判斷，不解析 CoolProp 的錯誤文字：該溫度的泡點（Q = 0）或露點（Q = 1）
+飽和壓力與給定壓力的相對差在 ``PT_SATURATION_RELATIVE_TOLERANCE`` 之內。飽和壓力與
+reference state 無關。
+
+參數：
+    fluid: CoolProp 流體名稱。
+    known_si: 查詢使用的兩組 (性質代碼, SI 數值)。
+
+回傳：
+    是飽和邊界歧義時為 True；其他情況（含無法計算飽和壓力，例如流體無效或高於臨界溫度）為 False。"""
+        values = dict(known_si)
+        if set(values) != {"P", "T"}:
+            return False
+        pressure, temperature = values["P"], values["T"]
+        if not pressure > 0 or not temperature > 0:
+            return False
+        try:
+            with self.reference_state.calculation_scope(fluid):
+                saturation_pressures = [CP.PropsSI("P", "T", temperature, "Q", q, fluid) for q in (0, 1)]
+        except Exception:
+            return False
+        return any(
+            abs(saturation - pressure) <= PT_SATURATION_RELATIVE_TOLERANCE * pressure
+            for saturation in saturation_pressures
+        )
 
     def _calculate_coolprop(
         self,
@@ -160,15 +220,20 @@ transaction 中完成。
             prop1, value1 = known_props_si[0]
             prop2, value2 = known_props_si[1]
             result: dict[str, float | str] = {}
-            for property_code in self.PROPERTIES:
-                if property_code == "V":
-                    density = CP.PropsSI("D", prop1, value1, prop2, value2, fluid)
-                    result[property_code] = 1.0 / density if density else float("inf")
-                else:
-                    result[property_code] = CP.PropsSI(
-                        property_code, prop1, value1, prop2, value2, fluid
-                    )
-            result["phase"] = CP.PhaseSI(prop1, value1, prop2, value2, fluid)
+            try:
+                for property_code in self.PROPERTIES:
+                    if property_code == "V":
+                        density = CP.PropsSI("D", prop1, value1, prop2, value2, fluid)
+                        result[property_code] = 1.0 / density if density else float("inf")
+                    else:
+                        result[property_code] = CP.PropsSI(
+                            property_code, prop1, value1, prop2, value2, fluid
+                        )
+                result["phase"] = CP.PhaseSI(prop1, value1, prop2, value2, fluid)
+            except ValueError as exc:
+                # CoolProp 以 ValueError 回報無法求解；只包裝狀態求解本身，reference-state
+                # 設定（calculation_scope 進入時）與其他例外維持原樣。
+                raise CoolPropStateCalculationError(str(exc)) from exc
             return result
 
     def _calculate_ideal_gas(

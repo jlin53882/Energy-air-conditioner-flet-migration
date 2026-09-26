@@ -180,9 +180,8 @@ def test_superheat_tool_converts_gauge_pressure(shell) -> None:
 
 回傳：
     無。"""
-    shell.navigate("refrigeration_cycle")
-    view = shell.views["refrigeration_cycle"]
-    view._handle_tool_change("cycle.superheat_subcooling")
+    shell.navigate("superheat_subcooling")
+    view = shell.views["superheat_subcooling"]
     module = view.adapter.modules[0]
 
     view.perform_calculation(None)

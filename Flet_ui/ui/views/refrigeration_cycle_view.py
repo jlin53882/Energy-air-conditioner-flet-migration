@@ -1,4 +1,4 @@
-"""蒸氣壓縮冷凍循環與過熱度／過冷度判讀的 dedicated workspace view。"""
+"""蒸氣壓縮冷凍循環的 dedicated workspace view。"""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class RefrigerationCycleView(DedicatedAnalysisView):
         """
         super().__init__(
             title="冷凍循環",
-            subtitle="蒸氣壓縮循環 COP 與 P-h 圖，以及現場過熱度／過冷度判讀",
+            subtitle="蒸氣壓縮循環 COP、流量與 P-h 圖",
             modules=[module],
             workspace_state=workspace_state,
         )

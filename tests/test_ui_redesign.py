@@ -399,6 +399,22 @@ def test_structured_from_text_defaults_and_single_result() -> None:
     assert single.groups == ()
 
 
+def test_native_structured_analyses_do_not_declare_key_metrics() -> None:
+    """提供原生結構化結果的分析自行決定關鍵數值；說明表不得再宣告 key_metrics，避免與畫面不一致。
+
+回傳：
+    無。"""
+    shell = _build_shell()
+    native = [
+        definition.key
+        for view in _analysis_views(shell).values()
+        for definition in view.adapter.definitions
+        if definition.structured_result
+    ]
+    assert {"refrigerant.saturation", "refrigerant.superheat_subcooling"} <= set(native)
+    assert [key for key in native if ANALYSIS_PRESENTATION[key].key_metrics] == []
+
+
 def test_every_analysis_with_declared_key_metrics_finds_them() -> None:
     """每個宣告關鍵數值的分析，以預設輸入計算後至少能找到一個宣告的名稱。
 

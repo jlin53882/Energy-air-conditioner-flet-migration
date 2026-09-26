@@ -133,7 +133,8 @@ def _plotted_line_count(figure) -> int:
     ("route_key", "analysis_key"),
     [
         ("refrigeration_cycle", "cycle.vapor_compression"),
-        ("refrigeration_cycle", "cycle.superheat_subcooling"),
+        ("superheat_subcooling", "refrigerant.superheat_subcooling"),
+        ("saturation", "refrigerant.saturation"),
         ("condenser", "condenser.exergy"),
         ("air_processes", "psychrometrics.cooling_coil"),
         ("psychrometric_chart", "psychrometric_chart.plot"),
@@ -305,7 +306,8 @@ def test_editing_input_on_every_analysis_view_invalidates_result(shell) -> None:
 
 回傳：
     無。"""
-    for route_key in ("compressor", "evaporator", "condenser", "refrigeration_cycle",
+    for route_key in ("compressor", "evaporator", "condenser", "refrigeration_cycle", "saturation",
+                      "superheat_subcooling",
                       "psychrometrics", "air_processes", "psychrometric_chart"):
         shell.navigate(route_key)
         view = shell.views[route_key]
@@ -334,7 +336,9 @@ def test_unit_dropdown_and_pressure_basis_do_not_invalidate_result(shell) -> Non
     assert view.result_panel.status == "success"
     assert float(module.all_entries["cyc_te"]["val"].value) == pytest.approx(41.0)
 
-    view._handle_tool_change("cycle.superheat_subcooling")
+    shell.navigate("superheat_subcooling")
+    view = shell.views["superheat_subcooling"]
+    module = view.adapter.modules[0]
     view.perform_calculation(None)
     module.sh_pressure_type.selected = ["Absolute"]
     module.sh_pressure_type.on_change(SimpleNamespace(control=module.sh_pressure_type))
@@ -457,9 +461,8 @@ def test_gauge_reading_is_kept_when_atmospheric_pressure_changes(shell) -> None:
 
 回傳：
     無。"""
-    shell.navigate("refrigeration_cycle")
-    view = shell.views["refrigeration_cycle"]
-    view._handle_tool_change("cycle.superheat_subcooling")
+    shell.navigate("superheat_subcooling")
+    view = shell.views["superheat_subcooling"]
     module = view.adapter.modules[0]
 
     module.all_entries["sh_atm"]["val"].value = "95"
@@ -475,16 +478,15 @@ def test_gauge_pressure_is_consistent_across_navigation_and_unit_switch(shell) -
 
 回傳：
     無。"""
-    shell.navigate("refrigeration_cycle")
-    view = shell.views["refrigeration_cycle"]
-    view._handle_tool_change("cycle.superheat_subcooling")
+    shell.navigate("superheat_subcooling")
+    view = shell.views["superheat_subcooling"]
     module = view.adapter.modules[0]
     view.perform_calculation(None)
     assert "1001.33 kPa" in view.adapter.result_text
 
     shell.navigate("compressor")
     _switch_unit_system(shell, "Imperial")
-    shell.navigate("refrigeration_cycle")
+    shell.navigate("superheat_subcooling")
 
     assert module.all_entries["sh_p"]["val"].value == "900"
     assert module.all_entries["sh_p"]["unit"].value == "kPag"
@@ -499,10 +501,9 @@ def _superheat_module(shell):
     shell: 工作區外殼。
 
 回傳：
-    (RefrigerationCycleView, RefrigerationCycleModule)。"""
-    shell.navigate("refrigeration_cycle")
-    view = shell.views["refrigeration_cycle"]
-    view._handle_tool_change("cycle.superheat_subcooling")
+    (SuperheatSubcoolingView, SuperheatSubcoolingModule)。"""
+    shell.navigate("superheat_subcooling")
+    view = shell.views["superheat_subcooling"]
     return view, view.adapter.modules[0]
 
 
@@ -547,7 +548,8 @@ def test_invalid_altitude_keeps_atmospheric_pressure_and_names_error(shell) -> N
 @pytest.mark.parametrize(
     ("route_key", "analysis_key", "toggle_name", "altitude_key", "atm_key"),
     [
-        ("refrigeration_cycle", "cycle.superheat_subcooling", "sh_pressure_type", "sh_alt", "sh_atm"),
+        ("superheat_subcooling", "refrigerant.superheat_subcooling", "sh_pressure_type", "sh_alt", "sh_atm"),
+        ("saturation", "refrigerant.saturation", "sat_pressure_type", "sat_alt", "sat_atm"),
         ("compressor", "compressor.compression_ratio", "cr_pressure_type_toggle", "cr_alt", "cr_atm_p"),
         ("condenser", "condenser.exergy", "cx_pressure_type", "cx_alt", "cx_atm"),
     ],
@@ -994,7 +996,8 @@ def test_compression_ratio_pressure_basis_with_invalid_input(shell, monkeypatch,
 @pytest.mark.parametrize(
     ("route_key", "analysis_key", "toggle_name", "pressure_key", "label"),
     [
-        ("refrigeration_cycle", "cycle.superheat_subcooling", "sh_pressure_type", "sh_p", "量測壓力"),
+        ("superheat_subcooling", "refrigerant.superheat_subcooling", "sh_pressure_type", "sh_p", "量測壓力"),
+        ("saturation", "refrigerant.saturation", "sat_pressure_type", "sat_p", "飽和壓力"),
         ("condenser", "condenser.exergy", "cx_pressure_type", "cx_p", "冷凝壓力"),
     ],
 )

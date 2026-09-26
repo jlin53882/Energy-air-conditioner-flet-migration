@@ -13,6 +13,8 @@ class StateSource(str, Enum):
     PROPERTY_QUERY = "property_query"
     REFRIGERATION_CYCLE = "refrigeration_cycle"
     CONDENSER_EXERGY = "condenser_exergy"
+    SATURATION = "saturation"
+    SUPERHEAT_CHECK = "superheat_check"
     PSYCHROMETRICS = "psychrometrics"
     AIR_PROCESS = "air_process"
     MANUAL = "manual"
