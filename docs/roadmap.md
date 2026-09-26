@@ -92,6 +92,12 @@ PR #6 已合併，以上項目皆可直接進行。PR #6 帶入的內容一併�
   冷凍循環頁只保留循環分析。狀態點尚未保存，保存與比較屬於 #10。
 - **#10 State Library + 狀態比較**：Save / Rename / Duplicate / Delete，A vs B 比較。
 
+  **結果**：`domain/state_library.py`（保存清單與 schema 文件）、`domain/state_points/comparison.py`
+  （B − A 比較，焓熵基準防護）、`application/state_library.StateLibraryService`（寫入成功才更新、
+  檔案無效時不覆蓋）與家目錄下的工作區資料夾（`HVAC_WORKSPACE_DIR` 可覆寫）。UI 新增「狀態庫」
+  路由；飽和性質、過熱／過冷、冷凍循環、冷凝器 Exergy、狀態查詢與濕空氣性質頁可保存狀態點。
+  跨工具傳遞、匯入匯出仍屬〈範圍外〉。
+
 ### 階段 3 — #11 空調側計算
 
 可與階段 1、2 並行（修改範圍為 `domain/psychrometrics/`、空氣處理模組）。

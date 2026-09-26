@@ -49,6 +49,7 @@ class SuperheatSubcoolingModule(BaseAnalysisModule):
                          pressure_from_altitude=pressure_from_altitude)
         self.refrigeration = refrigeration_service
         self.last_structured_result: StructuredResult | None = None
+        self.last_result: SaturationCheckResult | None = None
         self.superheat_ui = self._build_superheat_ui()
         self.bind_independent_unit_sync(list(self.all_entries))
         self.on_pressure_type_change(None)
@@ -64,8 +65,20 @@ class SuperheatSubcoolingModule(BaseAnalysisModule):
                 "ui": self.superheat_ui,
                 "calc_func": self.calculate_superheat,
                 "structured_result": lambda: self.last_structured_result,
+                "state_points": self._state_points,
             },
         }
+
+    def _state_points(self) -> tuple:
+        """回傳最近一次成功判讀可保存的狀態點（露點、泡點，以及有值時的量測點）。
+
+回傳：
+    ThermoStatePoint tuple；尚未計算時為空。"""
+        if self.last_result is None:
+            return ()
+        points = (self.last_result.dew_state, self.last_result.bubble_state)
+        measured = self.last_result.measured_state
+        return points if measured is None else points + (measured,)
 
     # ======================================================
     # 表單
@@ -128,6 +141,7 @@ class SuperheatSubcoolingModule(BaseAnalysisModule):
 回傳：
     格式化結果文字。"""
         self.last_structured_result = None
+        self.last_result = None
         # 錶壓力只在通道層處理：application／domain 一律收到絕對壓力 Pa。
         pressure = self.read_absolute_pressure_pa("sh_p", "sh_atm")
         result = self.refrigeration.check_superheat(SuperheatCheckRequest(
@@ -136,6 +150,7 @@ class SuperheatSubcoolingModule(BaseAnalysisModule):
             measured_temperature_k=self.read_si("sh_t"),
             reference_state=self.sh_ref_state.value,
         ))
+        self.last_result = result
         self.last_structured_result = self._build_structured(result, use_imperial)
         formatter = ResultFormatter(self.unit_converter, use_imperial)
         formatter.section("判讀")

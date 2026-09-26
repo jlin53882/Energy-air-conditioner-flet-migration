@@ -53,6 +53,7 @@ class SaturationModule(BaseAnalysisModule):
                          pressure_from_altitude=pressure_from_altitude)
         self.refrigeration = refrigeration_service
         self.last_structured_result: StructuredResult | None = None
+        self.last_result: SaturationPropertiesResult | None = None
         self.saturation_ui = self._build_ui()
         self.bind_independent_unit_sync(list(self.all_entries))
         self.on_pressure_type_change(None)
@@ -68,6 +69,9 @@ class SaturationModule(BaseAnalysisModule):
                 "ui": self.saturation_ui,
                 "calc_func": self.calculate_saturation,
                 "structured_result": lambda: self.last_structured_result,
+                "state_points": lambda: (
+                    (self.last_result.liquid, self.last_result.vapor) if self.last_result else ()
+                ),
             },
         }
 
@@ -182,6 +186,7 @@ class SaturationModule(BaseAnalysisModule):
 回傳：
     格式化結果文字。"""
         self.last_structured_result = None
+        self.last_result = None
         known = self.known
         if known == KNOWN_PRESSURE:
             request = SaturationPropertiesRequest(
@@ -196,6 +201,7 @@ class SaturationModule(BaseAnalysisModule):
                 reference_state=self.sat_ref_state.value,
             )
         result = self.refrigeration.saturation_properties(request)
+        self.last_result = result
         self.last_structured_result = self._build_structured(result, use_imperial)
         return self._format_text(result, use_imperial)
 

@@ -13,6 +13,7 @@ import flet as ft
 from ..analysis_module_adapter import AnalysisModuleAdapter
 from ..analysis_presentation import presentation_for
 from ..components.analysis_workspace import AnalysisWorkspace
+from ..components.state_save_menu import StateSaveMenu
 from ..components.tool_selector import ToolSelector
 from ..state import WorkspaceState
 from ..structured_result import structured_from_text
@@ -87,8 +88,22 @@ class DedicatedAnalysisView(ft.Column):
             show_execute_button=self.adapter.active_definition.show_execute_button,
             show_tool_selector=len(tool_items) > 1,
         )
+        # 「儲存狀態點」選單放在結果區動作列；連接 State Library 前保持隱藏。
+        self.save_menu = StateSaveMenu()
+        self.workspace.result_view.actions_row.controls.insert(1, self.save_menu)
         self.controls = [self.workspace]
         self._sync_presentation()
+
+    def attach_state_library(self, service) -> None:
+        """連接 State Library：提供 ``state_points`` 的分析在成功計算後可保存狀態點。
+
+參數：
+    service: :class:`~application.state_library.StateLibraryService`。
+
+回傳：
+    無。"""
+        self.save_menu.attach(service)
+        self._show_result()
 
     @staticmethod
     def _short_label(key: str, label: str) -> str:
@@ -142,6 +157,11 @@ class DedicatedAnalysisView(ft.Column):
         self.workspace.show_result(
             self.adapter.result_text, chart=definition.result_chart, structured=structured
         )
+        # 只在成功狀態列出狀態點；失效、錯誤或切換分析時隱藏，避免保存舊結果。
+        if self.adapter.result_panel.status == "success" and definition.state_points:
+            self.save_menu.show_points(definition.state_points())
+        else:
+            self.save_menu.hide()
 
     @property
     def active_key(self) -> str:

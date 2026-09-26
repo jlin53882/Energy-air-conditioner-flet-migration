@@ -15,10 +15,12 @@ from ..ui_components.unit.UnitConverter import UnitConverter
 from ..ui_components.unit.PropertyFormatter import PropertyFormatter
 from application.models import PropertyQueryRequest
 from application.property_queries import PropertyQueryService
+from domain.state_points import StateSource, ThermoStatePoint
 from domain.thermodynamics.fluid_policy import resolve_reference_state_policy
 from ..ui.components.engineering_card import EngineeringCard
 from ..ui.components.quantity_input import QuantityInput
 from ..ui.components.result_panel import ResultPanel
+from ..ui.components.state_save_menu import StateSaveMenu
 from ..ui.theme import (
     TOKENS,
     card_shadow,
@@ -308,6 +310,9 @@ class PropertyTab(ft.Column):
             "複製結果", icon=ft.Icons.CONTENT_COPY, on_click=self._copy_result, disabled=True,
             style=secondary_button_style(),
         )
+        # 「儲存狀態點」選單；連接 State Library 且有成功查詢結果時才顯示。
+        self.save_menu = StateSaveMenu()
+        self._last_state_point: ThermoStatePoint | None = None
         configuration = EngineeringCard(
             "計算設定",
             ft.Column(
@@ -388,7 +393,8 @@ class PropertyTab(ft.Column):
             ft.Column([
                 self.result_panel,
                 self.result_summary_box,
-                ft.Row([self.details_button, ft.Container(expand=True), self.copy_result_button],
+                ft.Row([self.details_button, self.save_menu, ft.Container(expand=True),
+                        self.copy_result_button],
                        vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 self.raw_output_box,
             ], spacing=TOKENS.spacing_sm + 4),
@@ -587,6 +593,39 @@ class PropertyTab(ft.Column):
         except RuntimeError:
             pass
 
+    def attach_state_library(self, service) -> None:
+        """連接 State Library：成功查詢後可把狀態保存到狀態庫。
+
+參數：
+    service: :class:`~application.state_library.StateLibraryService`。
+
+回傳：
+    無。"""
+        self.save_menu.attach(service)
+        self.save_menu.show_points((self._last_state_point,) if self._last_state_point else ())
+
+    @staticmethod
+    def _state_point_from_results(
+        si_results: dict[str, object], fluid: str, reference_state: str, is_ideal_gas: bool
+    ) -> ThermoStatePoint | None:
+        """由查詢結果建立可保存的狀態點；結果無法構成有效狀態點時回傳 None（不影響查詢結果顯示）。
+
+參數：
+    si_results: 查詢服務回傳的 canonical SI 結果。
+    fluid: 流體名稱。
+    reference_state: 查詢時實際使用的 policy code。
+    is_ideal_gas: 是否為理想氣體模型（不提供比熵）。
+
+回傳：
+    ThermoStatePoint 或 None。"""
+        try:
+            return ThermoStatePoint.from_state_mapping(
+                si_results, fluid=fluid, reference_state=reference_state,
+                source=StateSource.PROPERTY_QUERY, label="狀態查詢", is_ideal_gas=is_ideal_gas,
+            )
+        except ValueError:
+            return None
+
     def _clear_result_presentation_snapshot(self) -> None:
         """清除結果快照及其所有可複製、摘要與詳細資料投影。
 
@@ -608,6 +647,8 @@ class PropertyTab(ft.Column):
         self.details_button.icon = ft.Icons.UNFOLD_MORE
         self.details_button.disabled = True
         self.copy_result_button.disabled = True
+        self._last_state_point = None
+        self.save_menu.hide()
         self.result_panel.metrics = {}
         self.result_panel.metadata = {}
         self._sync_result_boxes()
@@ -754,6 +795,7 @@ class PropertyTab(ft.Column):
         self.result_text.visible = True
         self.details_button.disabled = False
         self.copy_result_button.disabled = False
+        self.save_menu.show_points((self._last_state_point,) if self._last_state_point else ())
         self._sync_result_boxes()
 
     def _format_result_metrics(self, si_results: dict[str, object], use_imperial: bool) -> dict[str, str]:
@@ -1172,17 +1214,19 @@ class PropertyTab(ft.Column):
         # 6. 執行核心熱力學計算
         try:
             # 執行計算，將前兩個輸入性質傳遞給核心計算器
+            resolved_policy = resolve_reference_state_policy(fluid, self.ref_state_dd.value.split(" ")[0])
             si_results = self.query_service.query(
                 PropertyQueryRequest(
                     fluid,
                     tuple(known_props[:2]),
                     is_ideal,
-                    resolve_reference_state_policy(
-                        fluid, self.ref_state_dd.value.split(" ")[0]
-                    ),
+                    resolved_policy,
                 )
             )
             
+            self._last_state_point = self._state_point_from_results(
+                si_results, fluid, resolved_policy, is_ideal
+            )
             self._last_si_results = si_results
             self._last_total_mass_kg = total_mass_kg
             self._has_calculated_result = True

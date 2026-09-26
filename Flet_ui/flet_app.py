@@ -18,6 +18,7 @@ from .ui.views.evaporator_view import EvaporatorView
 from .ui.views.condenser_view import CondenserView
 from .ui.views.refrigeration_cycle_view import RefrigerationCycleView
 from .ui.views.saturation_view import SaturationView
+from .ui.views.state_library_view import StateLibraryView
 from .ui.views.superheat_subcooling_view import SuperheatSubcoolingView
 from .ui.views.psychrometrics_view import PsychrometricsView
 from .ui.views.air_process_view import AirProcessView
@@ -43,6 +44,8 @@ from .ui_components.unit.UnitConverter import UnitConverter
 from application.air_processes import AirProcessService
 from application.property_queries import PropertyQueryService
 from application.refrigeration import RefrigerationService
+from application.state_library import StateLibraryService
+from infrastructure.storage import JsonDocumentStore, workspace_directory
 
 
 def main(page: ft.Page) -> None:
@@ -139,6 +142,13 @@ def main(page: ft.Page) -> None:
     )
     diagram_view = ThermoDiagramView(diagram_module)
 
+    # 使用者保存的狀態點（家目錄下的工作區資料夾）；可保存狀態點的畫面共用同一個服務。
+    state_library = StateLibraryService(JsonDocumentStore(workspace_directory()))
+    for view in (property_view, condenser_view, cycle_view, saturation_view, superheat_view,
+                 psychrometrics_view):
+        view.attach_state_library(state_library)
+    state_library_view = StateLibraryView(state_library, unit_converter)
+
     analysis_views = {
         "compressor": compressor_view,
         "evaporator": evaporator_view,
@@ -174,6 +184,7 @@ def main(page: ft.Page) -> None:
     )
     views = {
         "home": home_view,
+        "state_library": state_library_view,
         "thermo_properties": property_view,
         "compressor": compressor_view,
         "evaporator": evaporator_view,
@@ -198,6 +209,7 @@ def main(page: ft.Page) -> None:
 回傳：
     無。"""
         property_view.set_output_unit_system(unit_system)
+        state_library_view.set_output_unit_system(unit_system)
         for view in analysis_views.values():
             view.set_output_unit_system(unit_system)
 

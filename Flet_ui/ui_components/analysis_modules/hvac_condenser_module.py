@@ -40,6 +40,7 @@ class CondenserModule(BaseAnalysisModule):
         self._build_qc_ui()
         self._setup_unit_sync()
         self.exergy_ui = self._build_exergy_ui()
+        self.last_exergy_result = None
         
         
     def get_analysis_definitions(self) -> dict:
@@ -53,6 +54,10 @@ class CondenserModule(BaseAnalysisModule):
                 "analysis_id": "condenser.exergy",
                 "ui": self.exergy_ui,
                 "calc_func": self.calculate_exergy,
+                "state_points": lambda: (
+                    (self.last_exergy_result.inlet, self.last_exergy_result.outlet)
+                    if self.last_exergy_result else ()
+                ),
             },
         }
 
@@ -294,6 +299,7 @@ class CondenserModule(BaseAnalysisModule):
 
 回傳：
     格式化結果文字。"""
+        self.last_exergy_result = None
         dead_state_k = self.read_si("cx_t0")
         from_coolant = self._boundary_is_custom() and self._boundary_from_coolant()
         if not self._boundary_is_custom():
@@ -313,6 +319,7 @@ class CondenserModule(BaseAnalysisModule):
             boundary_temperature_k=boundary_k,
             reference_state=self.cx_ref_state.value,
         ))
+        self.last_exergy_result = result
         balance = result.balance
         formatter = ResultFormatter(self.unit_converter, use_imperial)
         formatter.section("Exergy 平衡")
