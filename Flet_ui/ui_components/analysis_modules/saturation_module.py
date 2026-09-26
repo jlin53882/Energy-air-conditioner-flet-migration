@@ -26,6 +26,11 @@ KNOWN_LABELS = {
     KNOWN_PRESSURE: "已知壓力",
     KNOWN_TEMPERATURE: "已知溫度",
 }
+# 分段按鈕位於窄輸入欄，使用短標籤；欄名已說明為「已知飽和條件」。
+KNOWN_SEGMENT_LABELS = {
+    KNOWN_PRESSURE: "壓力",
+    KNOWN_TEMPERATURE: "溫度",
+}
 
 
 class SaturationModule(BaseAnalysisModule):
@@ -80,8 +85,8 @@ class SaturationModule(BaseAnalysisModule):
         self.sat_known = ft.SegmentedButton(
             allow_empty_selection=False,
             segments=[
-                ft.Segment(value=KNOWN_PRESSURE, label=ft.Text(KNOWN_LABELS[KNOWN_PRESSURE])),
-                ft.Segment(value=KNOWN_TEMPERATURE, label=ft.Text(KNOWN_LABELS[KNOWN_TEMPERATURE])),
+                ft.Segment(value=KNOWN_PRESSURE, label=ft.Text(KNOWN_SEGMENT_LABELS[KNOWN_PRESSURE])),
+                ft.Segment(value=KNOWN_TEMPERATURE, label=ft.Text(KNOWN_SEGMENT_LABELS[KNOWN_TEMPERATURE])),
             ],
             selected=[KNOWN_PRESSURE],
             on_change=self.on_known_change,
@@ -231,9 +236,14 @@ class SaturationModule(BaseAnalysisModule):
             ResultMetric(label, *formatter.parts(prop_code, value, digits))
             for label, prop_code, value, digits in self._summary_items(result)
         )
+        # 數值欄使用等寬數字字型，只放數值與代碼；中文說明放在名稱欄。
+        if result.known == KNOWN_PRESSURE:
+            known_row = PropertyRow("已知飽和壓力（絕對）", *formatter.parts("P", result.liquid.pressure_pa))
+        else:
+            known_row = PropertyRow("已知飽和溫度", *formatter.parts("T", result.liquid.temperature_k))
         inputs = PropertyGroup("輸入", (
             PropertyRow("冷媒", result.fluid),
-            PropertyRow("已知條件", KNOWN_LABELS[result.known]),
+            known_row,
             PropertyRow("參考狀態", result.reference_state),
         ), highlighted=True)
         return StructuredResult(

@@ -143,13 +143,13 @@ ANALYSIS_PRESENTATION: dict[str, AnalysisPresentation] = {
     "refrigerant.saturation": AnalysisPresentation(
         "已知絕對壓力（可輸入錶壓）或飽和溫度，查詢飽和液體（泡點）與飽和蒸氣（露點）的完整性質；"
         "非共沸冷媒顯示溫度滑移或泡點／露點壓力差。",
-        "h_fg = h_vapor(Q=1) − h_liquid(Q=0)，滑移 = T_dew − T_bubble",
+        "h_fg = h_vapor(Q=1) − h_liquid(Q=0);  glide = T_dew − T_bubble",
         "飽和性質",
         key_metrics=("泡點溫度", "露點溫度", "溫度滑移", "蒸發潛熱 h_fg"),
     ),
     "refrigerant.superheat_subcooling": AnalysisPresentation(
         "以量測壓力與管溫判讀過熱度（相對露點）或過冷度（相對泡點），並顯示非共沸冷媒的溫度滑移。",
-        "SH = T − T_dew(P)，SC = T_bubble(P) − T",
+        "SH = T − T_dew(P);  SC = T_bubble(P) − T",
         "過熱／過冷判讀",
         key_metrics=("狀態", "過熱度", "過冷度", "絕對壓力", "溫度滑移"),
     ),

@@ -372,7 +372,7 @@ def test_saturation_page_converts_gauge_pressure_and_shows_structured_result(she
     assert kpis["泡點溫度"] == (f"{bubble_c:.2f}", "°C")
     latent = (_coolprop("H", "P", absolute, "Q", 1, "R32") - _coolprop("H", "P", absolute, "Q", 0, "R32")) / 1000
     assert kpis["蒸發潛熱 h_fg"] == (f"{latent:.2f}", "kJ/kg")
-    assert _group(view, "輸入") == {"冷媒": "R32", "已知條件": "已知壓力", "參考狀態": "ASHRAE"}
+    assert _group(view, "輸入") == {"冷媒": "R32", "已知飽和壓力（絕對）": "1001.33", "參考狀態": "ASHRAE"}
     liquid = _group(view, "飽和液體（泡點）")
     assert liquid["絕對壓力"] == "1001.33"
     assert list(liquid) == ["溫度", "絕對壓力", "比焓 h", "比熵 s", "密度 ρ", "比容 v"]
@@ -500,8 +500,10 @@ def test_superheat_page_shows_structured_result_with_state_points(shell) -> None
 
     assert view.result_panel.status == "success", view.result_panel.message
     kpis = _kpis(view)
-    assert list(kpis) == ["狀態", "過熱度", "絕對壓力", "溫度滑移"]
-    assert kpis["狀態"][0] == "過熱蒸氣"
+    assert list(kpis) == ["過熱蒸氣・過熱度", "露點溫度", "絕對壓力", "溫度滑移"]
+    assert kpis["過熱蒸氣・過熱度"][1] == "K"
+    dew_c = _coolprop("T", "P", 900_000.0 + STANDARD_ATMOSPHERE_PA, "Q", 1, "R32") - 273.15
+    assert kpis["露點溫度"] == (f"{dew_c:.1f}", "°C")
     assert kpis["絕對壓力"] == ("1001.33", "kPa")
     titles = [group.title for group in view.workspace.result_view.property_table.groups]
     assert titles == ["量測", "露點（飽和蒸氣）", "泡點（飽和液體）", "量測點"]
@@ -527,8 +529,7 @@ def test_superheat_page_two_phase_measurement(shell) -> None:
     view.perform_calculation(None)
 
     kpis = _kpis(view)
-    assert kpis["狀態"][0] == "兩相（飽和區）"
-    assert kpis["過熱度／過冷度"][0] == "—"
+    assert kpis["兩相（飽和區）・無過熱／過冷"][0] == "—"
     titles = [group.title for group in view.workspace.result_view.property_table.groups]
     assert "量測點" not in titles
 
@@ -540,7 +541,7 @@ def test_superheat_page_uses_its_own_reference_state(shell) -> None:
     無。"""
     view, module = _open(shell, "superheat_subcooling")
     view.perform_calculation(None)
-    superheat = _kpis(view)["過熱度"]
+    superheat = _kpis(view)["過熱蒸氣・過熱度"]
     enthalpy = _group(view, "露點（飽和蒸氣）")["比焓 h"]
 
     module.sh_ref_state.value = "IIR"
@@ -550,7 +551,7 @@ def test_superheat_page_uses_its_own_reference_state(shell) -> None:
 
     assert _group(view, "量測")["參考狀態"] == "IIR"
     assert _group(view, "露點（飽和蒸氣）")["比焓 h"] != enthalpy
-    assert _kpis(view)["過熱度"] == superheat
+    assert _kpis(view)["過熱蒸氣・過熱度"] == superheat
 
 
 def test_state_point_table_values_match_the_state_point(shell, provider) -> None:

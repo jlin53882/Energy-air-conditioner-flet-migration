@@ -162,15 +162,18 @@ class SuperheatSubcoolingModule(BaseAnalysisModule):
     StructuredResult。"""
         formatter = ResultFormatter(self.unit_converter, use_imperial)
         region_label = REGION_LABELS.get(result.region, TWO_PHASE_LABEL)
+        # 關鍵數值的數值使用等寬數字字型，判讀狀態放在名稱中，數值只放數字。
         if result.superheat_k is not None:
-            degree = ResultMetric("過熱度", *formatter.parts("DeltaT", result.superheat_k, 1))
+            degree = ResultMetric(f"{region_label}・過熱度",
+                                  *formatter.parts("DeltaT", result.superheat_k, 1))
         elif result.subcooling_k is not None:
-            degree = ResultMetric("過冷度", *formatter.parts("DeltaT", result.subcooling_k, 1))
+            degree = ResultMetric(f"{region_label}・過冷度",
+                                  *formatter.parts("DeltaT", result.subcooling_k, 1))
         else:
-            degree = ResultMetric("過熱度／過冷度", "—")
+            degree = ResultMetric(f"{region_label}・無過熱／過冷", "—")
         key_metrics = (
-            ResultMetric("狀態", region_label),
             degree,
+            ResultMetric("露點溫度", *formatter.parts("T", result.dew_point_k, 1)),
             ResultMetric("絕對壓力", *formatter.parts("P", result.pressure_pa)),
             ResultMetric("溫度滑移", *formatter.parts("DeltaT", result.temperature_glide_k, 2)),
         )
