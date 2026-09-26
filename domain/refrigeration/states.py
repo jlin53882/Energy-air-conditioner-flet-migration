@@ -1,9 +1,11 @@
-"""冷凍計算共用的狀態查詢協定與狀態點模型。"""
+"""冷凍計算共用的狀態查詢協定。
+
+狀態點模型為 :class:`domain.state_points.ThermoStatePoint`。
+"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Protocol
 
 from domain.thermodynamics.reference_state import ReferenceStatePolicy
@@ -18,42 +20,6 @@ class ThermodynamicStateProvider(Protocol):
         known_si: Sequence[tuple[str, float]],
         reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
     ) -> Mapping[str, float | str]: ...
-
-
-@dataclass(frozen=True)
-class CycleState:
-    """循環中的一個狀態點（canonical SI）。"""
-
-    key: str
-    label: str
-    pressure_pa: float
-    temperature_k: float
-    enthalpy_j_kg: float
-    entropy_j_kgk: float
-    density_kg_m3: float
-    quality: float
-
-    @classmethod
-    def from_mapping(cls, key: str, label: str, state: Mapping[str, float | str]) -> "CycleState":
-        """由狀態服務回傳的 dict 建立狀態點。
-
-參數：
-    key: 穩定狀態鍵，例如 "1"、"2s"。
-    label: 顯示用說明。
-    state: calculate_state_si 回傳的 dict。
-
-回傳：
-    CycleState。"""
-        return cls(
-            key=key,
-            label=label,
-            pressure_pa=float(state["P"]),
-            temperature_k=float(state["T"]),
-            enthalpy_j_kg=float(state["H"]),
-            entropy_j_kgk=float(state["S"]),
-            density_kg_m3=float(state["D"]),
-            quality=float(state["Q"]),
-        )
 
 
 def query_state(

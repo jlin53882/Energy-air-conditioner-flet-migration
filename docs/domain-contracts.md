@@ -100,6 +100,22 @@ Flet 與 Telegram 負責 label、display unit、string 以及 message/control re
 
 狀態服務無法計算的狀態（例如高於臨界壓力）必須轉為明確的 `ValueError`，不得回傳部分結果。
 
-## 10. Error contract
+循環與冷凝器 Exergy 的狀態點是 `ThermoStatePoint`（見 §10），帶有流體、求解時實際使用的 reference state 與來源；冷凍效果與冷凝器㶲平衡的焓差、熵差都經基準防護後才相減。
+
+## 10. State point contract
+
+`domain/state_points/` 定義跨工具共用的狀態點，全部使用 canonical SI。
+
+- `ThermoStatePoint`（冷媒／工作流體）：`fluid`、`reference_state`、`pressure_pa`、`temperature_k`、`enthalpy_j_kg`、`entropy_j_kgk`、`density_kg_m3`、`quality`、`source`、`is_ideal_gas`，以及選填的 `key`、`label`。
+  - `reference_state` 必須是求解時實際使用的明確 policy code（`DEF`、`ASHRAE`、`IIR`、`NBP`，別名會正規化）；不接受 `Auto` 或 `CURRENT`。
+  - 乾度 `quality`：-1 為 CoolProp 單相標記（過冷液、過熱蒸氣或超臨界）；0–1 為合法乾度範圍；其他數值屬於無效狀態點資料，建立或讀取時一律拒絕。
+  - 比容 `specific_volume_m3_kg` 與相態 `phase` 由其他欄位推導，不另外保存：乾度 0 為飽和液、1 為飽和蒸氣、介於兩者之間為兩相、-1 為單相。
+  - 冷凍循環的冷凍效果、壓縮功與冷凝放熱，都以 `enthalpy_difference` 由循環狀態點相減。
+  - 焓、熵的絕對值取決於 reference state。流體、reference state 或性質模型（CoolProp／理想氣體）不同的狀態點不得直接比較或相減；必須使用 `enthalpy_difference`／`entropy_difference`，基準不同時引發 `StateBasisMismatchError`。理想氣體模型不提供比熵，熵差明確失敗。
+- `AirStatePoint`（濕空氣）：海拔、大氣壓力、乾球／濕球／露點溫度、相對濕度（0–1 分率）、濕度比、每公斤乾空氣的比焓與比容，以及 `source`、`label`。濕空氣使用濕空氣模型固定的基準，與冷媒狀態點是不同型別，兩者共用 `StatePoint` protocol（`source`、`label`、`to_dict()`）。
+- `source` 是 `StateSource` 列舉（`property_query`、`refrigeration_cycle`、`condenser_exergy`、`psychrometrics`、`air_process`、`manual`），值會寫入保存的文件，不得任意更名。
+- 序列化：`to_dict()` 產生含 `schema`（`thermo_state_point`／`air_state_point`）與整數 `schema_version` 的標準 JSON 相容 dict；`from_dict()` 與 `state_point_from_dict()` 在種類不符、版本較新或較舊、欄位缺漏或多出、數值無效時明確失敗，不猜測資料意義（`domain/schema.py`）。
+
+## 11. Error contract
 
 Invalid request shape、known property 不足、invalid fluid/policy 與 unknown canonical unit 都必須明確失敗。Compatibility facade 可以增加 channel-specific error presentation，但不得吞掉 canonical contract error，也不得默默替換成另一種 physical meaning。

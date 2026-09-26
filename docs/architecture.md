@@ -33,15 +33,19 @@ channel adapters / entrypoints
 
 負責規範性的物理量、單位定義、熱力學計算、HVAC 方程式、濕空氣中立結果模型，以及程序全域的參考狀態政策。它不知道 Flet 控制項、Telegram 更新或顯示格式。
 
-`domain/refrigeration/` 負責蒸氣壓縮循環、過熱度／過冷度判讀與冷凝器能量／熵／㶲平衡，透過 `ThermodynamicStateProvider` 協定取得 canonical SI 狀態；`domain/psychrometrics/processes.py` 負責空氣處理過程的質量／能量平衡。
+`domain/refrigeration/` 負責蒸氣壓縮循環、過熱度／過冷度判讀與冷凝器能量／熵／㶲平衡，透過 `ThermodynamicStateProvider` 協定取得 canonical SI 狀態；`domain/psychrometrics/processes.py` 負責空氣處理過程的質量／能量平衡。`domain/state_points/` 定義跨工具共用的 `ThermoStatePoint`／`AirStatePoint`、基準防護與序列化（契約見 `docs/domain-contracts.md` §10）；`domain/schema.py` 提供可保存文件共用的 schema 種類與版本檢查。
 
 ### `application/`
 
 負責請求模型與 `PropertyQueryService`、`AirProcessService`（空氣處理過程）、`RefrigerationService`（冷凍循環、過熱度判讀與其 reference-state policy）等協調工作。它驗證請求形狀並協調領域服務。不負責呈現控制項或訊息。
 
+`application/settings.py` 定義工作區基礎設定 `WorkspaceSettings`（預設冷媒、預設 Reference State、單位系統、大氣壓力／海拔、錶壓／絕對壓預設）與 `SettingsService`。保存透過 `DocumentStore` protocol，由組合根注入具體實作；application 不直接存取檔案系統。已保存的設定無效或版本不符時明確失敗，不以預設值覆蓋使用者的檔案。
+
 ### `infrastructure/`
 
 負責不屬於領域契約的具體整合。被排除的舊版濕空氣實作會在此透過 `LegacyPsychrometricModelAdapter` 存取。
+
+`infrastructure/storage/JsonDocumentStore` 是 `DocumentStore` 的 JSON 檔實作：每份文件存成 `<name>.json`，名稱只允許小寫英數、底線與連字號；寫入先寫暫存檔再原子替換；讀寫都只接受標準 JSON，拒絕 NaN／Infinity，錯誤一律以 `ValueError` 回報。`domain/` 與 `application/` 不得匯入 `infrastructure/`（由 `tests/test_settings_storage.py` 檢查）。
 
 ### `Flet_ui/`
 

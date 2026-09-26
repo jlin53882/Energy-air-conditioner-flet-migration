@@ -28,9 +28,10 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from domain.thermodynamics.reference_state import ReferenceStatePolicy
+from domain.state_points import StateSource, ThermoStatePoint, require_same_basis
+from domain.thermodynamics.reference_state import ReferenceStatePolicy, normalize_reference_state_policy
 
-from .states import CycleState, ThermodynamicStateProvider, query_state
+from .states import ThermodynamicStateProvider, query_state
 
 # 判斷熵產生是否為負時容許的相對浮點誤差。
 _ENTROPY_TOLERANCE = 1e-9
@@ -146,8 +147,8 @@ class CondenserExergyResult:
 
     fluid: str
     pressure_pa: float
-    inlet: CycleState
-    outlet: CycleState
+    inlet: ThermoStatePoint
+    outlet: ThermoStatePoint
     dew_point_k: float
     bubble_point_k: float
     mass_flow_kg_s: float
@@ -195,12 +196,19 @@ def analyze_condenser_exergy(
         raise ValueError("壓力與溫度必須是有效的絕對值（壓力請使用絕對壓力）。")
     if inlet_temperature_k <= outlet_temperature_k:
         raise ValueError("冷凝器入口溫度必須高於出口溫度。")
-    inlet = CycleState.from_mapping("1", "冷凝器入口", query_state(
+    resolved_policy = normalize_reference_state_policy(reference_state)
+    inlet = ThermoStatePoint.from_state_mapping(query_state(
         provider, fluid, [("P", pressure_pa), ("T", inlet_temperature_k)], reference_state,
-        "冷凝器入口狀態（溫度不可剛好等於飽和溫度）"))
-    outlet = CycleState.from_mapping("2", "冷凝器出口", query_state(
+        "冷凝器入口狀態（溫度不可剛好等於飽和溫度）"),
+        fluid=fluid, reference_state=resolved_policy, source=StateSource.CONDENSER_EXERGY,
+        key="1", label="冷凝器入口")
+    outlet = ThermoStatePoint.from_state_mapping(query_state(
         provider, fluid, [("P", pressure_pa), ("T", outlet_temperature_k)], reference_state,
-        "冷凝器出口狀態（溫度不可剛好等於飽和溫度）"))
+        "冷凝器出口狀態（溫度不可剛好等於飽和溫度）"),
+        fluid=fluid, reference_state=resolved_policy, source=StateSource.CONDENSER_EXERGY,
+        key="2", label="冷凝器出口")
+    # 㶲平衡只使用進出口的焓差與熵差，兩端必須是同一基準。
+    require_same_basis(inlet, outlet)
     dew = query_state(provider, fluid, [("P", pressure_pa), ("Q", 1.0)], reference_state, "露點飽和溫度")
     bubble = query_state(provider, fluid, [("P", pressure_pa), ("Q", 0.0)], reference_state, "泡點飽和溫度")
     balance = condenser_exergy_balance(
