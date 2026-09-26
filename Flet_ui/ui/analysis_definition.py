@@ -20,6 +20,8 @@ from dataclasses import dataclass
 
 import flet as ft
 
+from domain.state_library import SavedPoint
+
 from .structured_result import StructuredResult
 
 
@@ -43,7 +45,8 @@ class AnalysisDefinition:
             :class:`~Flet_ui.ui.structured_result.StructuredResult`（關鍵數值、
             性質表與計算過程）；未提供時結果區由文字投影分組指標。
         state_points: 選用的無參數函式，回傳最近一次成功計算可保存到 State Library
-            的狀態點（``ThermoStatePoint``／``AirStatePoint``）；未提供時不顯示儲存選單。
+            的狀態點（只能是 ``ThermoStatePoint``／``AirStatePoint``，其他型別在顯示儲存選單時
+            以 ``TypeError`` 立即失敗）；未提供時不顯示儲存選單。
     """
 
     key: str
@@ -53,7 +56,7 @@ class AnalysisDefinition:
     show_execute_button: bool = True
     result_chart: ft.Control | None = None
     structured_result: Callable[[], StructuredResult | None] | None = None
-    state_points: Callable[[], Sequence[object]] | None = None
+    state_points: Callable[[], Sequence[SavedPoint]] | None = None
 
 
 def definitions_from_module(module: object) -> list[AnalysisDefinition]:

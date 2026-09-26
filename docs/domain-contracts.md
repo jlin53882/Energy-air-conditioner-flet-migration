@@ -133,7 +133,13 @@ Flet 與 Telegram 負責 label、display unit、string 以及 message/control re
   - 濕空氣：乾球、濕球、露點溫度、相對濕度、濕度比、比焓與比容（每公斤乾空氣）、大氣壓力與海拔直接相減；濕空氣模型的基準固定。
   - 冷媒與濕空氣狀態不能互相比較（`StateBasisMismatchError`）。
 
-`application/state_library.StateLibraryService` 透過注入的 `DocumentStore` 保存文件 `state_library`：每次變更先寫入、成功後才更新記憶體並通知訂閱者；寫入失敗以 `ValueError` 回報且清單不變。已保存的文件無效（損壞、版本較新）時記錄 `load_error`、清單視為空，並拒絕所有寫入，不以空清單覆蓋使用者的檔案。
+`application/state_library.StateLibraryService` 透過注入的 `DocumentStore` 保存文件 `state_library`：
+
+- 每次變更先寫入、成功後才更新記憶體並通知訂閱者；寫入失敗以 `ValueError` 回報且清單不變。
+- 讀取失敗：文件損壞、schema 種類或版本不支援，或檔案系統讀取錯誤（`OSError`，例如權限不足、路徑是資料夾）時，狀態庫視為不可用：記錄 `load_error`、清單為空、拒絕所有寫入，原始資料保留、不被覆蓋。只有儲存層回傳「文件不存在」（`None`）才視為空的新狀態庫，讀取錯誤不得當成不存在。狀態庫是附加功能，讀取失敗不影響應用程式啟動與其他計算工具。
+- 批次保存 `save_many(points)`：在 `state_library` 文件層級全有或全無。先建立全部項目再寫入一次；任一狀態點無效或寫入失敗時一筆都不新增（檔案與記憶體不變、不通知訂閱者），成功時只寫入一次、通知一次。UI 的「儲存狀態點」（含「全部儲存」）一律經由此方法。
+- 訂閱者（例如狀態庫畫面重新整理）在寫入成功後才被通知；訂閱者失敗只記錄在 log，不回滾也不使已完成的變更看起來失敗，並繼續通知其他訂閱者。
+- 可保存的只有 `ThermoStatePoint` 與 `AirStatePoint`（`domain.state_library.SavedPoint`）；分析定義的 `state_points` 使用同一型別，回傳其他物件屬於程式錯誤，在顯示儲存選單時以 `TypeError` 立即失敗。
 
 ## 12. Error contract
 

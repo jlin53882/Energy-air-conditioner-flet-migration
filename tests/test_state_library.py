@@ -842,3 +842,284 @@ def test_unreadable_library_file_blocks_saving_and_is_reported(isolated_workspac
     assert library.service.entries == ()
     assert path.read_text(encoding="utf-8") == "{broken"
     plt.close("all")
+
+
+# ======================================================
+# Review hardening：讀檔失敗、批次保存、訂閱者隔離、state_points 契約
+# ======================================================
+class _UnreadableStore:
+    """讀取時發生檔案系統錯誤的儲存；記錄是否被寫入。"""
+
+    def __init__(self, error: OSError) -> None:
+        """記錄要引發的讀取錯誤。
+
+參數：
+    error: 讀取時引發的例外。
+
+回傳：
+    無。"""
+        self.error = error
+        self.writes = 0
+
+    def read(self, name):
+        """一律引發讀取錯誤。
+
+參數：
+    name: 文件名稱。
+
+回傳：
+    無（一律引發例外）。"""
+        raise self.error
+
+    def write(self, name, document):
+        """記錄寫入次數（不應被呼叫）。
+
+參數：
+    name: 文件名稱。
+    document: 內容。
+
+回傳：
+    無。"""
+        self.writes += 1
+
+
+@pytest.mark.parametrize(
+    "error",
+    [PermissionError("permission denied"), IsADirectoryError("is a directory"), OSError("I/O error")],
+    ids=["permission", "directory", "io"],
+)
+def test_filesystem_read_failure_makes_library_unavailable_not_fatal(error) -> None:
+    """讀取狀態庫時的檔案系統錯誤不讓服務建立失敗：清單為空、記錄原因、拒絕所有寫入。
+
+參數：
+    error: 讀取時的錯誤。
+
+回傳：
+    無。"""
+    store = _UnreadableStore(error)
+
+    service = StateLibraryService(store)
+
+    assert service.entries == ()
+    assert service.load_error is not None and str(error) in service.load_error
+    for mutation in (lambda: service.save(_thermo()), lambda: service.save_many([_thermo(), _air()])):
+        with pytest.raises(ValueError, match="暫停儲存"):
+            mutation()
+    assert store.writes == 0
+
+
+class _RecordingStore:
+    """記錄寫入內容與次數的記憶體儲存；可設定寫入失敗。"""
+
+    def __init__(self, document=None, *, fail: bool = False) -> None:
+        """設定初始文件與是否寫入失敗。
+
+參數：
+    document: 初始文件。
+    fail: True 時寫入引發 OSError。
+
+回傳：
+    無。"""
+        self.document = document
+        self.fail = fail
+        self.writes = 0
+
+    def read(self, name):
+        """回傳目前文件。
+
+參數：
+    name: 文件名稱。
+
+回傳：
+    文件或 None。"""
+        return self.document
+
+    def write(self, name, document):
+        """寫入（或模擬失敗）。
+
+參數：
+    name: 文件名稱。
+    document: 內容。
+
+回傳：
+    無。"""
+        if self.fail:
+            raise OSError("disk full")
+        self.writes += 1
+        self.document = json.loads(json.dumps(document))
+
+
+def test_save_many_writes_once_and_notifies_once() -> None:
+    """批次保存只寫入一次、通知一次，依序新增全部項目並使用預設名稱。
+
+回傳：
+    無。"""
+    store = _RecordingStore()
+    service = StateLibraryService(store, id_factory=_ids())
+    notifications = []
+    service.add_listener(lambda: notifications.append(len(service.entries)))
+
+    created = service.save_many([_thermo(label="1"), _thermo(label="2"), _air(label="室內")])
+
+    assert store.writes == 1
+    assert notifications == [3]
+    assert [state.id for state in created] == ["id-1", "id-2", "id-3"]
+    assert [entry.name for entry in service.entries] == ["R32 · 1", "R32 · 2", "濕空氣 · 室內"]
+    assert StateLibrary.from_dict(store.document).entries == service.entries
+
+
+def test_save_many_write_failure_adds_nothing() -> None:
+    """批次保存寫入失敗時一筆都不新增：檔案、記憶體不變，不通知訂閱者。
+
+回傳：
+    無。"""
+    existing = StateLibrary((SavedState("a", "既有", _thermo()),)).to_dict()
+    store = _RecordingStore(existing, fail=True)
+    service = StateLibraryService(store, id_factory=_ids())
+    notifications = []
+    service.add_listener(lambda: notifications.append(True))
+
+    with pytest.raises(ValueError, match="寫入失敗"):
+        service.save_many([_thermo(), _thermo(), _air()])
+
+    assert [entry.id for entry in service.entries] == ["a"]
+    assert store.document == existing
+    assert notifications == []
+
+
+def test_save_many_rejects_invalid_point_before_writing() -> None:
+    """批次中任一項不是狀態點時整批拒絕，不寫入；空批次不寫入也不通知。
+
+回傳：
+    無。"""
+    store = _RecordingStore()
+    service = StateLibraryService(store, id_factory=_ids())
+    notifications = []
+    service.add_listener(lambda: notifications.append(True))
+
+    with pytest.raises(ValueError, match="只支援"):
+        service.save_many([_thermo(), object()])
+    assert service.save_many([]) == ()
+
+    assert store.writes == 0 and service.entries == () and notifications == []
+
+
+def test_listener_failure_does_not_fail_a_committed_mutation(tmp_path, caplog) -> None:
+    """訂閱者失敗不讓已保存的變更看起來失敗，也不阻止後續訂閱者；錯誤記錄在 log。
+
+參數：
+    tmp_path: pytest 暫存資料夾。
+    caplog: pytest log 擷取。
+
+回傳：
+    無。"""
+    service = StateLibraryService(JsonDocumentStore(tmp_path), id_factory=_ids())
+    later = []
+
+    def broken_listener():
+        """模擬畫面重新整理失敗。
+
+回傳：
+    無（一律引發例外）。"""
+        raise RuntimeError("refresh failed")
+
+    service.add_listener(broken_listener)
+    service.add_listener(lambda: later.append(len(service.entries)))
+
+    with caplog.at_level("ERROR"):
+        saved = service.save(_thermo())
+        service.rename(saved.id, "新名稱")
+
+    assert later == [1, 1]
+    assert service.get(saved.id).name == "新名稱"
+    assert StateLibraryService(JsonDocumentStore(tmp_path)).get(saved.id).name == "新名稱"
+    assert sum("訂閱者更新失敗" in record.getMessage() for record in caplog.records) == 2
+
+
+def test_app_starts_when_library_file_cannot_be_read(isolated_workspace) -> None:
+    """狀態庫檔案無法讀取（路徑是資料夾，讀取時引發 IsADirectoryError）時應用程式仍可啟動：
+狀態庫顯示原因且不可寫入，其他工具照常計算，原路徑不被覆蓋。
+
+參數：
+    isolated_workspace: conftest 提供的暫存工作區。
+
+回傳：
+    無。"""
+    blocked = isolated_workspace / "state_library.json"
+    blocked.mkdir()
+    (blocked / "keep.txt").write_text("user data", encoding="utf-8")
+
+    shell = _build_shell()
+
+    library = shell.views["state_library"]
+    assert library.load_error.visible is True
+    assert library.service.entries == ()
+    assert {"state_library", "saturation", "refrigeration_cycle", "psychrometrics"} <= set(shell.views)
+    shell.navigate("state_library")
+    view = _calculate(shell, "saturation")
+    _click_menu(view, "全部儲存")
+    assert "儲存失敗" in view.save_menu.feedback.value
+    assert blocked.is_dir() and (blocked / "keep.txt").read_text(encoding="utf-8") == "user data"
+    plt.close("all")
+
+
+def test_save_all_failure_in_ui_saves_nothing(shell, monkeypatch) -> None:
+    """「全部儲存」寫入失敗時狀態庫不新增任何一筆，並提示失敗；之後重試成功也不會重複。
+
+參數：
+    shell: 工作區外殼。
+    monkeypatch: pytest monkeypatch。
+
+回傳：
+    無。"""
+    view = _calculate(shell, "refrigeration_cycle")
+    library = shell.views["state_library"]
+    store = library.service._store
+    real_write = store.write
+    writes = []
+
+    def failing_write(name, document):
+        """前兩筆以內的文件照常寫入，第三筆起磁碟寫入失敗（逐筆保存會留下部分結果）。
+
+參數：
+    name: 文件名稱。
+    document: 內容。
+
+回傳：
+    無。"""
+        writes.append(len(document["entries"]))
+        if len(document["entries"]) >= 3:
+            raise OSError("disk full")
+        real_write(name, document)
+
+    monkeypatch.setattr(store, "write", failing_write)
+    _click_menu(view, "全部儲存")
+
+    assert writes == [5]
+    assert library.service.entries == ()
+    assert StateLibraryService(JsonDocumentStore(store.root)).entries == ()
+    assert library.entry_rows == {}
+    assert "儲存失敗" in view.save_menu.feedback.value
+
+    monkeypatch.setattr(store, "write", real_write)
+    _click_menu(view, "全部儲存")
+    assert len(library.service.entries) == len(view.save_menu.points) == 5
+
+
+def test_invalid_state_points_fail_fast_in_save_menu(shell) -> None:
+    """分析定義回傳非狀態點時，在顯示儲存選單時就以 TypeError 失敗，不延後到保存。
+
+回傳：
+    無。"""
+    view = shell.views["saturation"]
+
+    with pytest.raises(TypeError, match="state_points 只能回傳"):
+        view.save_menu.show_points([_thermo(), {"T": 300.0}])
+
+    module = view.adapter.modules[0]
+    shell.navigate("saturation")
+    view.perform_calculation(None)
+    original = module.last_result
+    module.last_result = SimpleNamespace(liquid="not a state", vapor=original.vapor)
+    with pytest.raises(TypeError, match="str"):
+        view._show_result()

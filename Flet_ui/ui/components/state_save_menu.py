@@ -12,6 +12,7 @@ import flet as ft
 
 from application.state_library import StateLibraryService
 from domain.state_library import SavedPoint, default_state_name
+from domain.state_points import AirStatePoint, ThermoStatePoint
 
 from ..theme import TOKENS
 
@@ -62,8 +63,17 @@ class StateSaveMenu(ft.Row):
     points: 目前成功計算結果的狀態點。
 
 回傳：
-    無。"""
-        self.points = tuple(points)
+    無。
+
+引發：
+    TypeError：任一項不是 ThermoStatePoint 或 AirStatePoint 時（分析定義的程式契約錯誤，
+    在顯示選單時立即失敗，不延後到保存）。"""
+        points = tuple(points)
+        invalid = [type(point).__name__ for point in points
+                   if not isinstance(point, (ThermoStatePoint, AirStatePoint))]
+        if invalid:
+            raise TypeError(f"state_points 只能回傳 ThermoStatePoint 或 AirStatePoint，收到：{', '.join(invalid)}")
+        self.points = points
         self.feedback.value = ""
         items = [
             ft.PopupMenuItem(
@@ -86,7 +96,9 @@ class StateSaveMenu(ft.Row):
         self.show_points(())
 
     def save(self, points: Sequence[SavedPoint]) -> None:
-        """保存狀態點並顯示結果提示；失敗時顯示原因，不引發例外。
+        """一次保存狀態點（全有或全無）並顯示結果提示；失敗時顯示原因，不引發例外。
+
+「全部儲存」是單一操作：任何一筆失敗時一筆都不新增，避免部分保存與重試造成重複。
 
 參數：
     points: 要保存的狀態點。
@@ -95,10 +107,8 @@ class StateSaveMenu(ft.Row):
     無。"""
         if self.service is None:
             return
-        saved: list[str] = []
         try:
-            for point in points:
-                saved.append(self.service.save(point).name)
+            saved = [state.name for state in self.service.save_many(points)]
         except ValueError as exc:
             self.feedback.value = f"儲存失敗：{exc}"
             self.feedback.color = TOKENS.error
