@@ -22,7 +22,7 @@ class SaturationView(DedicatedAnalysisView):
         """
         super().__init__(
             title="飽和性質",
-            subtitle="已知壓力或溫度，查詢冷媒泡點、露點、溫度滑移與蒸發潛熱",
+            subtitle="已知壓力或溫度，查詢冷媒泡點、露點與溫度滑移；已知壓力時另提供蒸發潛熱",
             modules=[module],
             workspace_state=workspace_state,
         )

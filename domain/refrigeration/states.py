@@ -11,6 +11,15 @@ from typing import Protocol
 from domain.thermodynamics.reference_state import ReferenceStatePolicy
 
 
+class StateQueryError(ValueError):
+    """狀態服務無法由給定的已知性質求出狀態（例如超出適用範圍，或壓力與溫度太接近飽和而無法
+    唯一決定狀態）。
+
+    只由 :func:`query_state` 引發；狀態資料本身不合法（缺少性質、數值無效等）不屬於此類，
+    仍以一般 ``ValueError`` 引發。繼承 ``ValueError``，既有以 ``ValueError`` 處理的呼叫端不受影響。
+    """
+
+
 class ThermodynamicStateProvider(Protocol):
     """以 canonical SI 已知性質回傳 CoolProp 狀態的服務（由 ThermodynamicStateService 實作）。"""
 
@@ -42,8 +51,8 @@ def query_state(
     狀態 dict。
 
 引發：
-    ValueError：狀態服務無法計算時。"""
+    StateQueryError：狀態服務無法計算時。"""
     try:
         return provider.calculate_state_si(fluid, known_si, reference_state)
     except RuntimeError as exc:
-        raise ValueError(f"無法計算{description}，請確認流體與溫度／壓力是否在適用範圍：{exc}") from exc
+        raise StateQueryError(f"無法計算{description}，請確認流體與溫度／壓力是否在適用範圍：{exc}") from exc

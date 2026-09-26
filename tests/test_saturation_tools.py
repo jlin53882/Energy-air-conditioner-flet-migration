@@ -13,11 +13,13 @@ from application.refrigeration import RefrigerationService
 from domain.refrigeration.saturation import (
     KNOWN_PRESSURE,
     KNOWN_TEMPERATURE,
+    REGION_SUBCOOLED,
     REGION_SUPERHEATED,
     REGION_TWO_PHASE,
     evaluate_superheat_subcooling,
     saturation_properties,
 )
+from domain.refrigeration.states import StateQueryError
 from domain.state_points import StatePhase, StateSource, ThermoStatePoint
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units import CanonicalUnitConverter
@@ -100,6 +102,33 @@ def test_saturation_at_known_temperature_reports_zeotropic_pressure_difference(p
     assert result.temperature_glide_k == pytest.approx(0.0, abs=1e-9)
 
 
+def test_known_temperature_blend_does_not_report_latent_heat(provider) -> None:
+    """已知溫度時非共沸冷媒的泡點與露點不同壓；兩者焓差不是潛熱，因此不提供。
+
+回傳：
+    無。"""
+    result = saturation_properties(provider, "R407C", temperature_k=278.15)
+
+    assert result.liquid.pressure_pa != pytest.approx(result.vapor.pressure_pa, rel=1e-3)
+    assert result.latent_heat_j_kg is None
+
+
+def test_known_pressure_blend_reports_same_pressure_latent_heat(provider) -> None:
+    """已知壓力時非共沸冷媒的泡點與露點同壓（溫度不同），焓差即該壓力下的蒸發潛熱。
+
+回傳：
+    無。"""
+    pressure = 600_000.0
+    result = saturation_properties(provider, "R407C", pressure_pa=pressure)
+
+    assert result.liquid.pressure_pa == pytest.approx(result.vapor.pressure_pa)
+    assert result.temperature_glide_k > 4.0
+    expected = (_coolprop("H", "P", pressure, "Q", 1, "R407C")
+                - _coolprop("H", "P", pressure, "Q", 0, "R407C"))
+    assert result.latent_heat_j_kg is not None
+    assert result.latent_heat_j_kg == pytest.approx(expected, rel=1e-7)
+
+
 def test_pure_refrigerant_has_no_glide(provider) -> None:
     """純冷媒 R32 的泡點與露點溫度相同。
 
@@ -115,8 +144,9 @@ def test_latent_heat_is_independent_of_reference_state(provider) -> None:
 
 回傳：
     無。"""
-    ashrae = saturation_properties(provider, "R134a", temperature_k=273.15, reference_state="ASHRAE")
-    iir = saturation_properties(provider, "R134a", temperature_k=273.15, reference_state="IIR")
+    pressure = _coolprop("P", "T", 273.15, "Q", 0, "R134a")
+    ashrae = saturation_properties(provider, "R134a", pressure_pa=pressure, reference_state="ASHRAE")
+    iir = saturation_properties(provider, "R134a", pressure_pa=pressure, reference_state="IIR")
 
     assert iir.reference_state == "IIR"
     assert iir.liquid.enthalpy_j_kg == pytest.approx(200_000.0, rel=1e-6)
@@ -208,6 +238,117 @@ def test_two_phase_measurement_has_no_measured_state(provider) -> None:
     assert result.region == REGION_TWO_PHASE
     assert result.measured_state is None
     assert result.superheat_k is None and result.subcooling_k is None
+
+
+class _MeasuredStateOverride:
+    """包裝真正的狀態服務：飽和（含 Q）查詢照常，量測點（P、T）查詢改用指定行為。"""
+
+    def __init__(self, inner, measured) -> None:
+        """記錄內層服務與量測點查詢的替代行為。
+
+參數：
+    inner: 真正的狀態服務。
+    measured: 以 (fluid, known_si, reference_state, real_state) 呼叫的函式。
+
+回傳：
+    無。"""
+        self.inner = inner
+        self.measured = measured
+
+    def calculate_state_si(self, fluid, known_si, reference_state="DEF"):
+        """依已知性質轉交查詢。
+
+參數：
+    fluid: 流體名稱。
+    known_si: SI 已知性質。
+    reference_state: reference-state policy。
+
+回傳：
+    狀態 dict。"""
+        state = self.inner.calculate_state_si(fluid, known_si, reference_state)
+        if {name for name, _ in known_si} == {"P", "T"}:
+            return self.measured(dict(state))
+        return state
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        lambda state: {key: value for key, value in state.items() if key != "D"},
+        lambda state: {**state, "Q": 999.0},
+        lambda state: {**state, "D": -1.0},
+        lambda state: {**state, "H": float("nan")},
+    ],
+    ids=["missing-density", "invalid-quality", "negative-density", "non-finite-enthalpy"],
+)
+def test_malformed_measured_state_mapping_is_not_swallowed(provider, corrupt) -> None:
+    """量測點狀態資料不合法屬於程式錯誤，必須引發 ValueError，不得降級為 measured_state=None。
+
+參數：
+    provider: 狀態服務。
+    corrupt: 破壞量測點狀態資料的函式。
+
+回傳：
+    無。"""
+    faulty = _MeasuredStateOverride(provider, corrupt)
+
+    with pytest.raises(ValueError) as error:
+        evaluate_superheat_subcooling(faulty, "R32", 1_000_000.0, 300.0, "ASHRAE")
+    assert not isinstance(error.value, StateQueryError)
+
+
+def test_unsolvable_measured_state_keeps_classification(provider) -> None:
+    """狀態服務無法由壓力與溫度求解時（StateQueryError），判讀照常完成、measured_state 為 None。
+
+回傳：
+    無。"""
+
+    def unsolvable(_state):
+        """模擬狀態服務無法計算。
+
+參數：
+    _state: 真正的狀態 dict（不使用）。
+
+回傳：
+    無（一律引發例外）。"""
+        raise RuntimeError("input pair is ambiguous near saturation")
+
+    result = evaluate_superheat_subcooling(
+        _MeasuredStateOverride(provider, unsolvable), "R32", 1_000_000.0, 300.0, "ASHRAE")
+
+    assert result.region == REGION_SUPERHEATED
+    assert result.superheat_k == pytest.approx(300.0 - result.dew_point_k)
+    assert result.measured_state is None
+
+
+@pytest.mark.parametrize(("side", "offset_k"), [("dew", 1e-9), ("dew", 1e-6), ("bubble", -1e-9), ("bubble", -1e-6)])
+def test_pure_refrigerant_measurement_at_saturation_boundary(provider, side, offset_k) -> None:
+    """純冷媒管溫與飽和溫度相差不到 1 µK 時 CoolProp 無法由 (P, T) 求解：判讀照常，量測點為 None。
+
+參數：
+    provider: 狀態服務。
+    side: 靠近露點或泡點。
+    offset_k: 與飽和溫度的差（K）。
+
+回傳：
+    無。"""
+    pressure = 1_000_000.0
+    saturation = _coolprop("T", "P", pressure, "Q", 1 if side == "dew" else 0, "R32")
+
+    result = evaluate_superheat_subcooling(provider, "R32", pressure, saturation + offset_k, "ASHRAE")
+
+    assert result.region == (REGION_SUPERHEATED if side == "dew" else REGION_SUBCOOLED)
+    assert result.measured_state is None
+
+
+def test_state_query_error_is_a_value_error(provider) -> None:
+    """StateQueryError 繼承 ValueError，既有以 ValueError 處理的呼叫端不受影響。
+
+回傳：
+    無。"""
+    with pytest.raises(StateQueryError):
+        saturation_properties(provider, "R744", temperature_k=320.0)
+    assert issubclass(StateQueryError, ValueError)
 
 
 # ======================================================
@@ -404,7 +545,9 @@ def test_saturation_known_temperature_mode_switches_rows_and_invalidates(shell) 
     module.text_entries["sat_fluid"]["val"].value = "R407C"
     view.perform_calculation(None)
     kpis = _kpis(view)
-    assert list(kpis) == ["泡點壓力", "露點壓力", "泡點－露點壓力差", "蒸發潛熱 h_fg"]
+    # 同溫不同壓的焓差不是潛熱：關鍵數值與文字結果都不列 h_fg。
+    assert list(kpis) == ["泡點壓力", "露點壓力", "泡點－露點壓力差"]
+    assert "蒸發潛熱" not in view.adapter.result_text
     expected = _coolprop("P", "T", 278.15, "Q", 0, "R407C") / 1000
     assert kpis["泡點壓力"] == (f"{expected:.2f}", "kPa")
 
@@ -486,8 +629,10 @@ def test_every_common_refrigerant_is_computable(provider) -> None:
 回傳：
     無。"""
     for fluid in COMMON_REFRIGERANTS:
-        result = saturation_properties(provider, fluid, temperature_k=273.15)
-        assert result.latent_heat_j_kg > 0, fluid
+        by_temperature = saturation_properties(provider, fluid, temperature_k=273.15)
+        assert by_temperature.latent_heat_j_kg is None, fluid
+        by_pressure = saturation_properties(provider, fluid, pressure_pa=by_temperature.vapor.pressure_pa)
+        assert by_pressure.latent_heat_j_kg > 0, fluid
 
 
 def test_superheat_page_shows_structured_result_with_state_points(shell) -> None:

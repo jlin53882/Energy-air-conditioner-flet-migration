@@ -203,6 +203,9 @@ class SaturationModule(BaseAnalysisModule):
     def _summary_items(result: SaturationPropertiesResult) -> list[tuple[str, str, float, int]]:
         """回傳摘要結果（名稱, 性質代碼, SI 值, 位數），文字與關鍵數值共用。
 
+已知溫度時不列蒸發潛熱：非共沸冷媒同溫的泡點與露點壓力不同，兩者焓差不是潛熱
+（``SaturationPropertiesResult.latent_heat_j_kg`` 此時為 None）。
+
 參數：
     result: 飽和性質結果。
 
@@ -219,7 +222,6 @@ class SaturationModule(BaseAnalysisModule):
             ("泡點壓力", "P", result.liquid.pressure_pa, 2),
             ("露點壓力", "P", result.vapor.pressure_pa, 2),
             ("泡點－露點壓力差", "P", result.pressure_difference_pa, 2),
-            ("蒸發潛熱 h_fg", "H", result.latent_heat_j_kg, 2),
         ]
 
     def _build_structured(self, result: SaturationPropertiesResult, use_imperial: bool) -> StructuredResult:

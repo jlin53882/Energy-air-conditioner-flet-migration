@@ -86,7 +86,7 @@ PR #6 已合併，以上項目皆可直接進行。PR #6 帶入的內容一併�
   `ThermoStatePoint`，作為狀態點模型的第一批使用者。
 
   **結果**：`saturation_properties`（已知壓力或溫度 → 泡點／露點 `ThermoStatePoint`、溫度滑移、
-  泡點／露點壓力差、經基準防護的潛熱）與 `evaluate_superheat_subcooling` 的露點／泡點／量測點
+  泡點／露點壓力差；已知壓力時另提供經基準防護的同壓潛熱）與 `evaluate_superheat_subcooling` 的露點／泡點／量測點
   狀態點；`StateSource` 新增 `saturation`、`superheat_check`。UI 新增「飽和性質」與「過熱／過冷」
   兩個冷凍系統路由（各自的 Reference State 選單、錶壓輸入、常用冷媒快捷、原生結構化結果），
   冷凍循環頁只保留循環分析。狀態點尚未保存，保存與比較屬於 #10。

@@ -13,7 +13,10 @@ class AnalysisPresentation:
 
     ``key_metrics`` 列出要放在結果區頂端的結果名稱（必須與模組輸出的名稱
     相同，依序挑選、找不到的略過）；未指定時取前幾個結果。``chart_title``
-    是分析附有圖表時的圖表卡片標題。兩者都只影響排版。
+    是分析附有圖表時的圖表卡片標題。兩者都只影響排版，而且只用於沒有原生
+    ``structured_result`` 的分析（由 ``structured_from_text`` 轉換文字結果）；
+    提供原生結構化結果的分析自行決定關鍵數值，不得宣告 ``key_metrics``，
+    避免與實際畫面不一致。
     """
 
     summary: str
@@ -142,16 +145,14 @@ ANALYSIS_PRESENTATION: dict[str, AnalysisPresentation] = {
     ),
     "refrigerant.saturation": AnalysisPresentation(
         "已知絕對壓力（可輸入錶壓）或飽和溫度，查詢飽和液體（泡點）與飽和蒸氣（露點）的完整性質；"
-        "非共沸冷媒顯示溫度滑移或泡點／露點壓力差。",
-        "h_fg = h_vapor(Q=1) − h_liquid(Q=0);  glide = T_dew − T_bubble",
+        "非共沸冷媒顯示溫度滑移或泡點／露點壓力差。蒸發潛熱只在已知壓力時提供（同壓相減）。",
+        "h_fg(P) = h_vapor(P, Q=1) − h_liquid(P, Q=0);  glide = T_dew − T_bubble",
         "飽和性質",
-        key_metrics=("泡點溫度", "露點溫度", "溫度滑移", "蒸發潛熱 h_fg"),
     ),
     "refrigerant.superheat_subcooling": AnalysisPresentation(
         "以量測壓力與管溫判讀過熱度（相對露點）或過冷度（相對泡點），並顯示非共沸冷媒的溫度滑移。",
         "SH = T − T_dew(P);  SC = T_bubble(P) − T",
         "過熱／過冷判讀",
-        key_metrics=("狀態", "過熱度", "過冷度", "絕對壓力", "溫度滑移"),
     ),
     "psychrometric_chart.plot": AnalysisPresentation(
         "依海拔計算大氣壓力並繪製飽和線、等相對濕度線與等焓線；乾球溫度與相對濕度以逗號分隔可標示多點。",

@@ -46,7 +46,7 @@ ROUTES = (
     ),
     WorkspaceRoute(
         "saturation", "飽和性質", "冷凍系統", "WATER_DROP_OUTLINED",
-        description="已知壓力或溫度查詢冷媒泡點、露點、溫度滑移與蒸發潛熱。",
+        description="已知壓力或溫度查詢冷媒泡點、露點與溫度滑移；已知壓力時另提供蒸發潛熱。",
     ),
     WorkspaceRoute(
         "superheat_subcooling", "過熱／過冷", "冷凍系統", "THERMOSTAT_OUTLINED",

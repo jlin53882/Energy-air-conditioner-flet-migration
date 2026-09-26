@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from domain.state_points import StateSource, ThermoStatePoint, enthalpy_difference
 from domain.thermodynamics.reference_state import ReferenceStatePolicy, normalize_reference_state_policy
 
-from .states import ThermodynamicStateProvider, query_state
+from .states import StateQueryError, ThermodynamicStateProvider, query_state
 
 REGION_SUPERHEATED = "superheated_vapor"
 REGION_SUBCOOLED = "subcooled_liquid"
@@ -28,6 +28,9 @@ class SaturationPropertiesResult:
 
     已知壓力時兩個狀態壓力相同，溫度差即溫度滑移；已知溫度時兩個狀態溫度相同，
     壓力差為泡點與露點壓力差。純冷媒的兩者皆約為 0。
+
+    蒸發潛熱只在已知壓力時提供：非共沸冷媒在同一溫度下的泡點與露點壓力不同，
+    兩個不同壓力狀態的焓差不是潛熱。
     """
 
     fluid: str
@@ -44,11 +47,16 @@ class SaturationPropertiesResult:
         return self.liquid.reference_state
 
     @property
-    def latent_heat_j_kg(self) -> float:
-        """蒸發潛熱 h_vapor − h_liquid（J/kg），經基準防護相減。
+    def latent_heat_j_kg(self) -> float | None:
+        """同壓下飽和液→飽和蒸氣的焓差 h_vapor − h_liquid（J/kg），經基準防護相減。
+
+只有已知壓力時兩個狀態同壓，焓差才是蒸發潛熱；已知溫度時（非共沸冷媒的泡點與
+露點壓力不同）不提供，回傳 None。
 
 回傳：
-    潛熱。"""
+    潛熱；已知溫度時為 None。"""
+        if self.known != KNOWN_PRESSURE:
+            return None
         return enthalpy_difference(self.vapor, self.liquid)
 
     @property
@@ -135,8 +143,9 @@ class SaturationCheckResult:
     """量測點相對於飽和狀態的判讀。
 
     ``dew_state``／``bubble_state`` 是量測壓力下的飽和蒸氣與飽和液體狀態點；
-    ``measured_state`` 是量測壓力與管溫對應的狀態點，量測點落在兩相區（或太接近
-    飽和而無法由壓力與溫度唯一決定）時為 None。
+    ``measured_state`` 是量測壓力與管溫對應的狀態點，量測點落在兩相區，或狀態服務
+    無法由壓力與溫度求解（太接近飽和而無法唯一決定）時為 None；狀態服務回傳的資料
+    不合法時不會降級為 None，而是引發 ValueError。
     """
 
     fluid: str
@@ -239,12 +248,15 @@ def evaluate_superheat_subcooling(
     measured_state = None
     if region != REGION_TWO_PHASE:
         try:
-            measured_state = point(query_state(
+            measured_mapping = query_state(
                 provider, fluid, [("P", pressure_pa), ("T", measured_temperature_k)], reference_state,
-                "量測狀態"), "measured", "量測點")
-        except ValueError:
-            # 管溫極接近飽和溫度時壓力與溫度無法唯一決定狀態；判讀結果不受影響。
-            measured_state = None
+                "量測狀態")
+        except StateQueryError:
+            # 只容許狀態服務無法由壓力與溫度求解（管溫極接近飽和溫度時無法唯一決定狀態）；
+            # 判讀結果不受影響。狀態資料不合法等其他錯誤照常引發。
+            measured_mapping = None
+        if measured_mapping is not None:
+            measured_state = point(measured_mapping, "measured", "量測點")
     return SaturationCheckResult(
         fluid=fluid,
         pressure_pa=pressure_pa,
