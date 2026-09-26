@@ -177,6 +177,30 @@ ANALYSIS_PRESENTATION: dict[str, AnalysisPresentation] = {
         "風量／冷量",
         key_metrics=("顯熱容量（大小）", "風量", "全熱量", "風量（進風狀態）"),
     ),
+    "batch.parameter_sweep": AnalysisPresentation(
+        "在基準條件上掃描一或兩個輸入，比較冷凍循環或冷凝器 Exergy 的指標；第二個輸入的每個數值畫成一條曲線。"
+        "無法計算的點（例如冷凝溫度不高於蒸發溫度）不中斷整批計算，列在結果最後並在圖上斷線。",
+        None,
+        "參數掃描",
+        key_metrics=("最大值", "最小值", "計算點數"),
+        chart_title="參數曲線",
+    ),
+    "batch.refrigerant_comparison": AnalysisPresentation(
+        "同一組冷凍循環條件換不同冷媒比較。只比較 COP、壓縮比、焓差、溫度、壓力與功率等與參考狀態無關的量，"
+        "不比較絕對焓值；各冷媒以自己的預設參考狀態求解。可另掃描一個輸入，每種冷媒畫成一條曲線。",
+        None,
+        "冷媒比較",
+        key_metrics=("最大值", "最小值", "計算點數"),
+        chart_title="冷媒比較",
+    ),
+    "batch.sensitivity": AnalysisPresentation(
+        "單因子敏感度：每次只把一個輸入在基準值上下變動 Δ（其餘固定），比較指標的變化並依影響大小排序。"
+        "只反映基準點附近的局部影響，不含輸入之間的交互作用。",
+        "ΔY_i = Y(x_i ± Δ_i) − Y(x_base)",
+        "敏感度分析",
+        key_metrics=("基準值", "影響最大", "最大變化幅度"),
+        chart_title="龍捲風圖",
+    ),
     "psychrometric_chart.plot": AnalysisPresentation(
         "依海拔計算大氣壓力並繪製飽和線、等相對濕度線與等焓線；乾球溫度與相對濕度以逗號分隔可標示多點。",
         None,
