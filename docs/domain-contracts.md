@@ -160,3 +160,17 @@ Invalid request shape、known property 不足、invalid fluid/policy 與 unknown
 | 狀態資料不合法 | `ThermoStatePoint.from_state_mapping` | `ValueError`（不是 `StateQueryError`） | 屬於程式錯誤，不得被吞掉 |
 
 「輸入接近飽和」本身不是失敗原因：reference-state 設定、backend 異常或程式錯誤即使發生在飽和邊界上的 (P, T)，也不得被重新分類為 `IndeterminateStateError`。不得以寬泛的 `ValueError`、`RuntimeError` 或 `StateQueryError` 攔截來處理「狀態無法唯一決定」。Compatibility facade 可以增加 channel-specific error presentation，但不得吞掉 canonical contract error，也不得默默替換成另一種 physical meaning。
+
+## 13. Batch calculation contract
+
+`domain/batch.py` 是與計算無關的批次引擎；`application/batch.BatchService` 把它接上冷凍循環與冷凝器 Exergy。
+
+- 輸入與輸出：計算函式接收完整輸入 dict（canonical SI，或冷媒名稱），回傳 {指標名稱: SI 數值}。引擎只使用 domain／application 服務的結構化結果，不解析顯示文字（`structured_from_text()` 的結果不得作為批次資料來源），也不接舊版 `hvac_calculations`。
+- 參數掃描：1 至 2 個掃描軸，變數不可重複且必須是基準輸入中的鍵；每軸最多 41 點、一次最多 400 點。結果依笛卡兒積排列，第一軸變化最慢；第一軸是曲線橫軸，第二軸每個數值一條曲線。等距數值 `linear_values(start, stop, n)` 包含兩端，最後一點精確等於終點。
+- 失敗點：單一點的 `ValueError`（輸入不合理，或 `StateQueryError` 等狀態無法計算）記錄為該點失敗並保留原因，其餘點照常計算；結果畫面列出每個失敗點與原因，不隱藏。`ValueError` 以外的例外是程式錯誤，直接拋出。所有點都失敗時整個分析以錯誤呈現。
+- 單因子敏感度：每次只把一個數值輸入在基準值上下各變動 Δ（Δ 為正、與輸入同物理量；溫度用溫差），其餘固定在基準；基準點本身無法計算時整個分析失敗。變化幅度為兩側相對基準值的較大絕對差（失敗側不計），依幅度由大到小排序。只反映基準點附近的局部影響，不含輸入之間的交互作用。
+- 指標與 reference state：批次指標只取與 reference state 無關的量——冷凍循環的 COP、壓縮比、排氣溫度、焓差（冷凍效果、壓縮功、冷凝放熱）、功率、流量與飽和壓力；冷凝器的 Exergy 平衡量與平均放熱溫度——不取絕對焓或絕對熵。因此批次計算送出的每個 request 都以 Auto（各流體的預設 policy）求解。
+- 冷媒比較：只用於冷凍循環（同一組飽和溫度、過熱、過冷、效率與冷凍能力下換冷媒）；至少兩種、不可空白或重複。冷凝器 Exergy 的輸入是某一冷媒的量測壓力與溫度，換冷媒後不是同條件比較，因此不提供。
+- 指標適用性：`BatchMetric.requires` 列出指標需要的 request 欄位（冷凍循環的壓縮機功率、冷凝器放熱量、冷媒質量流率與吸入體積流量需要冷凍能力）。一次批次必須指定一個指標，且該指標對基準條件（含掃描變數，掃描變數在每一點都有數值）適用，否則在計算前以 `ValueError` 說明缺少的輸入；每個成功的點只帶適用的指標，並保證帶有所選指標。適用的指標卻沒有數值是程式錯誤（`RuntimeError`），不記成單點失敗。未提供的選填輸入在基準輸入中保留為 None：可以作為掃描變數，不能作為敏感度變數。
+- 冷媒清單：空白項目（例如「R32, , R290」或結尾逗號）是輸入錯誤；UI 讀取清單時與 application 驗證相同，不會默默略過空白項目。
+- 冷凝器等效傳熱邊界溫度：`boundary_at_dead_state` 為真（整體排熱至環境）時，每一點以該點的 T0 作為 T_b，T_b 不列為輸入，也不能單獨掃描或變動。

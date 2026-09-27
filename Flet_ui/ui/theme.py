@@ -154,9 +154,10 @@ def primary_button_style() -> ft.ButtonStyle:
 
 回傳：
     Flet ButtonStyle 物件。"""
+    # 固定底色會蓋過停用外觀；停用（例如背景計算中）時改用灰底與淡色文字。
     return ft.ButtonStyle(
-        color=ft.Colors.WHITE,
-        bgcolor=TOKENS.primary,
+        color={ft.ControlState.DISABLED: TOKENS.text_muted, ft.ControlState.DEFAULT: ft.Colors.WHITE},
+        bgcolor={ft.ControlState.DISABLED: TOKENS.surface_muted, ft.ControlState.DEFAULT: TOKENS.primary},
         overlay_color=TOKENS.primary_hover,
         shape=ft.RoundedRectangleBorder(radius=TOKENS.radius_sm),
         padding=ft.Padding.symmetric(horizontal=20, vertical=14),
