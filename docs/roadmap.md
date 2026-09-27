@@ -3,6 +3,18 @@
 本文件記錄 PR #6 之後已確認的開發範圍與順序。範圍刻意收斂到「階段 4」；
 列在〈範圍外〉的項目有需要時再另行規劃，不在目前路線內預留實作。
 
+**狀態：階段 0–4 已全部完成並合併。** 後續工作從〈待確認事項〉與〈範圍外〉挑選，
+開始前先另行確認範圍。
+
+| 階段 | PR | 內容 | 合併 commit |
+|---|---|---|---|
+| 0 | #7 | Integration Hardening（失效矩陣、錶壓契約、各頁 Reference State、移除 `AnalysisTab`） | `bb8078c` |
+| 1 | #8 | `ThermoStatePoint` 與基礎設施（序列化、基礎 Settings、JSON 儲存） | `6c3f3ec` |
+| 2 | #9 | 飽和性質工具、SH/SC 現場工具 | `00d9617` |
+| 2 | #10 | State Library、狀態比較 | `28af515` |
+| 3 | #11 | 空調側計算（新風負荷、加濕負荷、風量與冷量換算） | `171fbbd` |
+| 4 | #12 | 批次計算與比較（參數掃描、冷媒比較、敏感度分析） | `5accd52` |
+
 ## 1. 共同基礎
 
 後續功能共用三個基礎，先建立基礎可避免每個功能各自回頭改寫：
@@ -89,7 +101,7 @@ PR #6 已合併，以上項目皆可直接進行。PR #6 帶入的內容一併�
   泡點／露點壓力差；已知壓力時另提供經基準防護的同壓潛熱）與 `evaluate_superheat_subcooling` 的露點／泡點／量測點
   狀態點；`StateSource` 新增 `saturation`、`superheat_check`。UI 新增「飽和性質」與「過熱／過冷」
   兩個冷凍系統路由（各自的 Reference State 選單、錶壓輸入、常用冷媒快捷、原生結構化結果），
-  冷凍循環頁只保留循環分析。狀態點尚未保存，保存與比較屬於 #10。
+  冷凍循環頁只保留循環分析。狀態點的保存與比較在 #10 完成。
 - **#10 State Library + 狀態比較**：Save / Rename / Duplicate / Delete，A vs B 比較。
 
   **結果**：`domain/state_library.py`（保存清單與 schema 文件）、`domain/state_points/comparison.py`
