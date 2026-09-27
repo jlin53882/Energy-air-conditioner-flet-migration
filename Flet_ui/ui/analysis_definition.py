@@ -26,6 +26,38 @@ from .structured_result import StructuredResult
 
 
 @dataclass(frozen=True)
+class PreparedCalculation:
+    """已在 UI 執行緒讀取並驗證完輸入的一次計算，分成背景計算與 UI 發布兩段。
+
+    Attributes:
+        compute: 無參數函式，只做 domain／application 計算並回傳結構化結果。它可能在
+            背景執行緒執行，因此不得讀取或修改任何 Flet 控制項、共用圖表（Matplotlib
+            figure）或模組狀態；所需輸入必須在建立本物件時就已複製成不可變的 request。
+        publish: 以 ``compute`` 的結果在 UI 執行緒格式化文字、繪製圖表並更新模組狀態，
+            回傳與 ``calculate`` 相同格式的結果文字。只有結果仍屬於目前這一輪計算時才會被呼叫。
+    """
+
+    compute: Callable[[], object]
+    publish: Callable[[object], str]
+
+
+def run_prepared(prepare: Callable[[bool], PreparedCalculation]) -> Callable[[bool], str]:
+    """把兩段式計算組成同步的 ``calculate``（在同一執行緒依序 prepare → compute → publish）。
+
+    參數：
+        prepare: 模組的 ``prepare_func``。
+
+    回傳：
+        統一簽章 ``Callable[[bool], str]`` 的計算函式。
+    """
+    def calculate(use_imperial: bool) -> str:
+        prepared = prepare(use_imperial)
+        return prepared.publish(prepared.compute())
+
+    return calculate
+
+
+@dataclass(frozen=True)
 class AnalysisDefinition:
     """描述一項已存在的分析計算及其呈現方式。
 
@@ -47,6 +79,8 @@ class AnalysisDefinition:
         state_points: 選用的無參數函式，回傳最近一次成功計算可保存到 State Library
             的狀態點（只能是 ``ThermoStatePoint``／``AirStatePoint``，其他型別在顯示儲存選單時
             以 ``TypeError`` 立即失敗）；未提供時不顯示儲存選單。
+        prepare: 選用的兩段式計算（見 :class:`PreparedCalculation`）。提供時 ``calculate``
+            由它組成；搭配背景執行器的 adapter 會改在背景執行 ``compute``，UI 執行緒不被阻塞。
     """
 
     key: str
@@ -57,6 +91,7 @@ class AnalysisDefinition:
     result_chart: ft.Control | None = None
     structured_result: Callable[[], StructuredResult | None] | None = None
     state_points: Callable[[], Sequence[SavedPoint]] | None = None
+    prepare: Callable[[bool], PreparedCalculation] | None = None
 
 
 def definitions_from_module(module: object) -> list[AnalysisDefinition]:
@@ -88,7 +123,12 @@ def definitions_from_module(module: object) -> list[AnalysisDefinition]:
             raise ValueError(f"Duplicate analysis_id: {analysis_id}")
         seen_ids.add(analysis_id)
 
-        raw_calc_func = raw["calc_func"]
+        # 模組提供 calc_func（同步計算），或 prepare_func（兩段式計算，calculate 由它組成），
+        # 不可同時提供，避免兩條路徑的計算語意不一致。
+        prepare = raw.get("prepare_func")
+        if prepare is not None and "calc_func" in raw:
+            raise ValueError(f"Analysis '{analysis_id}' must provide calc_func or prepare_func, not both")
+        raw_calc_func = run_prepared(prepare) if prepare is not None else raw["calc_func"]
 
         definitions.append(
             AnalysisDefinition(
@@ -100,6 +140,7 @@ def definitions_from_module(module: object) -> list[AnalysisDefinition]:
                 result_chart=raw.get("result_chart"),
                 structured_result=raw.get("structured_result"),
                 state_points=raw.get("state_points"),
+                prepare=prepare,
             )
         )
     return definitions

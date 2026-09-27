@@ -46,11 +46,16 @@ class BatchVariable:
 
 @dataclass(frozen=True)
 class BatchMetric:
-    """可比較的輸出指標；``prop_code`` 為 None 表示無因次（例如 COP）。"""
+    """可比較的輸出指標；``prop_code`` 為 None 表示無因次（例如 COP）。
+
+    ``requires`` 列出這個指標需要的 request 欄位：這些欄位必須有值（例如系統量需要冷凍能力），
+    指標才適用。一次批次只能選擇對基準條件（含掃描變數）適用的指標，因此每個成功的點都一定
+    帶有所選指標。"""
 
     key: str
     label: str
     prop_code: str | None = None
+    requires: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -78,6 +83,17 @@ class BatchTarget:
                 return variable
         raise ValueError(f"「{self.label}」沒有可掃描的輸入：{key}")
 
+    def available_metrics(self, inputs: Mapping[str, InputValue]) -> tuple[BatchMetric, ...]:
+        """回傳在這組輸入下適用的指標（``requires`` 的欄位都有值）。
+
+參數：
+    inputs: 輸入 dict（缺少的欄位或值為 None 視為未提供）。
+
+回傳：
+    BatchMetric tuple，依宣告順序。"""
+        return tuple(metric for metric in self.metrics
+                     if all(inputs.get(name) is not None for name in metric.requires))
+
     def metric(self, key: str) -> BatchMetric:
         """依指標名稱取得指標定義。
 
@@ -94,6 +110,9 @@ class BatchTarget:
                 return metric
         raise ValueError(f"「{self.label}」沒有指標：{key}")
 
+
+# 冷凍循環的系統量（功率、流量）需要冷凍能力；未提供時只有單位質量結果。
+SYSTEM = ("refrigeration_capacity_w",)
 
 CYCLE_TARGET = BatchTarget(
     TARGET_CYCLE,
@@ -114,10 +133,10 @@ CYCLE_TARGET = BatchTarget(
         BatchMetric("refrigerating_effect_j_kg", "冷凍效果 q_L", "H"),
         BatchMetric("compressor_work_j_kg", "壓縮功 w", "H"),
         BatchMetric("heat_rejection_j_kg", "冷凝放熱 q_H", "H"),
-        BatchMetric("compressor_power_w", "壓縮機功率", "Power"),
-        BatchMetric("heat_rejection_w", "冷凝器放熱量", "Power"),
-        BatchMetric("mass_flow_kg_s", "冷媒質量流率", "MassFlow"),
-        BatchMetric("suction_volume_flow_m3_s", "吸入體積流量", "VolumeFlow"),
+        BatchMetric("compressor_power_w", "壓縮機功率", "Power", SYSTEM),
+        BatchMetric("heat_rejection_w", "冷凝器放熱量", "Power", SYSTEM),
+        BatchMetric("mass_flow_kg_s", "冷媒質量流率", "MassFlow", SYSTEM),
+        BatchMetric("suction_volume_flow_m3_s", "吸入體積流量", "VolumeFlow", SYSTEM),
         BatchMetric("evaporating_pressure_pa", "蒸發壓力（絕對）", "P"),
         BatchMetric("condensing_pressure_pa", "冷凝壓力（絕對）", "P"),
     ),
@@ -178,13 +197,14 @@ class SweepAxisRequest:
 
 @dataclass(frozen=True)
 class ParameterSweepRequest:
-    """參數掃描：在基準條件上掃描一或兩個輸入。
+    """參數掃描：在基準條件上掃描一或兩個輸入，比較指定指標。
 
     ``boundary_at_dead_state`` 只用於冷凝器 Exergy：分析邊界涵蓋到整體排熱至環境時
     T_b 恆等於 T0，每一點都以該點的 T0 作為 T_b（此時 T_b 不能單獨掃描）。"""
 
     base: BaseRequest
     axes: tuple[SweepAxisRequest, ...]
+    metric: str
     boundary_at_dead_state: bool = False
 
 
@@ -194,6 +214,7 @@ class RefrigerantComparisonRequest:
 
     base: RefrigerationCycleRequest
     fluids: tuple[str, ...]
+    metric: str
     axis: SweepAxisRequest | None = None
 
 
@@ -209,18 +230,20 @@ class SensitivityRequest:
 
 @dataclass(frozen=True)
 class SweepOutcome:
-    """批次掃描結果與其計算對象（供呈現時查詢輸入與指標的名稱、單位）。"""
+    """批次掃描結果、計算對象與所選指標（每個成功的點都帶有這個指標）。"""
 
     target: BatchTarget
     result: BatchResult
+    metric: BatchMetric
 
 
 @dataclass(frozen=True)
 class SensitivityOutcome:
-    """敏感度結果與其計算對象。"""
+    """敏感度結果、計算對象與所選指標。"""
 
     target: BatchTarget
     result: SensitivityResult
+    metric: BatchMetric
 
 
 class BatchService:
@@ -266,15 +289,15 @@ class BatchService:
     boundary_at_dead_state: T_b 是否隨 T0；是時 T_b 不列為輸入（不能單獨變動）。
 
 回傳：
-    {欄位名稱: 值}。"""
+    {欄位名稱: 值}；未提供的選填欄位為 None。"""
         target = BatchService.target_for(base)
         inputs: dict[str, InputValue] = {FLUID_VARIABLE: base.fluid}
         for variable in target.variables:
             if boundary_at_dead_state and variable.key == "boundary_temperature_k":
                 continue
-            value = getattr(base, variable.key)
-            if value is not None:
-                inputs[variable.key] = value
+            # 選填欄位（例如冷凍能力）未提供時保留為 None：仍可作為掃描變數，但不能作為敏感度變數，
+            # 需要它的指標也不適用（見 BatchTarget.available_metrics）。
+            inputs[variable.key] = getattr(base, variable.key)
         return inputs
 
     def _evaluator(self, base: BaseRequest, boundary_at_dead_state: bool = False):
@@ -305,20 +328,25 @@ class BatchService:
             request = replace(base, reference_state=None, **dict(inputs))
             if boundary_at_dead_state:
                 request = replace(request, boundary_temperature_k=request.dead_state_temperature_k)
-            if target is CYCLE_TARGET:
-                return self._cycle_metrics(request)
-            return self._condenser_metrics(request)
+            values = self._cycle_metrics(request) if target is CYCLE_TARGET else self._condenser_metrics(request)
+            # 只回傳這一點適用的指標，因此每個成功的點都帶有全部適用指標的數值。
+            metrics = {metric.key: values[metric.key] for metric in target.available_metrics(inputs)}
+            missing = [key for key, value in metrics.items() if value is None]
+            if missing:
+                # 適用的指標沒有值是程式錯誤（宣告的 requires 與求解結果不一致），不是單點計算失敗。
+                raise RuntimeError(f"適用的批次指標沒有數值：{', '.join(missing)}")
+            return metrics
 
         return evaluate
 
-    def _cycle_metrics(self, request: RefrigerationCycleRequest) -> dict[str, float]:
+    def _cycle_metrics(self, request: RefrigerationCycleRequest) -> dict[str, float | None]:
         """求解冷凍循環並取出與 reference state 無關的指標。
 
 參數：
     request: 冷凍循環 request。
 
 回傳：
-    {指標名稱: SI 數值}；未提供冷凍能力時不含系統量。"""
+    {指標名稱: SI 數值或 None}；未提供冷凍能力時系統量為 None。"""
         result = self.refrigeration.solve_cycle(request)
         metrics = {
             "cop_cooling": result.cop_cooling,
@@ -331,13 +359,13 @@ class BatchService:
             "evaporating_pressure_pa": result.evaporating_pressure_pa,
             "condensing_pressure_pa": result.condensing_pressure_pa,
         }
-        system = {
+        # 系統量只在提供冷凍能力時有值；是否適用由 BatchTarget.available_metrics 決定。
+        metrics.update({
             "compressor_power_w": result.compressor_power_w,
             "heat_rejection_w": result.heat_rejection_w,
             "mass_flow_kg_s": result.mass_flow_kg_s,
             "suction_volume_flow_m3_s": result.suction_volume_flow_m3_s,
-        }
-        metrics.update({key: value for key, value in system.items() if value is not None})
+        })
         return metrics
 
     def _condenser_metrics(self, request: CondenserExergyRequest) -> dict[str, float]:
@@ -362,6 +390,29 @@ class BatchService:
     # ======================================================
     # 批次
     # ======================================================
+    @staticmethod
+    def _check_metric(target: BatchTarget, base_inputs: Mapping[str, InputValue], swept: tuple[str, ...],
+                      metric_key: str) -> BatchMetric:
+        """確認指標對基準條件（含掃描變數）適用。
+
+參數：
+    target: 計算對象。
+    base_inputs: 基準輸入 dict。
+    swept: 掃描或變動的輸入欄位名稱（這些欄位在每一點都有數值）。
+    metric_key: 指標名稱。
+
+回傳：
+    BatchMetric。
+
+引發：
+    ValueError：不是此計算的指標，或指標需要的輸入未提供時。"""
+        metric = target.metric(metric_key)
+        inputs = {**base_inputs, **{name: 0.0 for name in swept}}
+        if metric not in target.available_metrics(inputs):
+            missing = "、".join(target.variable(name).label for name in metric.requires if inputs.get(name) is None)
+            raise ValueError(f"「{metric.label}」需要提供{missing}。")
+        return metric
+
     @staticmethod
     def _check_variable(target: BatchTarget, variable: str, boundary_at_dead_state: bool) -> None:
         """確認輸入可以單獨變動。
@@ -394,10 +445,11 @@ class BatchService:
         target = self.target_for(request.base)
         for axis in request.axes:
             self._check_variable(target, axis.variable, request.boundary_at_dead_state)
-        axes = [SweepAxis(axis.variable, axis.values) for axis in request.axes]
         follows = request.boundary_at_dead_state
-        return SweepOutcome(target, run_sweep(
-            self._evaluator(request.base, follows), self._base_inputs(request.base, follows), axes))
+        base_inputs = self._base_inputs(request.base, follows)
+        metric = self._check_metric(target, base_inputs, tuple(axis.variable for axis in request.axes), request.metric)
+        axes = [SweepAxis(axis.variable, axis.values) for axis in request.axes]
+        return SweepOutcome(target, run_sweep(self._evaluator(request.base, follows), base_inputs, axes), metric)
 
     def compare_refrigerants(self, request: RefrigerantComparisonRequest) -> SweepOutcome:
         """冷媒比較：冷媒為一個類別維度；另有掃描軸時，每個冷媒沿該軸一條曲線。
@@ -417,11 +469,14 @@ class BatchService:
             raise ValueError("冷媒比較至少需要兩種冷媒。")
         fluid_axis = SweepAxis(FLUID_VARIABLE, fluids)
         axes = [fluid_axis]
+        swept: tuple[str, ...] = ()
         if request.axis is not None:
             CYCLE_TARGET.variable(request.axis.variable)
             axes = [SweepAxis(request.axis.variable, request.axis.values), fluid_axis]
-        return SweepOutcome(
-            CYCLE_TARGET, run_sweep(self._evaluator(request.base), self._base_inputs(request.base), axes))
+            swept = (request.axis.variable,)
+        base_inputs = self._base_inputs(request.base)
+        metric = self._check_metric(CYCLE_TARGET, base_inputs, swept, request.metric)
+        return SweepOutcome(CYCLE_TARGET, run_sweep(self._evaluator(request.base), base_inputs, axes), metric)
 
     def sensitivity(self, request: SensitivityRequest) -> SensitivityOutcome:
         """單因子敏感度（龍捲風圖）。
@@ -435,12 +490,13 @@ class BatchService:
 引發：
     ValueError：輸入或指標不是此計算所有、變動量不合理，或基準條件無法計算時。"""
         target = self.target_for(request.base)
-        target.metric(request.metric)
         perturbations = []
         for variable, delta in request.perturbations:
             self._check_variable(target, variable, request.boundary_at_dead_state)
             perturbations.append(Perturbation(variable, delta))
         follows = request.boundary_at_dead_state
+        base_inputs = self._base_inputs(request.base, follows)
+        # 變動只在基準值附近加減，需要的輸入是否提供由基準條件決定。
+        metric = self._check_metric(target, base_inputs, (), request.metric)
         return SensitivityOutcome(target, run_sensitivity(
-            self._evaluator(request.base, follows), self._base_inputs(request.base, follows),
-            perturbations, request.metric))
+            self._evaluator(request.base, follows), base_inputs, perturbations, request.metric), metric)

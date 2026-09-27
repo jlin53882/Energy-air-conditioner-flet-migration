@@ -157,12 +157,12 @@ def evaluate_point(evaluate: Evaluate, inputs: Mapping[str, InputValue]) -> Batc
     return BatchPoint(dict(inputs), metrics=metrics)
 
 
-def run_sweep(evaluate: Evaluate, base: Mapping[str, InputValue], axes: Sequence[SweepAxis]) -> BatchResult:
+def run_sweep(evaluate: Evaluate, base: Mapping[str, InputValue | None], axes: Sequence[SweepAxis]) -> BatchResult:
     """在 base 輸入上以一或兩個掃描軸的所有組合執行計算。
 
 參數：
     evaluate: 計算函式。
-    base: 基準輸入；掃描變數必須是其中的鍵。
+    base: 基準輸入；掃描變數必須是其中的鍵（值可為 None，表示未提供的選填輸入，掃描時以軸上的數值取代）。
     axes: 1 至 ``MAX_AXES`` 個掃描軸，變數不可重複。
 
 回傳：
@@ -268,7 +268,7 @@ class SensitivityResult:
 
 
 def run_sensitivity(
-    evaluate: Evaluate, base: Mapping[str, InputValue], perturbations: Sequence[Perturbation], metric: str
+    evaluate: Evaluate, base: Mapping[str, InputValue | None], perturbations: Sequence[Perturbation], metric: str
 ) -> SensitivityResult:
     """一次只變動一個輸入（其餘固定在基準），比較指標變化並依幅度排序。
 

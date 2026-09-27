@@ -51,6 +51,8 @@ channel adapters / entrypoints
 
 負責控制項、Flet 輸入的解析、轉接格式化與 UI 生命週期。`PropertyTab` 跨越物性查詢的應用程式邊界，而不是自行實作熱力學政策。
 
+耗時的計算（目前為批次與比較頁）走非阻塞的執行邊界：分析定義以 `PreparedCalculation`（`Flet_ui/ui/analysis_definition.py`）分成 UI 執行緒的 prepare（讀取、驗證輸入並建立不可變的 application request）、背景的 compute（只呼叫 application service）與 UI 執行緒的 publish（格式化文字、繪圖）。`Flet_ui/ui/calculation_runner.FletCalculationRunner` 以 `page.run_thread` 計算、`page.run_task` 回到事件迴圈發布；`AnalysisModuleAdapter` 以 generation 判斷結果是否仍屬於目前這一輪（契約見 `docs/state-invalidation.md` §3.7）。背景計算的 CoolProp 查詢與 UI 執行緒共用 `ReferenceStateService` 的 process-wide lock，每次查詢都在同一個 lock 內設定自己的 reference state 再求解，因此並行執行不會混用基準。
+
 ### `Telegram_bot/`
 
 負責 Telegram 處理器、回應格式化，以及舊版 Telegram 行為的相容性外觀。呼叫共用熱力學服務時，會使用明確的參考狀態政策。

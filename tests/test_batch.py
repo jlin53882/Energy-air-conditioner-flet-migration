@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import threading
 import warnings
 
+import flet as ft
 import matplotlib.pyplot as plt
 import pytest
 from matplotlib import font_manager
@@ -31,7 +35,9 @@ from domain.batch import (
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units import CanonicalUnitConverter
 from Flet_ui.flet_app import main as flet_main
+from Flet_ui.ui.analysis_definition import PreparedCalculation, definitions_from_module
 from Flet_ui.ui.analysis_presentation import ANALYSIS_PRESENTATION
+from Flet_ui.ui.calculation_runner import FletCalculationRunner, run_work
 from Flet_ui.ui.components.figure_panel import CJK_FONT_CANDIDATES, use_cjk_fallback_fonts
 from Flet_ui.ui.navigation import ROUTES
 
@@ -39,6 +45,8 @@ C = 273.15
 # CoolProp 在不同 reference-state 交易之間的結果可能不是逐位元相同（見 docs/state-invalidation.md §3.1）；
 # 1e-7 遠小於顯示精度。
 REL = 1e-7
+COP = "cop_cooling"
+ETA = "exergy_efficiency"
 
 
 # ======================================================
@@ -280,7 +288,7 @@ def test_cycle_sweep_points_match_single_cycle_solutions(batch, refrigeration) -
 回傳：
     無。"""
     temperatures = (35 + C, 45 + C, 55 + C)
-    outcome = batch.sweep(ParameterSweepRequest(_cycle(), (SweepAxisRequest("condensing_temperature_k", temperatures),)))
+    outcome = batch.sweep(ParameterSweepRequest(_cycle(), (SweepAxisRequest("condensing_temperature_k", temperatures),), COP))
     assert outcome.target is CYCLE_TARGET
     for point, tc in zip(outcome.result.points, temperatures):
         single = refrigeration.solve_cycle(_cycle(condensing_temperature_k=tc))
@@ -301,8 +309,8 @@ def test_cycle_metrics_do_not_depend_on_the_reference_state(batch) -> None:
 回傳：
     無。"""
     axis = (SweepAxisRequest("evaporating_temperature_k", (0 + C, 10 + C)),)
-    iir = batch.sweep(ParameterSweepRequest(_cycle(reference_state="IIR"), axis)).result.points
-    ashrae = batch.sweep(ParameterSweepRequest(_cycle(reference_state="ASHRAE"), axis)).result.points
+    iir = batch.sweep(ParameterSweepRequest(_cycle(reference_state="IIR"), axis, COP)).result.points
+    ashrae = batch.sweep(ParameterSweepRequest(_cycle(reference_state="ASHRAE"), axis, COP)).result.points
     for left, right in zip(iir, ashrae):
         assert left.metrics == pytest.approx(right.metrics, rel=1e-9)
     assert not {"enthalpy", "entropy"} & {word for key in iir[0].metrics for word in key.split("_")}
@@ -350,7 +358,7 @@ def test_batch_always_solves_with_the_fluid_default_reference_state(refrigeratio
 
     recorder = Recorder()
     service = BatchService(recorder)
-    service.sweep(ParameterSweepRequest(_cycle(reference_state="IIR"), (SweepAxisRequest("superheat_k", (1.0, 2.0)),)))
+    service.sweep(ParameterSweepRequest(_cycle(reference_state="IIR"), (SweepAxisRequest("superheat_k", (1.0, 2.0)),), COP))
     service.sensitivity(SensitivityRequest(_condenser(reference_state="NBP"), (("mass_flow_kg_s", 0.01),),
                                            "exergy_efficiency"))
     assert len(recorder.requests) == 5
@@ -368,7 +376,7 @@ def test_two_variable_sweep_records_infeasible_points(batch) -> None:
     outcome = batch.sweep(ParameterSweepRequest(_cycle(), (
         SweepAxisRequest("condensing_temperature_k", (30 + C, 40 + C)),
         SweepAxisRequest("evaporating_temperature_k", (0 + C, 35 + C)),
-    )))
+    ), COP))
     points = outcome.result.points
     assert [p.ok for p in points] == [True, False, True, True]
     assert "冷凝溫度必須高於蒸發溫度" in points[1].error
@@ -386,9 +394,9 @@ def test_sweep_rejects_variables_the_target_does_not_have(batch) -> None:
 回傳：
     無。"""
     with pytest.raises(ValueError, match="沒有可掃描的輸入"):
-        batch.sweep(ParameterSweepRequest(_cycle(), (SweepAxisRequest("pressure_pa", (1e6, 2e6)),)))
+        batch.sweep(ParameterSweepRequest(_cycle(), (SweepAxisRequest("pressure_pa", (1e6, 2e6)),), COP))
     with pytest.raises(ValueError, match="沒有可掃描的輸入"):
-        batch.sweep(ParameterSweepRequest(_condenser(), (SweepAxisRequest("superheat_k", (1.0, 2.0)),)))
+        batch.sweep(ParameterSweepRequest(_condenser(), (SweepAxisRequest("superheat_k", (1.0, 2.0)),), ETA))
 
 
 def test_condenser_sweep_matches_single_analysis(batch, refrigeration) -> None:
@@ -401,7 +409,7 @@ def test_condenser_sweep_matches_single_analysis(batch, refrigeration) -> None:
 回傳：
     無。"""
     t0s = (15 + C, 25 + C)
-    outcome = batch.sweep(ParameterSweepRequest(_condenser(), (SweepAxisRequest("dead_state_temperature_k", t0s),)))
+    outcome = batch.sweep(ParameterSweepRequest(_condenser(), (SweepAxisRequest("dead_state_temperature_k", t0s),), ETA))
     assert outcome.target is CONDENSER_EXERGY_TARGET
     for point, t0 in zip(outcome.result.points, t0s):
         balance = refrigeration.analyze_condenser_exergy(_condenser(dead_state_temperature_k=t0)).balance
@@ -420,7 +428,7 @@ def test_condenser_boundary_can_follow_the_dead_state(batch, refrigeration) -> N
     無。"""
     t0s = (15 + C, 25 + C)
     outcome = batch.sweep(ParameterSweepRequest(
-        _condenser(boundary_temperature_k=99 + C), (SweepAxisRequest("dead_state_temperature_k", t0s),),
+        _condenser(boundary_temperature_k=99 + C), (SweepAxisRequest("dead_state_temperature_k", t0s),), ETA,
         boundary_at_dead_state=True))
     for point, t0 in zip(outcome.result.points, t0s):
         balance = refrigeration.analyze_condenser_exergy(
@@ -430,13 +438,13 @@ def test_condenser_boundary_can_follow_the_dead_state(batch, refrigeration) -> N
         assert "boundary_temperature_k" not in point.inputs
     with pytest.raises(ValueError, match="T_b 會隨 T0"):
         batch.sweep(ParameterSweepRequest(_condenser(), (SweepAxisRequest("boundary_temperature_k", (300.0, 310.0)),),
-                                          boundary_at_dead_state=True))
+                                          ETA, boundary_at_dead_state=True))
     with pytest.raises(ValueError, match="T_b 會隨 T0"):
         batch.sensitivity(SensitivityRequest(_condenser(), (("boundary_temperature_k", 2.0),), "exergy_efficiency",
                                              boundary_at_dead_state=True))
     with pytest.raises(ValueError, match="只有冷凝器"):
         batch.sweep(ParameterSweepRequest(_cycle(), (SweepAxisRequest("superheat_k", (1.0, 2.0)),),
-                                          boundary_at_dead_state=True))
+                                          COP, boundary_at_dead_state=True))
 
 
 def test_refrigerant_comparison_uses_each_fluid_with_the_same_conditions(batch, refrigeration) -> None:
@@ -449,13 +457,13 @@ def test_refrigerant_comparison_uses_each_fluid_with_the_same_conditions(batch, 
 回傳：
     無。"""
     fluids = ("R32", "R134a", "R290")
-    outcome = batch.compare_refrigerants(RefrigerantComparisonRequest(_cycle(), fluids))
+    outcome = batch.compare_refrigerants(RefrigerantComparisonRequest(_cycle(), fluids, COP))
     assert [point.inputs["fluid"] for point in outcome.result.points] == list(fluids)
     for point in outcome.result.points:
         single = refrigeration.solve_cycle(_cycle(fluid=point.inputs["fluid"]))
         assert point.metrics["cop_cooling"] == pytest.approx(single.cop_cooling, rel=REL)
     curves = batch.compare_refrigerants(RefrigerantComparisonRequest(
-        _cycle(), fluids, SweepAxisRequest("condensing_temperature_k", (40 + C, 50 + C))))
+        _cycle(), fluids, COP, SweepAxisRequest("condensing_temperature_k", (40 + C, 50 + C))))
     assert [group for group, _ in curves.result.series("cop_cooling")] == list(fluids)
 
 
@@ -472,7 +480,7 @@ def test_refrigerant_comparison_rejects_invalid_fluid_lists(batch, fluids, messa
 回傳：
     無。"""
     with pytest.raises(ValueError, match=message):
-        batch.compare_refrigerants(RefrigerantComparisonRequest(_cycle(), fluids))
+        batch.compare_refrigerants(RefrigerantComparisonRequest(_cycle(), fluids, COP))
 
 
 def test_unknown_refrigerant_fails_only_its_own_points(batch) -> None:
@@ -483,7 +491,7 @@ def test_unknown_refrigerant_fails_only_its_own_points(batch) -> None:
 
 回傳：
     無。"""
-    outcome = batch.compare_refrigerants(RefrigerantComparisonRequest(_cycle(), ("R32", "NotAFluid")))
+    outcome = batch.compare_refrigerants(RefrigerantComparisonRequest(_cycle(), ("R32", "NotAFluid"), COP))
     first, second = outcome.result.points
     assert first.ok and not second.ok and second.error
 
@@ -601,6 +609,28 @@ class DummyPage:
 回傳：
     無。"""
 
+    def run_thread(self, handler, *args) -> None:
+        """同步執行背景工作（讓既有 UI 測試直接走 FletCalculationRunner 的流程）。
+
+參數：
+    handler: 背景工作。
+    args: 參數。
+
+回傳：
+    無。"""
+        handler(*args)
+
+    def run_task(self, handler, *args) -> None:
+        """同步執行事件迴圈上的協程。
+
+參數：
+    handler: 協程函式。
+    args: 參數。
+
+回傳：
+    無。"""
+        asyncio.run(handler(*args))
+
 
 @pytest.fixture
 def view(isolated_workspace):
@@ -680,7 +710,7 @@ def test_default_sweep_plots_cop_against_condensing_temperature(view) -> None:
     assert view.result_panel.status == "success"
     values = _result(view)
     assert values["計算點數"] == "7 / 7"
-    assert values["最大值位置"] == "T_c = 30.0 °C"
+    assert values["最大值時的冷凝溫度"] == "30.0 °C"
     assert values["冷凝溫度 45.0 °C"] == "3.872"
     lines = module.chart_panel.figure.axes[0].get_lines()
     assert len(lines) == 1 and len(lines[0].get_xdata()) == 7
@@ -704,6 +734,9 @@ def test_second_variable_draws_one_curve_per_value_and_lists_failures(view) -> N
 
     assert view.result_panel.status == "success"
     assert _result(view)["計算點數"] == "16 / 21"
+    # 雙變數時，極值位置每個變數各一列（數值短，不擠壓名稱欄）。
+    assert _result(view)["最大值時的冷凝溫度"] == "55.0 °C"
+    assert _result(view)["最大值時的蒸發溫度"] == "50.0 °C"
     assert "--- 無法計算的點 ---" in view.adapter.result_text
     assert "冷凝溫度 30.0 °C、蒸發溫度 50.0 °C：冷凝溫度必須高於蒸發溫度。" in view.adapter.result_text
     assert len(module.chart_panel.figure.axes[0].get_lines()) == 3
@@ -790,7 +823,7 @@ def test_invalid_count_is_reported_with_the_field_name(view) -> None:
 
 
 def test_refrigerant_comparison_draws_bars_per_fluid(view) -> None:
-    """冷媒比較（不掃描）：每種冷媒一個數值與一根長條；最大值位置為冷媒名稱。
+    """冷媒比較（不掃描）：每種冷媒一個數值與一根長條；最大值所在的冷媒以名稱列出。
 
 參數：
     view: 批次頁。
@@ -804,7 +837,7 @@ def test_refrigerant_comparison_draws_bars_per_fluid(view) -> None:
     values = _result(view)
     assert view.result_panel.status == "success"
     assert set(values) >= {"R32", "R410A", "R134a", "R290"}
-    assert values["最大值位置"] == "R134a"
+    assert values["最大值時的冷媒"] == "R134a"
     axes = module.chart_panel.figure.axes[0]
     assert len(axes.patches) == 4
     assert [label.get_text() for label in axes.get_xticklabels()] == ["R32", "R410A", "R134a", "R290"]
@@ -925,3 +958,491 @@ def test_condenser_defaults_describe_a_real_condensing_process(view, refrigerati
             CondenserExergyRequest(**{**base.__dict__, "pressure_pa": pressure}))
         assert result.inlet.temperature_k > result.dew_point_k
         assert result.outlet.temperature_k < result.bubble_point_k
+
+
+# ======================================================
+# 非阻塞執行與結果新舊（generation）
+# ======================================================
+class ManualRunner:
+    """測試用執行器：記錄送出的工作，由測試決定每一件何時完成（順序完全確定，不靠 timing）。"""
+
+    def __init__(self) -> None:
+        """初始化工作佇列。
+
+回傳：
+    無。"""
+        self.jobs = []
+
+    def submit(self, work, on_done) -> None:
+        """記錄工作，不執行。
+
+參數：
+    work: 背景計算。
+    on_done: 完成回呼。
+
+回傳：
+    無。"""
+        self.jobs.append((work, on_done))
+
+    def finish(self, index: int) -> None:
+        """執行第 index 件工作並以其結果呼叫完成回呼。
+
+參數：
+    index: 工作在送出順序中的位置。
+
+回傳：
+    無。"""
+        work, on_done = self.jobs[index]
+        on_done(run_work(work))
+
+
+@pytest.fixture
+def manual(view):
+    """讓批次頁改用可控制完成順序的執行器。
+
+參數：
+    view: 批次頁。
+
+回傳：
+    ManualRunner。"""
+    runner = ManualRunner()
+    view.adapter.runner = runner
+    return runner
+
+
+def _button(view):
+    """回傳共用的計算按鈕。
+
+參數：
+    view: 分析頁。
+
+回傳：
+    Button。"""
+    return view.workspace.action_bar.content
+
+
+def _chart_lines(view) -> list:
+    """回傳圖表上每條曲線的 x 資料。
+
+參數：
+    view: 批次頁。
+
+回傳：
+    x 資料清單；圖表尚未畫曲線時為空。"""
+    figure = view.adapter.modules[0].chart_panel.figure
+    return [list(line.get_xdata()) for axes in figure.axes for line in axes.get_lines()]
+
+
+def test_calculation_runs_in_a_worker_while_the_ui_handler_returns(view) -> None:
+    """計算在背景執行緒進行：UI handler 立即返回並顯示「計算中」、停用按鈕；背景完成、
+    發布排回 UI 執行緒後才顯示結果。以 Event 控制背景計算的時機，不靠 sleep。
+
+參數：
+    view: 批次頁。
+
+回傳：
+    無。"""
+    release = threading.Event()
+    threads = []
+    published = []
+
+    class ThreadedPage:
+        """run_thread 開真正的執行緒；run_task 只記錄協程，由測試在「UI 執行緒」執行。"""
+
+        def run_thread(self, handler, *args) -> None:
+            """在新執行緒執行背景工作。
+
+參數：
+    handler: 背景工作。
+    args: 參數。
+
+回傳：
+    無。"""
+            thread = threading.Thread(target=handler, args=args)
+            threads.append(thread)
+            thread.start()
+
+        def run_task(self, handler, *args) -> None:
+            """記錄要在事件迴圈執行的協程。
+
+參數：
+    handler: 協程函式。
+    args: 參數。
+
+回傳：
+    無。"""
+            published.append((handler, args))
+
+    module = view.adapter.modules[0]
+    original_sweep = module.batch.sweep
+    worker_threads = []
+
+    def gated_sweep(request):
+        """在背景執行緒等候放行後才計算。
+
+參數：
+    request: 掃描 request。
+
+回傳：
+    SweepOutcome。"""
+        worker_threads.append(threading.current_thread())
+        assert release.wait(timeout=10)
+        return original_sweep(request)
+
+    module.batch.sweep = gated_sweep
+    view.adapter.runner = FletCalculationRunner(ThreadedPage())
+    view.perform_calculation(None)
+
+    # handler 已返回，背景計算仍被擋住：只顯示計算中，不假裝成功。
+    assert view.result_panel.status == "loading"
+    assert view.adapter.result_text is None
+    assert _button(view).disabled
+    assert _chart_lines(view) == []
+
+    release.set()
+    threads[0].join(timeout=10)
+    assert worker_threads[0] is not threading.current_thread()
+    assert view.result_panel.status == "loading"  # 結果尚未回到 UI 執行緒
+    handler, args = published.pop()
+    asyncio.run(handler(*args))
+
+    assert view.result_panel.status == "success"
+    assert _result(view)["計算點數"] == "7 / 7"
+    assert not _button(view).disabled
+
+
+def test_duplicate_requests_while_running_are_ignored(view, manual) -> None:
+    """計算中再次要求計算（按鈕或 Ctrl+Enter）不會重複送出。
+
+參數：
+    view: 批次頁。
+    manual: 手動執行器。
+
+回傳：
+    無。"""
+    view.perform_calculation(None)
+    view.perform_calculation(None)
+    assert len(manual.jobs) == 1
+    assert _button(view).disabled
+    manual.finish(0)
+    assert view.result_panel.status == "success"
+    assert not _button(view).disabled
+
+
+def test_input_change_while_running_discards_the_old_result(view, manual) -> None:
+    """計算中修改語意輸入：進行中的計算作廢，完成後不發布文字、圖表或模組狀態。
+
+參數：
+    view: 批次頁。
+    manual: 手動執行器。
+
+回傳：
+    無。"""
+    module = view.adapter.modules[0]
+    view.perform_calculation(None)
+    field = module.all_entries["sw_superheat_k"]["val"]
+    field.value = "6"
+    field.on_change(None)
+
+    assert view.result_panel.status == "warning"
+    assert not view.adapter.is_running
+    assert not _button(view).disabled
+    manual.finish(0)
+    assert view.result_panel.status == "warning"
+    assert view.adapter.result_text is None
+    assert module.last_outcome is None
+    assert _chart_lines(view) == []
+
+
+def test_later_calculation_wins_when_the_earlier_one_finishes_last(view, manual) -> None:
+    """A 開始 → 修改輸入 → B 開始 → B 完成 → A 完成：畫面的文字與圖表都只來自 B。
+
+參數：
+    view: 批次頁。
+    manual: 手動執行器。
+
+回傳：
+    無。"""
+    module = view.adapter.modules[0]
+    view.perform_calculation(None)  # A：7 點
+    count = module.text_entries["sw_x_count"]["val"]
+    count.value = "3"
+    count.on_change(None)
+    view.perform_calculation(None)  # B：3 點
+    assert len(manual.jobs) == 2
+
+    manual.finish(1)
+    assert _result(view)["計算點數"] == "3 / 3"
+    manual.finish(0)
+
+    assert view.result_panel.status == "success"
+    assert _result(view)["計算點數"] == "3 / 3"
+    assert [len(xs) for xs in _chart_lines(view)] == [3]
+    assert len(module.last_outcome.result.points) == 3
+
+
+def test_worker_uses_the_input_snapshot_taken_when_the_calculation_started(view, manual) -> None:
+    """背景計算只使用開始時讀取的輸入；之後欄位內容再變也不影響這一輪。
+
+參數：
+    view: 批次頁。
+    manual: 手動執行器。
+
+回傳：
+    無。"""
+    module = view.adapter.modules[0]
+    view.perform_calculation(None)
+    # 直接改值（不觸發事件）：只驗證背景計算不會回頭讀取控制項。
+    module.text_entries["sw_x_count"]["val"].value = "3"
+    manual.finish(0)
+    assert _result(view)["計算點數"] == "7 / 7"
+
+
+def test_switching_analysis_while_running_ignores_the_old_result(view, manual) -> None:
+    """參數掃描計算中切換到敏感度分析：掃描完成後不改變目前分析的狀態、文字或圖表。
+
+參數：
+    view: 批次頁。
+    manual: 手動執行器。
+
+回傳：
+    無。"""
+    module = view.adapter.modules[0]
+    view.perform_calculation(None)
+    view._handle_tool_change("batch.sensitivity")
+    assert not _button(view).disabled
+
+    manual.finish(0)
+    assert view.adapter.active_key == "batch.sensitivity"
+    assert view.result_panel.status == "empty"
+    assert view.adapter.result_text is None
+    assert module.last_outcome is None
+    assert _chart_lines(view) == []
+
+
+def test_output_unit_change_while_running_restarts_with_the_new_units(view, manual) -> None:
+    """計算中切換輸出單位：以同一組輸入、新單位重新計算；舊單位那一輪不論先後完成都不發布。
+
+參數：
+    view: 批次頁。
+    manual: 手動執行器。
+
+回傳：
+    無。"""
+    view.perform_calculation(None)
+    view.set_output_unit_system("Imperial")
+    assert len(manual.jobs) == 2
+    assert view.result_panel.status == "loading"
+
+    manual.finish(0)  # SI 那一輪晚於切換才完成
+    assert view.result_panel.status == "loading"
+    manual.finish(1)
+    assert "冷凝溫度 86.0 °F" in _result(view)
+    assert all(xs[0] == pytest.approx(86.0) for xs in _chart_lines(view))
+
+
+def test_errors_are_published_only_while_fresh(view, manual) -> None:
+    """背景計算的 ValueError 在仍屬於目前這一輪時才顯示；過期的錯誤不覆蓋新的成功結果。
+
+參數：
+    view: 批次頁。
+    manual: 手動執行器。
+
+回傳：
+    無。"""
+    view._handle_tool_change("batch.sensitivity")
+    module = view.adapter.modules[0]
+    condensing = module.all_entries["se_condensing_temperature_k"]["val"]
+    condensing.value = "0"  # 低於蒸發溫度：基準條件在背景計算時失敗
+    condensing.on_change(None)
+    view.perform_calculation(None)  # A：會失敗
+    condensing.value = "45"
+    condensing.on_change(None)
+    view.perform_calculation(None)  # B：正常
+
+    manual.finish(1)
+    manual.finish(0)
+    assert view.result_panel.status == "success"
+    assert _result(view)["影響最大"] == "eta_isen"
+
+    condensing.value = "0"
+    condensing.on_change(None)
+    view.perform_calculation(None)  # C：仍屬於目前這一輪的錯誤
+    manual.finish(2)
+    assert view.result_panel.status == "error"
+    assert "冷凝溫度必須高於蒸發溫度" in view.result_panel.message
+    assert not _button(view).disabled
+
+
+def test_unexpected_background_exception_is_logged_and_releases_the_button(view, manual, caplog) -> None:
+    """背景計算的非 ValueError 例外記錄在 log，以錯誤呈現，計算按鈕恢復可用。
+
+參數：
+    view: 批次頁。
+    manual: 手動執行器。
+    caplog: pytest log 擷取。
+
+回傳：
+    無。"""
+    module = view.adapter.modules[0]
+
+    def broken(_request):
+        """模擬程式錯誤。
+
+參數：
+    _request: 掃描 request。
+
+回傳：
+    無。"""
+        raise RuntimeError("boom")
+
+    module.batch.sweep = broken
+    view.perform_calculation(None)
+    with caplog.at_level(logging.ERROR):
+        manual.finish(0)
+
+    assert view.result_panel.status == "error"
+    assert "boom" in view.result_panel.message
+    assert not _button(view).disabled
+    assert any(record.exc_info and isinstance(record.exc_info[1], RuntimeError) for record in caplog.records)
+
+
+def test_invalid_input_fails_before_anything_is_submitted(view, manual) -> None:
+    """輸入無效時在 UI 執行緒就失敗，不送出背景計算，按鈕維持可用。
+
+參數：
+    view: 批次頁。
+    manual: 手動執行器。
+
+回傳：
+    無。"""
+    view.adapter.modules[0].text_entries["sw_x_count"]["val"].value = "abc"
+    view.perform_calculation(None)
+    assert manual.jobs == []
+    assert view.result_panel.status == "error"
+    assert not _button(view).disabled
+
+
+# ======================================================
+# 指標適用性與冷媒清單
+# ======================================================
+def test_system_metrics_require_refrigeration_capacity(batch) -> None:
+    """系統量（功率、流量）需要冷凍能力：未提供時不能選，選單位質量指標時每個成功的點都只帶適用的指標。
+
+參數：
+    batch: 批次服務。
+
+回傳：
+    無。"""
+    base = _cycle(refrigeration_capacity_w=None)
+    axis = (SweepAxisRequest("superheat_k", (2.0, 4.0)),)
+    with pytest.raises(ValueError, match="「壓縮機功率」需要提供冷凍能力"):
+        batch.sweep(ParameterSweepRequest(base, axis, "compressor_power_w"))
+    with pytest.raises(ValueError, match="需要提供冷凍能力"):
+        batch.compare_refrigerants(RefrigerantComparisonRequest(base, ("R32", "R290"), "mass_flow_kg_s"))
+    with pytest.raises(ValueError, match="需要提供冷凍能力"):
+        batch.sensitivity(SensitivityRequest(base, (("superheat_k", 1.0),), "heat_rejection_w"))
+
+    outcome = batch.sweep(ParameterSweepRequest(base, axis, COP))
+    expected = {metric.key for metric in CYCLE_TARGET.available_metrics({})}
+    assert "compressor_power_w" not in expected
+    assert all(set(point.metrics) == expected for point in outcome.result.succeeded)
+
+
+def test_sweeping_the_capacity_makes_system_metrics_available(batch) -> None:
+    """冷凍能力本身是掃描變數時，每一點都有冷凍能力，系統量可選且每個成功點都帶有它。
+
+參數：
+    batch: 批次服務。
+
+回傳：
+    無。"""
+    outcome = batch.sweep(ParameterSweepRequest(
+        _cycle(refrigeration_capacity_w=None),
+        (SweepAxisRequest("refrigeration_capacity_w", (5_000.0, 10_000.0)),), "compressor_power_w"))
+    assert outcome.metric.key == "compressor_power_w"
+    powers = [point.metrics["compressor_power_w"] for point in outcome.result.points]
+    assert powers[1] == pytest.approx(2 * powers[0])
+
+
+def test_available_metrics_follow_declared_requirements() -> None:
+    """指標是否適用只取決於宣告的必要輸入是否有值。
+
+回傳：
+    無。"""
+    all_keys = [metric.key for metric in CYCLE_TARGET.metrics]
+    assert [metric.key for metric in CYCLE_TARGET.available_metrics({"refrigeration_capacity_w": 1.0})] == all_keys
+    reduced = [metric.key for metric in CYCLE_TARGET.available_metrics({"refrigeration_capacity_w": None})]
+    assert reduced == [metric.key for metric in CYCLE_TARGET.metrics if not metric.requires]
+    assert len(CONDENSER_EXERGY_TARGET.available_metrics({})) == len(CONDENSER_EXERGY_TARGET.metrics)
+
+
+@pytest.mark.parametrize("text", ["R32, , R290", "R32,,R290", "R32, R290,"])
+def test_blank_items_in_the_refrigerant_list_are_input_errors(view, text) -> None:
+    """冷媒清單中的空白項目（連續或結尾的逗號）是輸入錯誤，不會被默默略過。
+
+參數：
+    view: 批次頁。
+    text: 冷媒清單文字。
+
+回傳：
+    無。"""
+    view._handle_tool_change("batch.refrigerant_comparison")
+    view.adapter.modules[0].text_entries["rc_fluids"]["val"].value = text
+    view.perform_calculation(None)
+    assert view.result_panel.status == "error"
+    assert "空白項目" in view.result_panel.message
+
+
+def test_applicable_metric_without_a_value_is_a_programming_error(refrigeration, monkeypatch) -> None:
+    """宣告的必要輸入已提供、指標卻沒有數值時是程式錯誤：直接拋出，不記成單點失敗。
+
+參數：
+    refrigeration: 冷凍服務。
+    monkeypatch: pytest monkeypatch。
+
+回傳：
+    無。"""
+    service = BatchService(refrigeration)
+    original = service._cycle_metrics
+    monkeypatch.setattr(service, "_cycle_metrics", lambda request: {**original(request), "cop_cooling": None})
+    with pytest.raises(RuntimeError, match="cop_cooling"):
+        service.sweep(ParameterSweepRequest(_cycle(), (SweepAxisRequest("superheat_k", (2.0, 4.0)),), COP))
+
+
+def test_definitions_accept_either_calc_func_or_prepare_func_not_both() -> None:
+    """分析只能以 calc_func（同步）或 prepare_func（兩段式）其中一種註冊；兩段式的 calculate 依序執行三段。
+
+回傳：
+    無。"""
+    calls = []
+    prepared = PreparedCalculation(compute=lambda: calls.append("compute") or 2,
+                                   publish=lambda value: calls.append("publish") or f"x: {value}")
+
+    class Module:
+        """測試用模組。"""
+
+        def __init__(self, raw: dict) -> None:
+            """保存註冊內容。
+
+參數：
+    raw: 註冊 dict。
+
+回傳：
+    無。"""
+            self.raw = raw
+
+        def get_analysis_definitions(self) -> dict:
+            """回報註冊內容。
+
+回傳：
+    dict。"""
+            return {"測試": self.raw}
+
+    definition, = definitions_from_module(Module({"analysis_id": "t.one", "ui": ft.Container(),
+                                                  "prepare_func": lambda imperial: prepared}))
+    assert definition.calculate(False) == "x: 2"
+    assert calls == ["compute", "publish"]
+    with pytest.raises(ValueError, match="not both"):
+        definitions_from_module(Module({"analysis_id": "t.two", "ui": ft.Container(), "calc_func": str,
+                                        "prepare_func": lambda imperial: prepared}))

@@ -1,21 +1,22 @@
 """批次計算與比較：參數掃描、冷媒比較、敏感度分析（龍捲風圖）。
 
-計算委派給 `BatchService`（冷凍循環與冷凝器 Exergy 的結構化結果）；本模組只負責表單、
-單位換算、結果文字與圖表。指標都與 reference state 無關，因此不提供 Reference State 選單。
+計算委派給 `BatchService`（冷凍循環與冷凝器 Exergy 的結構化結果）；本模組負責表單、
+輸入讀取與計算流程，結果文字與圖表由 `batch_presentation.BatchPresenter` 產生。每項分析以
+兩段式計算註冊（``prepare_func``）：UI 執行緒讀取並驗證輸入、建立不可變的 request；背景
+只呼叫 application service；結果仍屬於目前這一輪時才在 UI 執行緒畫圖與產生文字。
+指標都與 reference state 無關，因此不提供 Reference State 選單。
 無法計算的點不會中斷整批計算，列在結果最後並附原因；圖上以斷線表示。
 """
 
 from __future__ import annotations
 
-from math import nan
+from functools import partial
 
 import flet as ft
 
 from application.batch import (
     CONDENSER_EXERGY_TARGET,
     CYCLE_TARGET,
-    FLUID_VARIABLE,
-    BatchMetric,
     BatchService,
     BatchTarget,
     BatchVariable,
@@ -27,13 +28,14 @@ from application.batch import (
     SweepOutcome,
 )
 from application.models import CondenserExergyRequest, RefrigerationCycleRequest
-from domain.batch import MAX_AXIS_POINTS, BatchPoint, linear_values
+from domain.batch import MAX_AXIS_POINTS, linear_values
 
+from ...ui.analysis_definition import PreparedCalculation
 from ...ui.components.figure_panel import FigurePanel
 from ...ui.theme import TOKENS, style_dropdown
 from ..unit.UnitConverter import UnitConverter
 from .base_analysis_module import BaseAnalysisModule
-from .result_formatting import ResultFormatter
+from .batch_presentation import BatchPresenter
 
 NO_AXIS = "none"
 BOUNDARY_AMBIENT = "ambient"
@@ -88,13 +90,7 @@ DELTA_DEFAULTS = {
     "dead_state_temperature_k": ("2", "K"),
     "boundary_temperature_k": ("2", "K"),
 }
-# 各性質在結果中的小數位數；無因次指標（COP、壓縮比）使用 NO_UNIT_DIGITS。
-DIGITS = {"T": 1, "DeltaT": 1, "H": 1, "Power": 3, "MassFlow": 4, "VolumeFlow": 2, "P": 1,
-          "Eff": 1, "EntropyFlow": 5}
-NO_UNIT_DIGITS = 3
 DEFAULT_METRIC = {CYCLE_TARGET.key: "cop_cooling", CONDENSER_EXERGY_TARGET.key: "exergy_efficiency"}
-LOW_COLOR = "#2563EB"
-HIGH_COLOR = "#EA580C"
 
 
 class BatchModule(BaseAnalysisModule):
@@ -139,19 +135,19 @@ class BatchModule(BaseAnalysisModule):
             "參數掃描": {
                 "analysis_id": "batch.parameter_sweep",
                 "ui": self.sweep_ui,
-                "calc_func": self.calculate_sweep,
+                "prepare_func": self.prepare_sweep,
                 "result_chart": self.chart_panel,
             },
             "冷媒比較": {
                 "analysis_id": "batch.refrigerant_comparison",
                 "ui": self.compare_ui,
-                "calc_func": self.calculate_comparison,
+                "prepare_func": self.prepare_comparison,
                 "result_chart": self.chart_panel,
             },
             "敏感度分析（龍捲風圖）": {
                 "analysis_id": "batch.sensitivity",
                 "ui": self.sensitivity_ui,
-                "calc_func": self.calculate_sensitivity,
+                "prepare_func": self.prepare_sensitivity,
                 "result_chart": self.chart_panel,
             },
         }
@@ -596,293 +592,67 @@ class BatchModule(BaseAnalysisModule):
             self.all_entries[key]["ui_row"].visible = not self.boundary_at_dead_state("se")
 
     # ======================================================
-    # 格式化
+    # 計算：prepare（UI 執行緒）→ compute（背景）→ publish（UI 執行緒）
     # ======================================================
-    def _format_quantity(self, formatter: ResultFormatter, prop_code: str | None, value: float) -> str:
-        """把 SI 數值格式化為目前輸出單位的「數值 單位」。
-
-參數：
-    formatter: 結果格式化器。
-    prop_code: 性質代碼；None 表示無因次。
-    value: SI 數值。
-
-回傳：
-    文字。"""
-        if prop_code is None:
-            return f"{value:.{NO_UNIT_DIGITS}f}"
-        return formatter.quantity(prop_code, value, DIGITS.get(prop_code, 2))
-
-    def _format_input(self, formatter: ResultFormatter, target: BatchTarget, variable: str, value) -> str:
-        """格式化一個輸入值（冷媒名稱原樣輸出）。
-
-參數：
-    formatter: 結果格式化器。
-    target: 計算對象。
-    variable: 輸入欄位名稱。
-    value: 輸入值。
-
-回傳：
-    文字。"""
-        if variable == FLUID_VARIABLE:
-            return str(value)
-        return self._format_quantity(formatter, target.variable(variable).prop_code, value)
-
-    def _position(self, formatter: ResultFormatter, target: BatchTarget, point: BatchPoint,
-                  variables: list[str]) -> str:
-        """以簡短符號描述一個點的位置（只含非中文字元，供數值欄位使用）。
-
-參數：
-    formatter: 結果格式化器。
-    target: 計算對象。
-    point: 批次點。
-    variables: 掃描變數。
-
-回傳：
-    例如 ``T_c = 45.0 °C, R32``。"""
-        parts = []
-        for variable in variables:
-            value = self._format_input(formatter, target, variable, point.inputs[variable])
-            parts.append(value if variable == FLUID_VARIABLE else f"{target.variable(variable).symbol} = {value}")
-        return ", ".join(parts)
-
-    def _chart_value(self, formatter: ResultFormatter, prop_code: str | None, value: float | None) -> float:
-        """把 SI 數值換成圖表使用的輸出單位數值；失敗點為 NaN（圖上斷線）。
-
-參數：
-    formatter: 結果格式化器。
-    prop_code: 性質代碼；None 表示無因次。
-    value: SI 數值或 None。
-
-回傳：
-    數值。"""
-        if value is None:
-            return nan
-        if prop_code is None:
-            return value
-        return self.unit_converter.convert_from_si(prop_code, value, formatter.unit(prop_code))
-
-    def _axis_title(self, formatter: ResultFormatter, label: str, prop_code: str | None) -> str:
-        """圖表座標軸標題。
-
-參數：
-    formatter: 結果格式化器。
-    label: 名稱。
-    prop_code: 性質代碼；None 表示無因次。
-
-回傳：
-    例如「冷凝溫度 [°C]」。"""
-        return label if prop_code is None else f"{label} [{formatter.unit(prop_code)}]"
-
-    def _sweep_text(self, outcome: SweepOutcome, metric: BatchMetric, formatter: ResultFormatter) -> str:
-        """把掃描結果寫成「名稱: 數值」文字：摘要、每條曲線的數值與無法計算的點。
-
-參數：
-    outcome: 掃描結果。
-    metric: 指標。
-    formatter: 結果格式化器。
-
-回傳：
-    結果文字。"""
-        target, result = outcome.target, outcome.result
-        variables = [axis.variable for axis in result.axes]
-        succeeded = result.succeeded
-        formatter.section("摘要")
-        formatter.add_text("計算點數", f"{len(succeeded)} / {len(result.points)}")
-        if succeeded:
-            best = max(succeeded, key=lambda point: point.metrics[metric.key])
-            worst = min(succeeded, key=lambda point: point.metrics[metric.key])
-            formatter.add_text("最大值", self._format_quantity(formatter, metric.prop_code, best.metrics[metric.key]))
-            formatter.add_text("最大值位置", self._position(formatter, target, best, variables))
-            formatter.add_text("最小值", self._format_quantity(formatter, metric.prop_code, worst.metrics[metric.key]))
-            formatter.add_text("最小值位置", self._position(formatter, target, worst, variables))
-        x_variable = variables[0]
-        for group, values in result.series(metric.key):
-            if group is None:
-                formatter.section(metric.label)
-            elif len(variables) > 1 and variables[1] == FLUID_VARIABLE:
-                formatter.section(f"{metric.label}（{group}）")
-            else:
-                name = target.variable(variables[1]).label
-                formatter.section(f"{metric.label}（{name} {self._format_input(formatter, target, variables[1], group)}）")
-            for x_value, value in values:
-                x_text = self._format_input(formatter, target, x_variable, x_value)
-                label = x_text if x_variable == FLUID_VARIABLE else f"{target.variable(x_variable).label} {x_text}"
-                formatter.add_text(label, "-" if value is None else
-                                   self._format_quantity(formatter, metric.prop_code, value))
-        if result.failed:
-            formatter.section("無法計算的點")
-            for point in result.failed:
-                where = "、".join(
-                    self._format_input(formatter, target, variable, point.inputs[variable])
-                    if variable == FLUID_VARIABLE else
-                    f"{target.variable(variable).label} {self._format_input(formatter, target, variable, point.inputs[variable])}"
-                    for variable in variables)
-                formatter.lines.append(f"{where}：{point.error}")
-        return formatter.text()
-
-    # ======================================================
-    # 圖表
-    # ======================================================
-    def _plot_sweep(self, outcome: SweepOutcome, metric: BatchMetric, formatter: ResultFormatter) -> None:
-        """畫掃描曲線（橫軸為第一軸）；第一軸是冷媒時畫長條圖。
-
-參數：
-    outcome: 掃描結果。
-    metric: 指標。
-    formatter: 結果格式化器。
-
-回傳：
-    無。"""
-        target, result = outcome.target, outcome.result
-        variables = [axis.variable for axis in result.axes]
-        figure = self.chart_panel.figure
-        figure.clear()
-        # 圖表面板會依畫面寬度調整 figure 尺寸；constrained layout 在每次重繪時重新配置，座標軸標題不會被裁掉。
-        figure.set_layout_engine("constrained")
-        axes = figure.add_subplot(111)
-        series = result.series(metric.key)
-        if variables[0] == FLUID_VARIABLE:
-            (_, values), = series
-            names = [str(name) for name, _ in values]
-            heights = [self._chart_value(formatter, metric.prop_code, value) for _, value in values]
-            axes.bar(names, heights, color=TOKENS.primary)
-            for index, height in enumerate(heights):
-                if height == height:  # NaN 不標示
-                    axes.annotate(self._format_quantity(formatter, metric.prop_code, values[index][1]),
-                                  (index, height), ha="center", va="bottom", fontsize=9)
-            axes.set_xlabel("冷媒")
-        else:
-            x_variable = target.variable(variables[0])
-            for group, values in series:
-                xs = [self._chart_value(formatter, x_variable.prop_code, x) for x, _ in values]
-                ys = [self._chart_value(formatter, metric.prop_code, value) for _, value in values]
-                if group is None:
-                    label = None
-                elif variables[1] == FLUID_VARIABLE:
-                    label = str(group)
-                else:
-                    label = f"{target.variable(variables[1]).symbol} = " \
-                            f"{self._format_input(formatter, target, variables[1], group)}"
-                axes.plot(xs, ys, marker="o", markersize=4, linewidth=1.6, label=label)
-            axes.set_xlabel(self._axis_title(formatter, x_variable.label, x_variable.prop_code))
-            if len(series) > 1:
-                axes.legend(fontsize=8)
-        axes.set_ylabel(self._axis_title(formatter, metric.label, metric.prop_code))
-        axes.grid(True, alpha=0.3)
-        self.chart_panel.refresh()
-
-    def _plot_tornado(self, outcome: SensitivityOutcome, metric: BatchMetric, formatter: ResultFormatter) -> None:
-        """畫龍捲風圖：每個輸入一列，由基準值畫到 −Δ 與 +Δ 時的指標值；影響最大者在最上方。
-
-參數：
-    outcome: 敏感度結果。
-    metric: 指標。
-    formatter: 結果格式化器。
-
-回傳：
-    無。"""
-        target, result = outcome.target, outcome.result
-        base = self._chart_value(formatter, metric.prop_code, result.base_value)
-        figure = self.chart_panel.figure
-        figure.clear()
-        # 圖表面板會依畫面寬度調整 figure 尺寸；constrained layout 在每次重繪時重新配置，座標軸標題不會被裁掉。
-        figure.set_layout_engine("constrained")
-        axes = figure.add_subplot(111)
-        rows = list(reversed(result.rows))
-        labels = []
-        for index, row in enumerate(rows):
-            variable = target.variable(row.variable)
-            delta = self._format_quantity(formatter, variable.delta_prop_code, row.delta)
-            labels.append(f"{variable.label} ± {delta}")
-            for point, color, name in ((row.low, LOW_COLOR, "−Δ"), (row.high, HIGH_COLOR, "+Δ")):
-                value = self._chart_value(formatter, metric.prop_code, row.metric(point, metric.key))
-                if value == value:
-                    axes.barh(index, value - base, left=base, color=color, height=0.6,
-                              label=name if index == 0 else None)
-        axes.axvline(base, color="#374151", linewidth=1)
-        axes.set_yticks(range(len(rows)), labels)
-        axes.set_xlabel(self._axis_title(formatter, metric.label, metric.prop_code))
-        axes.legend(fontsize=8, loc="lower right")
-        axes.grid(True, axis="x", alpha=0.3)
-        self.chart_panel.refresh()
-
-    # ======================================================
-    # 計算
-    # ======================================================
-    def calculate_sweep(self, use_imperial: bool) -> str:
-        """執行參數掃描並畫曲線。
+    def prepare_sweep(self, use_imperial: bool) -> PreparedCalculation:
+        """讀取並驗證參數掃描的輸入，建立不可變的 request。
 
 參數：
     use_imperial: 是否以英制輸出。
 
 回傳：
-    格式化結果文字。
+    PreparedCalculation；compute 只呼叫 application service。
 
 引發：
     ValueError：輸入無效時。"""
-        self.last_outcome = None
         prefix = "sw"
         axes = [self._read_axis(prefix, "x")]
         second = self._read_axis(prefix, "y")
         if second is not None:
             axes.append(second)
         target = self.target(prefix)
-        outcome = self.batch.sweep(ParameterSweepRequest(
-            self._base_request(prefix), tuple(axes),
-            boundary_at_dead_state=target is CONDENSER_EXERGY_TARGET and self.boundary_at_dead_state(prefix)))
-        return self._finish_sweep(outcome, self.dropdowns["sw_metric"].value, use_imperial)
+        request = ParameterSweepRequest(
+            self._base_request(prefix), tuple(axes), self.dropdowns["sw_metric"].value,
+            boundary_at_dead_state=target is CONDENSER_EXERGY_TARGET and self.boundary_at_dead_state(prefix))
+        return PreparedCalculation(
+            compute=partial(self.batch.sweep, request),
+            publish=partial(self._publish_sweep, use_imperial=use_imperial),
+        )
 
-    def calculate_comparison(self, use_imperial: bool) -> str:
-        """執行冷媒比較（可另掃描一個輸入）並畫長條圖或曲線。
+    def prepare_comparison(self, use_imperial: bool) -> PreparedCalculation:
+        """讀取並驗證冷媒比較的輸入；清單中的空白項目（例如連續逗號）視為輸入錯誤。
 
 參數：
     use_imperial: 是否以英制輸出。
 
 回傳：
-    格式化結果文字。
+    PreparedCalculation。
 
 引發：
     ValueError：輸入無效時。"""
-        self.last_outcome = None
-        fluids = tuple(name.strip() for name in self.read_text("rc_fluids").split(",") if name.strip())
-        outcome = self.batch.compare_refrigerants(RefrigerantComparisonRequest(
-            self._cycle_request("rc", fluids[0] if fluids else ""), fluids, self._read_axis("rc", "x")))
-        return self._finish_sweep(outcome, self.dropdowns["rc_metric"].value, use_imperial)
+        names = [name.strip() for name in self.read_text("rc_fluids").split(",")]
+        if any(not name for name in names):
+            raise ValueError("「比較的冷媒」有空白項目（例如連續或結尾的逗號）；請刪除多餘的逗號。")
+        fluids = tuple(names)
+        request = RefrigerantComparisonRequest(
+            self._cycle_request("rc", fluids[0]), fluids, self.dropdowns["rc_metric"].value,
+            self._read_axis("rc", "x"))
+        return PreparedCalculation(
+            compute=partial(self.batch.compare_refrigerants, request),
+            publish=partial(self._publish_sweep, use_imperial=use_imperial),
+        )
 
-    def _finish_sweep(self, outcome: SweepOutcome, metric_key: str, use_imperial: bool) -> str:
-        """保存結果、畫圖並回傳文字；所有點都失敗時視為錯誤。
-
-參數：
-    outcome: 掃描結果。
-    metric_key: 指標名稱。
-    use_imperial: 是否以英制輸出。
-
-回傳：
-    格式化結果文字。
-
-引發：
-    ValueError：所有點都無法計算時（附第一個原因）。"""
-        result = outcome.result
-        if not result.succeeded:
-            raise ValueError(f"所有點都無法計算：{result.points[0].error}")
-        metric = outcome.target.metric(metric_key)
-        formatter = ResultFormatter(self.unit_converter, use_imperial)
-        self._plot_sweep(outcome, metric, formatter)
-        self.last_outcome = outcome
-        return self._sweep_text(outcome, metric, formatter)
-
-    def calculate_sensitivity(self, use_imperial: bool) -> str:
-        """執行單因子敏感度分析並畫龍捲風圖。
+    def prepare_sensitivity(self, use_imperial: bool) -> PreparedCalculation:
+        """讀取並驗證敏感度分析的輸入；變動量 0 的輸入不分析。
 
 參數：
     use_imperial: 是否以英制輸出。
 
 回傳：
-    格式化結果文字。
+    PreparedCalculation。
 
 引發：
-    ValueError：輸入無效、沒有任何變動量或基準條件無法計算時。"""
-        self.last_outcome = None
+    ValueError：輸入無效（例如變動量為負）時。"""
         prefix = "se"
         target = self.target(prefix)
         follows = target is CONDENSER_EXERGY_TARGET and self.boundary_at_dead_state(prefix)
@@ -894,47 +664,47 @@ class BatchModule(BaseAnalysisModule):
                 raise ValueError(f"「{variable.label} ±」不可為負值。")
             if delta > 0:
                 perturbations.append((variable.key, delta))
-        outcome = self.batch.sensitivity(SensitivityRequest(
+        request = SensitivityRequest(
             self._base_request(prefix), tuple(perturbations), self.dropdowns["se_metric"].value,
-            boundary_at_dead_state=follows))
-        metric = target.metric(outcome.result.metric)
-        formatter = ResultFormatter(self.unit_converter, use_imperial)
-        self._plot_tornado(outcome, metric, formatter)
-        self.last_outcome = outcome
-        return self._sensitivity_text(outcome, metric, formatter)
+            boundary_at_dead_state=follows)
+        return PreparedCalculation(
+            compute=partial(self.batch.sensitivity, request),
+            publish=partial(self._publish_sensitivity, use_imperial=use_imperial),
+        )
 
-    def _sensitivity_text(self, outcome: SensitivityOutcome, metric: BatchMetric,
-                          formatter: ResultFormatter) -> str:
-        """敏感度結果文字：基準值、影響最大的輸入，以及每個輸入 ±Δ 時的指標值與變化量。
+    def _publish_sweep(self, outcome: SweepOutcome, *, use_imperial: bool) -> str:
+        """在 UI 執行緒畫圖、保存結果並回傳文字；所有點都失敗時視為錯誤。
+
+參數：
+    outcome: 掃描結果。
+    use_imperial: 是否以英制輸出。
+
+回傳：
+    格式化結果文字。
+
+引發：
+    ValueError：所有點都無法計算時（附第一個原因）。"""
+        self.last_outcome = None
+        result = outcome.result
+        if not result.succeeded:
+            raise ValueError(f"所有點都無法計算：{result.points[0].error}")
+        presenter = BatchPresenter(self.unit_converter, use_imperial)
+        presenter.plot_sweep(self.chart_panel.figure, outcome)
+        self.chart_panel.refresh()
+        self.last_outcome = outcome
+        return presenter.sweep_text(outcome)
+
+    def _publish_sensitivity(self, outcome: SensitivityOutcome, *, use_imperial: bool) -> str:
+        """在 UI 執行緒畫龍捲風圖、保存結果並回傳文字。
 
 參數：
     outcome: 敏感度結果。
-    metric: 指標。
-    formatter: 結果格式化器。
+    use_imperial: 是否以英制輸出。
 
 回傳：
-    結果文字。"""
-        target, result = outcome.target, outcome.result
-        formatter.section("摘要")
-        formatter.add_text("基準值", self._format_quantity(formatter, metric.prop_code, result.base_value))
-        top = result.rows[0]
-        formatter.add_text("影響最大", target.variable(top.variable).symbol)
-        formatter.add_text("最大變化幅度", self._format_quantity(formatter, metric.prop_code, result.swing(top))
-                           if metric.prop_code != "T" else formatter.quantity("DeltaT", result.swing(top), 1))
-        failures = []
-        for row in result.rows:
-            variable = target.variable(row.variable)
-            delta = self._format_quantity(formatter, variable.delta_prop_code, row.delta)
-            formatter.section(f"{variable.label}（± {delta}）")
-            for point, sign in ((row.low, "−"), (row.high, "+")):
-                value = row.metric(point, metric.key)
-                if value is None:
-                    formatter.add_text(f"{sign}Δ 時的{metric.label}", "-")
-                    failures.append(f"{variable.label} {sign}{delta}：{point.error}")
-                    continue
-                formatter.add_text(f"{sign}Δ 時的{metric.label}",
-                                   self._format_quantity(formatter, metric.prop_code, value))
-        if failures:
-            formatter.section("無法計算的變動")
-            formatter.lines.extend(failures)
-        return formatter.text()
+    格式化結果文字。"""
+        presenter = BatchPresenter(self.unit_converter, use_imperial)
+        presenter.plot_tornado(self.chart_panel.figure, outcome)
+        self.chart_panel.refresh()
+        self.last_outcome = outcome
+        return presenter.sensitivity_text(outcome)

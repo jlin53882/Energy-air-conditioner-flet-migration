@@ -12,6 +12,7 @@ import flet as ft
 
 from ..analysis_module_adapter import AnalysisModuleAdapter
 from ..analysis_presentation import presentation_for
+from ..calculation_runner import CalculationRunner
 from ..components.analysis_workspace import AnalysisWorkspace
 from ..components.state_save_menu import StateSaveMenu
 from ..components.tool_selector import ToolSelector
@@ -36,6 +37,7 @@ class DedicatedAnalysisView(ft.Column):
         modules: list[object],
         workspace_state: WorkspaceState | None = None,
         tool_label: str = "分析項目",
+        runner: CalculationRunner | None = None,
     ) -> None:
         """組合 tool selector、輸入堆疊與結果面板。
 
@@ -45,13 +47,16 @@ class DedicatedAnalysisView(ft.Column):
             modules: 此分類使用的既有分析模組實例清單。
             workspace_state: 選用的共用工作區狀態；用於讀取全域輸出單位。
             tool_label: 分析項目選單的欄位名稱。
+            runner: 選用的背景執行器；提供時，定義了 ``prepare`` 的分析在背景計算，
+                計算中顯示「計算中」並停用計算按鈕（見 ``AnalysisModuleAdapter.calculate``）。
 
         回傳：
             無。
         """
         super().__init__(expand=True, spacing=0)
-        self.adapter = AnalysisModuleAdapter(modules)
+        self.adapter = AnalysisModuleAdapter(modules, runner=runner)
         self.adapter.on_result_invalidated = self._on_result_invalidated
+        self.adapter.on_calculation_finished = self._on_calculation_finished
         # workspace_state 只在建構當下讀取一次目前的全域輸出單位；此 View
         # 不持有對它的長期參照（沒有 ongoing ownership），避免造成「看似
         # 訂閱了 WorkspaceState 但實際上沒有」的誤導。
@@ -201,6 +206,7 @@ class DedicatedAnalysisView(ft.Column):
         """
         self.adapter.select(key)
         self.workspace.set_action_bar_visible(self.adapter.active_definition.show_execute_button)
+        self._sync_execution_state()
         self._on_tool_selected(key)
         self._sync_presentation()
         self._refresh()
@@ -216,13 +222,32 @@ class DedicatedAnalysisView(ft.Column):
         """
 
     def _on_result_invalidated(self) -> None:
-        """使用者修改輸入使結果失效時，重繪結果區（隱藏舊數值與圖表）。
+        """使用者修改輸入使結果失效（或作廢進行中的計算）時，重繪結果區並恢復計算按鈕。
 
         回傳：
             無。
         """
         self._show_result()
+        self._sync_execution_state()
         self._refresh()
+
+    def _on_calculation_finished(self) -> None:
+        """背景計算以目前這一輪的結果完成（成功或失敗）時，重繪結果區並恢復計算按鈕。
+
+        回傳：
+            無。
+        """
+        self._show_result()
+        self._sync_execution_state()
+        self._refresh()
+
+    def _sync_execution_state(self) -> None:
+        """計算進行中停用計算按鈕，避免同一輪重複送出；其他時候啟用。
+
+        回傳：
+            無。
+        """
+        self.workspace.action_bar.content.disabled = self.adapter.is_running
 
     def _handle_calculate(self, _event: ft.ControlEvent | None) -> None:
         """執行目前選取分析的計算並重繪結果面板。
@@ -235,6 +260,7 @@ class DedicatedAnalysisView(ft.Column):
         """
         self.adapter.calculate()
         self._show_result()
+        self._sync_execution_state()
         self._refresh()
 
     def perform_calculation(self, event: ft.ControlEvent | None) -> None:
@@ -259,6 +285,7 @@ class DedicatedAnalysisView(ft.Column):
         """
         self.adapter.set_output_unit_system(unit_system)
         self._show_result()
+        self._sync_execution_state()
         self._refresh()
 
     def _refresh(self) -> None:

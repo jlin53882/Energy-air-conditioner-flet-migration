@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 
@@ -27,6 +28,28 @@ class DummyPage:
 
 回傳：
     無。"""
+
+    def run_thread(self, handler, *args) -> None:
+        """同步執行背景工作（批次分析在測試中不需要真正的執行緒）。
+
+參數：
+    handler: 背景工作。
+    args: 參數。
+
+回傳：
+    無。"""
+        handler(*args)
+
+    def run_task(self, handler, *args) -> None:
+        """同步執行事件迴圈上的協程。
+
+參數：
+    handler: 協程函式。
+    args: 參數。
+
+回傳：
+    無。"""
+        asyncio.run(handler(*args))
 
     def add(self, *controls) -> None:
         """收集 page entry point 新增的 controls。

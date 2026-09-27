@@ -10,6 +10,7 @@
 import flet as ft
 
 from .ui.app_shell import AppShell
+from .ui.calculation_runner import FletCalculationRunner
 from .ui.theme import MONO_FONT_URL, TOKENS, workspace_theme
 from .ui.state import WorkspaceState
 from .ui.views.home_view import HomeView
@@ -148,7 +149,8 @@ def main(page: ft.Page) -> None:
     cycle_view = RefrigerationCycleView(cycle_module, workspace_state=workspace_state)
     saturation_view = SaturationView(saturation_module, workspace_state=workspace_state)
     superheat_view = SuperheatSubcoolingView(superheat_module, workspace_state=workspace_state)
-    batch_view = BatchView(batch_module, workspace_state=workspace_state)
+    # 批次計算最多 400 點，在背景執行緒計算，避免阻塞 UI 事件迴圈。
+    batch_view = BatchView(batch_module, workspace_state=workspace_state, runner=FletCalculationRunner(page))
     psychrometrics_view = PsychrometricsView(psy_module, workspace_state=workspace_state)
     air_process_view = AirProcessView(air_process_module, workspace_state=workspace_state)
     air_load_view = AirLoadView(air_load_module, workspace_state=workspace_state)
