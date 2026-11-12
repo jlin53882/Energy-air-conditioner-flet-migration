@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from domain.state_points import ThermoStatePoint
+from domain.thermodynamics.thermo_policy import ResolvedThermoPolicy
 
 from ...ui.structured_result import PropertyRow
 from .result_formatting import ResultFormatter
@@ -70,3 +71,28 @@ def add_state_point_lines(formatter: ResultFormatter, title: str, point: ThermoS
     formatter.section(title)
     for label, prop_code, digits in _STATE_PROPERTIES:
         formatter.add(label, prop_code, values[prop_code], digits)
+
+
+def policy_rows(policy: ResolvedThermoPolicy) -> tuple[PropertyRow, ...]:
+    """把模型／基準解析快照轉成性質表列（實際模型、實際基準、原因、版本）。
+
+參數：
+    policy: 本次 request 的解析快照。
+
+回傳：
+    性質表列。"""
+    return tuple(PropertyRow(label, value) for label, value in policy.summary_rows())
+
+
+def add_policy_lines(formatter: ResultFormatter, policy: ResolvedThermoPolicy) -> None:
+    """在結果文字中加入「模型與基準」分組，讓匯出／複製的文字也攜帶 concrete policy。
+
+參數：
+    formatter: 結果格式化器。
+    policy: 本次 request 的解析快照。
+
+回傳：
+    無。"""
+    formatter.section("模型與基準")
+    for label, value in policy.summary_rows():
+        formatter.add_text(label, value)

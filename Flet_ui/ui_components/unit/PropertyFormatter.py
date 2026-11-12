@@ -66,6 +66,10 @@ class PropertyFormatter:
 
         # 遍歷所有定義的性質
         for prop_code in self.properties:
+            if prop_code == "S" and "S" not in si_results:
+                # 理想氣體模型不提供比熵；明確標示，不以 0 代替。
+                lines.append(f"{self.output_prop_names[prop_code]:<28}: 不提供（理想氣體模型）")
+                continue
             if prop_code in si_results:
                 si_value = si_results[prop_code]
                 

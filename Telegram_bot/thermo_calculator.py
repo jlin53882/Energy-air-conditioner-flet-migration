@@ -186,11 +186,8 @@ class ThermoCalculator:
             }
         }
 
-        # --- 理想氣體常數 ---
-        self.ideal_gas_props = {  
-            "Air": {"R": 287.058, "Cp": 1005},  # J/(kg·K)
-            "Water": {"R": 461.5, "Cp": 1870} # J/(kg·K)
-        }
+        # --- 理想氣體常數（舊介面相容；集中於 domain.thermodynamics.ideal_gas）---
+        self.ideal_gas_props = self._shared_state_service.ideal_gas_props
 
     def is_fluid_valid(self, fluid_name: str) -> bool:
         """回傳共用 thermodynamic service 是否辨識指定流體。
@@ -417,50 +414,15 @@ class ThermoCalculator:
         return results_si
 
     def _calculate_ideal_gas(self, fluid, input_dict):
-        # 檢查流體常數是否存在
-        if fluid not in self.ideal_gas_props:
-            raise ValueError(f"找不到 {fluid} 的理想氣體常數。")
-        
-        # 獲取 R (個別氣體常數) 和 Cp (定壓比熱)
-        R = self.ideal_gas_props[fluid]["R"]
-        Cp = self.ideal_gas_props[fluid]["Cp"]
-        # 計算 Cv (定容比熱)
-        Cv = Cp - R
-        
-        si_results = {}
-        # 理想氣體狀態方程 P = D * R * T 的三種求解情況
-        if 'P' in input_dict and 'T' in input_dict:
-            si_results['P'] = input_dict['P']
-            si_results['T'] = input_dict['T']
-            si_results['D'] = input_dict['P'] / (R * input_dict['T']) # 計算密度 D
-        elif 'P' in input_dict and 'D' in input_dict:
-            si_results['P'] = input_dict['P']
-            si_results['D'] = input_dict['D']
-            si_results['T'] = input_dict['P'] / (input_dict['D'] * R) # 計算溫度 T
-        elif 'T' in input_dict and 'D' in input_dict:
-            si_results['T'] = input_dict['T']
-            si_results['D'] = input_dict['D']
-            si_results['P'] = input_dict['D'] * R * si_results['T'] # 計算壓力 P
-        else:
-            # 輸入組合不符合要求
-            raise ValueError("理想氣體計算需要 P&T, P&D 或 T&D 的組合。")
+        """委派共用理想氣體模型（常數 cp、h = cp·T）；不回傳比熵，不以 0 代替。
 
-        # 計算焓 H 和內能 U (假設參考點)
-        if 'T' in si_results:
-            si_results['H'] = Cp * si_results['T']
-            si_results['U'] = Cv * si_results['T']
-            
-        # 計算比容 V = 1/D
-        if 'D' in si_results and si_results['D'] != 0:
-            si_results['V'] = 1 / si_results['D']
-        else:
-            si_results['V'] = float('inf')
-        
-        # 理想氣體模式下的特殊值設定
-        si_results['S'] = 0 # 理想氣體模式下通常不計算熵的絕對值
-        si_results['Q'] = -1 # 理想氣體沒有乾度概念 (視為非飽和)
-        si_results['phase'] = 'gas'
-        return si_results
+參數：
+    fluid (str): 流體名稱。
+    input_dict (dict): canonical SI 已知性質。
+
+回傳：
+    dict：不含 ``S`` 的 SI 結果。"""
+        return self._shared_state_service._calculate_ideal_gas(fluid, input_dict)
 
     def format_specific_properties(self, si_results, use_imperial_units):
         """將 SI 單位比性質結果格式化為可讀的字串，並添加詳細的相態描述。

@@ -21,12 +21,14 @@ COMMON_REFRIGERANTS = (
 # 未填海拔時，錶壓換算使用的標準大氣壓力（Pa）。
 STANDARD_ATMOSPHERE_PA = 101_325.0
 
-# 分析頁 Reference State 選單的選項；Auto 依流體決定（冷媒 ASHRAE、水 Default）。
+# 分析頁 Reference State 選單的選項；Auto 規則集中於 domain/thermodynamics/thermo_policy.py：
+# 支援 IIR 的冷媒 → IIR，水 → DEF，不支援 IIR 的流體 → DEF（結果會標示備援原因）。
 REFERENCE_STATE_OPTIONS = (
-    ("Auto", "自動（冷媒 ASHRAE、水 Default）"),
-    ("ASHRAE", "ASHRAE（冷媒常用）"),
-    ("NBP", "NBP（常壓沸點為 0）"),
-    ("IIR", "IIR（0 °C 飽和液體為基準）"),
+    ("Auto", "Auto（推薦：冷媒 IIR、水 DEF）"),
+    ("IIR", "IIR（0 °C 飽和液 h=200、s=1）"),
+    ("ASHRAE", "ASHRAE（−40 °C 飽和液 h=0、s=0）"),
+    ("NBP", "NBP（101.325 kPa 沸點飽和液 h=0）"),
+    ("DEF", "DEF（CoolProp 流體預設）"),
 )
 
 class BaseAnalysisModule:
@@ -537,7 +539,7 @@ class BaseAnalysisModule:
     label: 欄位名稱。
 
 回傳：
-    (輸入列, 下拉選單)；選單值為 ``Auto``、``ASHRAE``、``NBP`` 或 ``IIR``。"""
+    (輸入列, 下拉選單)；選單值為 ``Auto``、``IIR``、``ASHRAE``、``NBP`` 或 ``DEF``。"""
         dropdown = style_dropdown(ft.Dropdown(
             options=[ft.dropdown.Option(code, text) for code, text in REFERENCE_STATE_OPTIONS],
             value="Auto",

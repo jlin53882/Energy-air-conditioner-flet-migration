@@ -10,12 +10,34 @@ from domain.thermodynamics.state_service import KnownProperty
 
 @dataclass(frozen=True)
 class PropertyQueryRequest:
-    """描述不依賴 channel UI 的 property query。"""
+    """描述不依賴 channel UI 的 property query。
+
+    ``model`` 為 None 時沿用舊語意：``is_ideal_gas`` 為 True 時選理想氣體，否則 Auto（不帶
+    濕度條件的 Auto 即 CoolProp 真實流體）。``reference_state`` 可為 ``Auto`` 或明確 code；
+    預設保留舊版的 ``DEF``。濕空氣請使用 :class:`HumidAirQueryRequest`。
+    """
 
     fluid: str
     known_properties: tuple[KnownProperty, ...]
     is_ideal_gas: bool = False
     reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT
+    model: str | None = None
+
+
+@dataclass(frozen=True)
+class HumidAirQueryRequest:
+    """濕空氣（Psychrometrics）狀態查詢；canonical SI。
+
+    乾球溫度之外，必須且只能提供 RH 分率（0–1）、濕球溫度或濕度比其中一個。總壓由海拔
+    換算（沿用既有 PsychrometricService 的標準大氣模型）。
+    """
+
+    dry_bulb_k: float
+    altitude_m: float = 0.0
+    relative_humidity: float | None = None
+    wet_bulb_k: float | None = None
+    humidity_ratio: float | None = None
+    fluid: str = "Air"
 
 
 @dataclass(frozen=True)

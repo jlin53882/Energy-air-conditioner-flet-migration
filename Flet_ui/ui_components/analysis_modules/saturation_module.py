@@ -20,7 +20,7 @@ from ...ui.theme import TOKENS
 from ..unit.UnitConverter import GAUGE_PRESSURE, UnitConverter
 from .base_analysis_module import BaseAnalysisModule
 from .result_formatting import ResultFormatter
-from .thermo_state_presentation import add_state_point_lines, state_point_rows
+from .thermo_state_presentation import add_policy_lines, add_state_point_lines, policy_rows, state_point_rows
 
 KNOWN_LABELS = {
     KNOWN_PRESSURE: "已知壓力",
@@ -187,21 +187,26 @@ class SaturationModule(BaseAnalysisModule):
     格式化結果文字。"""
         self.last_structured_result = None
         self.last_result = None
+        self.last_policy = None
         known = self.known
+        fluid = self.read_text("sat_fluid")
+        # 每次 request 只解析一次模型與基準；request 帶 concrete code，顯示使用同一份快照。
+        policy = self.refrigeration.resolve(fluid, self.sat_ref_state.value)
         if known == KNOWN_PRESSURE:
             request = SaturationPropertiesRequest(
-                fluid=self.read_text("sat_fluid"),
+                fluid=fluid,
                 pressure_pa=self.read_absolute_pressure_pa("sat_p", "sat_atm"),
-                reference_state=self.sat_ref_state.value,
+                reference_state=policy.reference_state,
             )
         else:
             request = SaturationPropertiesRequest(
-                fluid=self.read_text("sat_fluid"),
+                fluid=fluid,
                 temperature_k=self.read_si("sat_t"),
-                reference_state=self.sat_ref_state.value,
+                reference_state=policy.reference_state,
             )
         result = self.refrigeration.saturation_properties(request)
         self.last_result = result
+        self.last_policy = policy
         self.last_structured_result = self._build_structured(result, use_imperial)
         return self._format_text(result, use_imperial)
 
@@ -254,12 +259,15 @@ class SaturationModule(BaseAnalysisModule):
             known_row,
             PropertyRow("參考狀態", result.reference_state),
         ), highlighted=True)
+        policy = getattr(self, "last_policy", None)
+        policy_group = (PropertyGroup("模型與基準", policy_rows(policy)),) if policy is not None else ()
         return StructuredResult(
             key_metrics=key_metrics,
             groups=(
                 inputs,
                 PropertyGroup(result.liquid.label, state_point_rows(formatter, result.liquid)),
                 PropertyGroup(result.vapor.label, state_point_rows(formatter, result.vapor)),
+                *policy_group,
             ),
         )
 
@@ -281,4 +289,6 @@ class SaturationModule(BaseAnalysisModule):
             formatter.add(label, prop_code, value, digits)
         add_state_point_lines(formatter, result.liquid.label, result.liquid)
         add_state_point_lines(formatter, result.vapor.label, result.vapor)
+        if getattr(self, "last_policy", None) is not None:
+            add_policy_lines(formatter, self.last_policy)
         return formatter.text()

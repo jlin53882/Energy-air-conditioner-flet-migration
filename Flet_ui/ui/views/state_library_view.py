@@ -11,7 +11,13 @@ import flet as ft
 
 from application.state_library import StateLibraryService
 from domain.state_library import MAX_NAME_LENGTH, SavedState
-from domain.state_points import AirStatePoint, StateBasisMismatchError, StateComparison, ThermoStatePoint
+from domain.state_points import (
+    AirStatePoint,
+    StateBasisMismatchError,
+    StateComparison,
+    ThermoStatePoint,
+    basis_label,
+)
 
 from ...ui_components.analysis_modules.result_formatting import ResultFormatter
 from ...ui_components.unit.UnitConverter import UnitConverter
@@ -158,7 +164,7 @@ class StateLibraryView(ft.Column):
     摘要文字。"""
         point = entry.point
         if isinstance(point, ThermoStatePoint):
-            basis = f"{point.fluid}／{point.reference_state}{'／理想氣體' if point.is_ideal_gas else ''}"
+            basis = basis_label(point)
             return (f"{basis} · {self._quantity('T', point.temperature_k)} · "
                     f"{self._quantity('P', point.pressure_pa)}")
         assert isinstance(point, AirStatePoint)

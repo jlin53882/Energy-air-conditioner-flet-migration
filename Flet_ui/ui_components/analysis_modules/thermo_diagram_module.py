@@ -2,7 +2,7 @@ from collections.abc import Callable
 import flet as ft
 import flet_charts as fch
 import matplotlib.pyplot as plt
-from .base_analysis_module import BaseAnalysisModule
+from .base_analysis_module import REFERENCE_STATE_OPTIONS, BaseAnalysisModule
 from ...ui.theme import (
     TOKENS,
     card_shadow,
@@ -127,10 +127,7 @@ class ThermoDiagramModule(BaseAnalysisModule):
         # --- 參考狀態選項 ---
         self.ref_state_dd = style_dropdown(ft.Dropdown(
             options=[
-                ft.dropdown.Option("Auto", "自動 (冷媒:ASHRAE, 水:Default)"),
-                ft.dropdown.Option("ASHRAE", "ASHRAE (冷媒常用)"),
-                ft.dropdown.Option("NBP", "NBP (常壓沸點為 0)"),
-                ft.dropdown.Option("IIR", "IIR (0°C 飽和液體為基準)"),
+                ft.dropdown.Option(code, text) for code, text in REFERENCE_STATE_OPTIONS
             ],
             value="Auto",
             expand=True,
