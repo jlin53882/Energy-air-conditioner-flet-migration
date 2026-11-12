@@ -10,6 +10,7 @@ from domain.refrigeration import coolant_mean_temperature_k
 from ...ui.theme import TOKENS
 from .base_analysis_module import BaseAnalysisModule
 from .result_formatting import ResultFormatter
+from .thermo_state_presentation import add_policy_lines
 from ..unit.HVACAnalyzer import HVACAnalyzer
 from ..unit.UnitConverter import UnitConverter
 from ..unit.ThermoStateCalculator import ThermoStateCalculator
@@ -309,17 +310,21 @@ class CondenserModule(BaseAnalysisModule):
             boundary_label = "由冷卻介質溫度計算"
         else:
             boundary_k, boundary_label = self.read_si("cx_t_b"), "指定等效傳熱邊界溫度"
+        self.last_policy = None
+        fluid = self.read_text("cx_fluid")
+        policy = self.refrigeration.resolve(fluid, self.cx_ref_state.value)
         result = self.refrigeration.analyze_condenser_exergy(CondenserExergyRequest(
-            fluid=self.read_text("cx_fluid"),
+            fluid=fluid,
             pressure_pa=self.read_absolute_pressure_pa("cx_p", "cx_atm"),
             inlet_temperature_k=self.read_si("cx_t_in"),
             outlet_temperature_k=self.read_si("cx_t_out"),
             mass_flow_kg_s=self.read_si("cx_m_dot"),
             dead_state_temperature_k=dead_state_k,
             boundary_temperature_k=boundary_k,
-            reference_state=self.cx_ref_state.value,
+            reference_state=policy.reference_state,
         ))
         self.last_exergy_result = result
+        self.last_policy = policy
         balance = result.balance
         formatter = ResultFormatter(self.unit_converter, use_imperial)
         formatter.section("Exergy 平衡")
@@ -345,4 +350,5 @@ class CondenserModule(BaseAnalysisModule):
         formatter.add("出口比焓 h2", "H", result.outlet.enthalpy_j_kg, 2)
         formatter.add("入口比熵 s1", "S", result.inlet.entropy_j_kgk, 4)
         formatter.add("出口比熵 s2", "S", result.outlet.entropy_j_kgk, 4)
+        add_policy_lines(formatter, policy)
         return formatter.text()

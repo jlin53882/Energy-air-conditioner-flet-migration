@@ -266,7 +266,7 @@ def test_ideal_gas_state_has_no_entropy_comparison() -> None:
 
 回傳：
     無。"""
-    a = _thermo(fluid="Water", reference_state="DEF", is_ideal_gas=True, entropy_j_kgk=0.0)
+    a = _thermo(fluid="Water", reference_state="IDEAL_GAS", is_ideal_gas=True, entropy_j_kgk=None)
     b = replace(a, temperature_k=300.0, enthalpy_j_kg=410_000.0)
 
     comparison = compare_states(a, b)
@@ -672,7 +672,8 @@ def test_property_query_can_be_saved(shell) -> None:
 
     point = shell.views["state_library"].service.entries[0].point
     assert point.source is StateSource.PROPERTY_QUERY
-    assert point.reference_state == "ASHRAE"
+    # 物性頁預設 Auto：保存的是本次解析的 concrete 基準（R32 → IIR），不是「Auto」。
+    assert point.reference_state == "IIR"
     assert point.pressure_pa == pytest.approx(1_000_000.0)
     assert point.temperature_k == pytest.approx(273.15)
 
@@ -684,9 +685,11 @@ def test_ideal_gas_water_query_is_saved_without_entropy(shell) -> None:
     無。"""
     shell.navigate("thermo_properties")
     view = shell.views["thermo_properties"]
-    view.mode_dd.value = next(option.key for option in view.mode_dd.options if option.key.startswith("Water"))
+    view.fluid_tf.value = "Water"
+    view.fluid_tf.on_change(SimpleNamespace(control=view.fluid_tf))
+    view.mode_dd.value = "ideal_gas"
     view.mode_dd.on_select(SimpleNamespace(control=view.mode_dd))
-    view.ideal_gas_cb.value = True
+    assert view.ref_state_dd.disabled is True and view.ref_state_dd.value == "Auto"
     view.input_rows[0]["val"].value = "100"
     view.input_rows[1]["val"].value = "200"
     view.perform_calculation(None)
@@ -781,7 +784,7 @@ def test_library_page_explains_basis_mismatch_and_kind_mismatch(shell) -> None:
     view = _calculate(shell, "saturation")
     _click_menu(view, "R32 · 飽和蒸氣（露點）")
     module = view.adapter.modules[0]
-    module.sat_ref_state.value = "IIR"
+    module.sat_ref_state.value = "ASHRAE"
     module.sat_ref_state.on_select(SimpleNamespace(control=module.sat_ref_state))
     view.perform_calculation(None)
     _click_menu(view, "R32 · 飽和蒸氣（露點）")
@@ -790,7 +793,7 @@ def test_library_page_explains_basis_mismatch_and_kind_mismatch(shell) -> None:
     rows = {row[0]: row for row in library.comparison_rows()}
     assert rows["比焓 h"][3] == BASIS_MISMATCH_NOTE
     assert rows["溫度"][3] == "0.00 K"
-    assert "A：R32／ASHRAE" in library.comparison_note.value and "B：R32／IIR" in library.comparison_note.value
+    assert "A：R32／IIR" in library.comparison_note.value and "B：R32／ASHRAE" in library.comparison_note.value
 
     psychrometrics = _calculate(shell, "psychrometrics")
     _click_menu(psychrometrics, "濕空氣 · 性質查詢")

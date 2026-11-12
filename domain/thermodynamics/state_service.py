@@ -7,7 +7,8 @@ from typing import Iterable, Sequence
 import CoolProp.CoolProp as CP
 
 from domain.units.converter import CanonicalUnitConverter
-from .reference_state import ReferenceStatePolicy, ReferenceStateService
+from .ideal_gas import IDEAL_GAS_CONSTANTS, calculate_ideal_gas_state
+from .reference_state import ReferenceStatePolicy, ReferenceStateService, canonical_fluid_name
 
 
 KnownProperty = tuple[str, float, str]
@@ -53,9 +54,10 @@ class ThermodynamicStateService:
     無。"""
         self.unit_converter = unit_converter
         self.reference_state = reference_state or ReferenceStateService()
+        # 舊介面相容：常數集中於 domain.thermodynamics.ideal_gas。
         self.ideal_gas_props = {
-            "Air": {"R": 287.058, "Cp": 1005.0},
-            "Water": {"R": 461.5, "Cp": 1870.0},
+            name: {"R": constants.gas_constant_j_kgk, "Cp": constants.cp_j_kgk}
+            for name, constants in IDEAL_GAS_CONSTANTS.items()
         }
 
     def is_fluid_valid(self, fluid_name: str) -> bool:
@@ -96,10 +98,11 @@ class ThermodynamicStateService:
         Args:
             fluid: CoolProp fluid or supported ideal-gas name.
             known_props: Property code, display value and unit triples.
-            is_ideal_gas: Select the built-in ideal-gas model.
+            is_ideal_gas: Select the built-in ideal-gas model（常數 cp；``reference_state``
+                不適用並被忽略；結果不含比熵 ``S``）。
 
         回傳：
-            A dictionary of canonical SI values plus ``phase``.
+            A dictionary of canonical SI values plus ``phase``；理想氣體不含 ``S``。
 
         Raises:
             ValueError: If fewer than two properties are supplied or input
@@ -241,39 +244,17 @@ reference state 無關。
         fluid: str,
         input_values: dict[str, float],
     ) -> dict[str, float | str]:
-        """計算支援的 ideal-gas 狀態組合。
+        """計算支援的 ideal-gas 狀態組合（模型契約見 :mod:`domain.thermodynamics.ideal_gas`）。
 
 參數：
-    fluid (str): 函數輸入值。
-    input_values (dict[str, float]): 函數輸入值。
+    fluid (str): 流體名稱（可為 CoolProp 別名，例如 ``R729``、``H2O``）。
+    input_values (dict[str, float]): canonical SI 已知性質。
 
 回傳：
-    dict[str, float | str]：函數計算或處理後的結果。"""
+    dict[str, float | str]：不含比熵 ``S``（理想氣體模型未提供比熵，不以 0 代替）。"""
+        canonical = canonical_fluid_name(fluid) or fluid.strip()
         try:
-            constants = self.ideal_gas_props[fluid]
+            constants = IDEAL_GAS_CONSTANTS[canonical]
         except KeyError as exc:
             raise ValueError(f"找不到 {fluid} 的理想氣體常數。") from exc
-
-        gas_constant = constants["R"]
-        heat_capacity = constants["Cp"]
-        cv = heat_capacity - gas_constant
-        result: dict[str, float | str]
-        if "P" in input_values and "T" in input_values:
-            result = {"P": input_values["P"], "T": input_values["T"]}
-            result["D"] = result["P"] / (gas_constant * result["T"])
-        elif "P" in input_values and "D" in input_values:
-            result = {"P": input_values["P"], "D": input_values["D"]}
-            result["T"] = result["P"] / (result["D"] * gas_constant)
-        elif "T" in input_values and "D" in input_values:
-            result = {"T": input_values["T"], "D": input_values["D"]}
-            result["P"] = result["D"] * gas_constant * result["T"]
-        else:
-            raise ValueError("理想氣體計算需要 P&T, P&D 或 T&D 的組合。")
-
-        result["H"] = heat_capacity * result["T"]
-        result["U"] = cv * result["T"]
-        result["V"] = 1.0 / result["D"] if result["D"] else float("inf")
-        result["S"] = 0.0
-        result["Q"] = -1.0
-        result["phase"] = "gas"
-        return result
+        return calculate_ideal_gas_state(constants, input_values)

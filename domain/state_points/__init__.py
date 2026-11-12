@@ -13,6 +13,7 @@ from .thermo import (
     THERMO_STATE_POINT_SCHEMA,
     StatePhase,
     ThermoStatePoint,
+    basis_label,
     enthalpy_difference,
     entropy_difference,
     require_same_basis,
@@ -39,6 +40,7 @@ def state_point_from_dict(data: object) -> ThermoStatePoint | AirStatePoint:
 
 
 __all__ = [
+    "basis_label",
     "AirStatePoint",
     "PropertyComparison",
     "StateComparison",

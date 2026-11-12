@@ -62,8 +62,10 @@ def test_water_property_request_uses_default_not_ambient_state() -> None:
     service = ThermodynamicStateService(CanonicalUnitConverter())
     query_service = PropertyQueryService(service)
     known_props = (("T", 25.0, "°C"), ("P", 1.0, "bar"))
-    assert resolve_reference_state_policy("Water", "ASHRAE") == ReferenceStatePolicy.DEFAULT
-    assert resolve_reference_state_policy("Water", "ASHRAE") != ReferenceStatePolicy.CURRENT
+    assert resolve_reference_state_policy("Water") == ReferenceStatePolicy.DEFAULT
+    # 手動指定水不支援的 ASHRAE 必須明確失敗，不再靜默改用 DEF。
+    with pytest.raises(ValueError, match="ASHRAE"):
+        resolve_reference_state_policy("Water", "ASHRAE")
     try:
         service.set_reference_state("Water", "NBP")
         actual = query_service.query(PropertyQueryRequest("Water", known_props))
@@ -87,7 +89,7 @@ def test_chart_auto_policy_is_explicit_for_water() -> None:
     )
 
     assert _effective_reference_state("Water", "Auto") == ReferenceStatePolicy.DEFAULT
-    assert _effective_reference_state("R134a", "Auto") == ReferenceStatePolicy.ASHRAE
+    assert _effective_reference_state("R134a", "Auto") == ReferenceStatePolicy.IIR
     with pytest.raises(ValueError):
         _effective_reference_state("Water", "IAPWS")
 
@@ -120,7 +122,7 @@ def test_chart_auto_water_aliases_use_default_reference_state(fluid: str) -> Non
     )
 
     assert _effective_reference_state(fluid, "Auto") == ReferenceStatePolicy.DEFAULT
-    assert _effective_reference_state("R134a", "Auto") == ReferenceStatePolicy.ASHRAE
+    assert _effective_reference_state("R134a", "Auto") == ReferenceStatePolicy.IIR
 
 
 def test_property_selection_policy_does_not_leak_into_compressor_example() -> None:
@@ -152,9 +154,10 @@ def test_property_selection_policy_does_not_leak_into_compressor_example() -> No
         page=DummyPage(),
         query_service=query_service,
     )
-    property_tab.mode_dd.value = "CoolProp (冷媒)"
+    property_tab.mode_dd.value = "real_fluid"
+    property_tab.on_mode_change(None)
     property_tab.fluid_tf.value = "R134a"
-    property_tab.ref_state_dd.value = "IIR"
+    property_tab.ref_state_dd.value = "NBP"
     property_tab.on_ref_state_change(None)
 
     compressor = CompressorModule.__new__(CompressorModule)
@@ -176,13 +179,15 @@ def test_property_selection_policy_does_not_leak_into_compressor_example() -> No
     }
     assert compressor._reference_state_for(" water ") == ReferenceStatePolicy.DEFAULT
     compressor.calculate_comp_example(use_imperial=False)
-    assert compressor.analyzer.reference_states == ["ASHRAE"]
+    # 壓縮機依集中 Auto 規則（R134a → IIR），不讀取物性頁選擇的 NBP。
+    assert compressor.analyzer.reference_states == ["IIR"]
 
-    property_tab.ref_state_dd.value = "NBP"
+    property_tab.ref_state_dd.value = "ASHRAE"
     property_tab.on_ref_state_change(None)
     compressor.calculate_comp_example(use_imperial=False)
-    assert compressor.analyzer.reference_states == ["ASHRAE", "ASHRAE"]
-    assert query_service.requested_reference_state("R134a") == "NBP"
+    assert compressor.analyzer.reference_states == ["IIR", "IIR"]
+    # 物性頁切換基準不再寫入 process-global 狀態，也不記錄為 requested policy（只有實際查詢才會）。
+    assert query_service.requested_reference_state("R134a", default="DEF") == "DEF"
 
 
 def test_t_s_renderer_path_returns_figure_without_residual_count_access(monkeypatch) -> None:

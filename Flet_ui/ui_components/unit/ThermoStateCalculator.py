@@ -5,26 +5,17 @@
 #在 CoolProp 函式庫中，代碼 'V' 代表的是黏度 (Viscosity)，而不是比容
 
 """
-🧩 各參考狀態詳細說明
-名稱	全名	定義說明	典型用途
-"IIR"	International Institute of Refrigeration	
-定義：液體在 -40°C 時，焓 = 200 kJ/kg，熵 = 1.0 kJ/kg·K。
-這是冷凍產業常用的基準。	❄️ 冷凍空調系統、壓縮機效率計算（例如 R134a、R22、R410A 系統）。
+各參考狀態（CoolProp reference state）說明；Auto 規則見 domain/thermodynamics/thermo_policy.py。
 
-"ASHRAE"	American Society of Heating, Refrigerating, and Air-Conditioning Engineers	
-定義：液體在 -40°C 時，焓 = 0，熵 = 0。	
-🌡️ 北美 HVAC 標準資料、教科書與工程設計手冊（ASHRAE Fundamentals）。
+"IIR"    International Institute of Refrigeration：0 °C 飽和液體 h = 200 kJ/kg、s = 1 kJ/(kg·K)。
+         冷凍工程 SI 表格常用（ASHRAE Handbook 2025 SI 多數冷媒表亦採此慣例）。
+"ASHRAE" −40 °C 飽和液體 h = 0、s = 0（北美 IP 單位表格常見）。注意：名稱為 ASHRAE 的 CoolProp
+         代碼不等於所有 ASHRAE SI 表格的基準。
+"NBP"    正常沸點飽和液體 h = 0、s = 0；CoolProp 8 以 101.325 kPa 定義（以安裝版本實測驗證）。
+"DEF"    CoolProp 該流體狀態方程的預設基準，各流體不同（Water 為 IAPWS-95 三相點飽和液 u = 0、s = 0）。
 
-"NBP"	Normal Boiling Point	
-定義：流體在 常壓（1 atm）沸點 時，飽和液的 h = 0，s = 0。	
-📘 熱力學理論、基礎物性比較（蒸發潛熱等）。
-
-"DEF"	Default	
-定義：CoolProp 內建的預設基準（通常是飽和液在三相點的 h=0, s=0）。	
-🧪 一般程式預設狀態，除非特別說明。
-
-
-
+焓、熵的絕對值依基準改變；同一流體、同一狀態方程下的壓力、溫度、密度、乾度與焓差、潛熱不變。
+不同基準的焓、熵不可直接相減。
 """
 
 from domain.thermodynamics.reference_state import ReferenceStatePolicy
@@ -41,12 +32,8 @@ class ThermoStateCalculator:
         self._service = ThermodynamicStateService(unit_converter)
         self.properties = ["P", "T", "H", "S", "D", "Q", "V", "U"]
         
-        # 理想氣體常數 (屬於計算邏輯)
-        self.ideal_gas_props = {  
-            "Air": {"R": 287.058, "Cp": 1005},  # J/(kg·K)
-            "Water": {"R": 461.5, "Cp": 1870} # J/(kg·K)
-
-        }
+        # 舊介面相容：理想氣體常數集中於 domain.thermodynamics.ideal_gas。
+        self.ideal_gas_props = self._service.ideal_gas_props
 
     @property
     def state_service(self) -> ThermodynamicStateService:

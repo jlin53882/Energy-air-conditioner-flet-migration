@@ -75,9 +75,11 @@ def main(page: ft.Page) -> None:
     workspace_state = WorkspaceState()
     state_calculator = ThermoStateCalculator(unit_converter)
     formatter = PropertyFormatter(unit_converter)
-    property_query_service = PropertyQueryService(state_calculator.state_service)
     hvac_analyzer = HVACAnalyzer()
     psy_calculator = PsychrometricCalculator()
+    property_query_service = PropertyQueryService(
+        state_calculator.state_service, psychrometric_service=psy_calculator.service
+    )
     # 錶壓換算的「海拔 → 大氣壓力」全系統共用濕空氣服務的同一個公式。
     pressure_from_altitude = psy_calculator.service.calculate_pressure_from_altitude
 
@@ -87,6 +89,7 @@ def main(page: ft.Page) -> None:
         page=page,
         query_service=property_query_service,
         workspace_state=workspace_state,
+        pressure_from_altitude=pressure_from_altitude,
     )
 
     # --- 每個分析分類擁有自己的既有模組實例，不再共用單一 AnalysisTab。 ---

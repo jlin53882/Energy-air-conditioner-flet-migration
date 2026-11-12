@@ -14,8 +14,12 @@ from domain.refrigeration import (
     saturation_properties,
     solve_vapor_compression_cycle,
 )
-from domain.thermodynamics.fluid_policy import resolve_reference_state_policy
-from domain.thermodynamics.reference_state import normalize_reference_state_policy
+from domain.thermodynamics.thermo_policy import (
+    CalculationModel,
+    ResolvedThermoPolicy,
+    Workflow,
+    resolve_thermo_policy,
+)
 
 from .models import (
     CondenserExergyRequest,
@@ -39,8 +43,32 @@ class RefrigerationService:
         self.state_provider = state_provider
 
     @staticmethod
-    def resolve_policy(fluid: str, requested: str | None) -> str:
-        """回傳本次 request 使用的明確 policy；未指定或 Auto 時依流體決定。
+    def resolve(fluid: str, requested: str | None) -> ResolvedThermoPolicy:
+        """解析冷凍工作流的模型與基準快照（真實流體；Auto 依集中規則）。
+
+UI 應在建立 request 前呼叫一次，把 ``policy.reference_state`` 放入 request，並以同一份
+快照顯示實際模型、基準與決策原因。
+
+參數：
+    fluid: 流體名稱（可為 CoolProp 別名）。
+    requested: 使用者要求的基準，可為 None 或 "Auto"。
+
+回傳：
+    ResolvedThermoPolicy。
+
+引發：
+    ThermoPolicyError（ValueError）：流體不存在、手動基準不支援或要求 CURRENT 時。"""
+        return resolve_thermo_policy(
+            fluid,
+            # 冷凍工作流不帶濕度條件，Auto 模型即 CoolProp 真實流體。
+            model=CalculationModel.AUTO,
+            reference=requested,
+            workflow=Workflow.REFRIGERATION,
+        )
+
+    @classmethod
+    def resolve_policy(cls, fluid: str, requested: str | None) -> str:
+        """回傳本次 request 使用的明確 policy code（見 :meth:`resolve`）。
 
 參數：
     fluid: 流體名稱。
@@ -50,15 +78,10 @@ class RefrigerationService:
     正規化後的 policy code。
 
 引發：
-    ValueError：要求 CURRENT 或不支援的 policy 時。"""
-        if requested is None or requested.strip().casefold() == "auto":
-            policy = resolve_reference_state_policy(fluid)
-        else:
-            policy = resolve_reference_state_policy(fluid, requested)
-        normalized = normalize_reference_state_policy(policy)
-        if normalized == "CURRENT":
-            raise ValueError("CURRENT cannot be used as an application requested policy")
-        return normalized
+    ValueError：要求 CURRENT、不支援的 policy，或流體不支援手動指定的 policy 時。"""
+        policy = cls.resolve(fluid, requested)
+        assert policy.reference_state is not None
+        return policy.reference_state
 
     def solve_cycle(self, request: RefrigerationCycleRequest) -> VaporCompressionResult:
         """求解蒸氣壓縮循環。
