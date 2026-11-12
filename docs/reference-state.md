@@ -91,7 +91,7 @@ ResolvedThermoPolicy（不可變快照）→ 計算、結果顯示、圖表、�
 | `ThermoStatePoint` schema | v1 → **v2**：理想氣體狀態點 `reference_state = "IDEAL_GAS"`、`entropy_j_kgk = null` | 讀取 v1：冷媒狀態點內容不變；v1 理想氣體（S = 0、記錄任意基準）轉為 `IDEAL_GAS`／`null`。v1 理想氣體若 S ≠ 0（非本程式寫入）則明確拒絕。**舊版程式無法讀取 v2 文件。** |
 | Auto 基準 | 冷媒 **ASHRAE → IIR**（水、乾空氣維持 DEF） | 舊的已保存狀態點保留原本的 concrete 基準（例如 ASHRAE）；與新計算的 IIR 狀態點比較時，焓、熵會標示「基準不同，不相減」，需重新計算或手動選 ASHRAE。COP、潛熱、Exergy、批次指標不受影響。 |
 | 手動不支援的基準 | 舊：`Water` + `ASHRAE`/`IIR` 靜默改用 DEF；新：明確錯誤 | 呼叫端需改用 Auto 或 DEF。 |
-| 理想氣體結果 | 不再包含 `S`（舊為 0）；乾度輸入明確拒絕 | 文字輸出顯示「不提供（理想氣體模型）」。Telegram 舊路徑同樣委派共用模型。 |
+| 理想氣體結果 | 共用 domain 服務不再包含 `S`（舊為 0）；乾度輸入明確拒絕 | Flet 文字輸出顯示「不提供（理想氣體模型）」。 |
 | `PropertyQueryRequest` | 新增選填 `model`；新增 `HumidAirQueryRequest`、`PropertyQueryService.query_with_policy()`／`query_humid_air()` | `query()` 介面不變；`reference_state` 預設仍為 `DEF`。 |
 | 物性頁 UI | 「計算模式（CoolProp／Water）」＋「理想氣體」勾選 → 「計算模型」選單；基準選單加入 Auto 並以 `DEF` 取代 `Default` | 依 UI 控制項名稱撰寫的外部腳本需更新。 |
-| Telegram | 物性查詢仍固定使用 `DEF`（未導入 Auto） | 行為未變（見待討論事項）。 |
+| Telegram | **不在本次範圍**：`Telegram_bot/` 未修改，物性查詢仍固定使用 `DEF`、不導入 Auto，舊比容（V）路徑的理想氣體仍回傳 `S = 0`。 | 連帶影響：Telegram 非 V 輸入的查詢本來就委派共用 domain 服務，因此理想氣體結果不再列出熵（原為 0）；其他數值不變。 |
