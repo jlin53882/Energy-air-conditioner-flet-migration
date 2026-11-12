@@ -61,6 +61,10 @@ ROUTES = (
         description="冷凍循環與冷凝器 Exergy 的參數掃描、冷媒比較與敏感度分析（龍捲風圖）。",
     ),
     WorkspaceRoute(
+        "heat_pump_simulation", "熱泵動態模擬", "冷凍系統", "ANIMATION",
+        description="多元取熱雙效熱泵（冰水／熱水桶）的即時動畫模擬：電磁閥流路、變頻控制、水溫趨勢與 P-h 圖。",
+    ),
+    WorkspaceRoute(
         "psychrometrics", "濕空氣性質", "空氣處理", "AIR_OUTLINED",
         description="依海拔與乾濕球溫度或相對濕度計算濕空氣完整性質。",
     ),

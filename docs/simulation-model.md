@@ -4,7 +4,8 @@
 時間步進演算法、需記錄的欄位，以及 UI 動畫元素。數值來源為實驗報告（表 2.1.2–2.1.5、
 圖 5.1.5、圖 6.3–6.4）、原廠壓縮機規格與討論後確認的設計決策。
 
-> 狀態：**模擬引擎已實作**於 `domain/heat_pump/`（測試：`tests/test_heat_pump_simulation.py`，以 §4 數值為驗證基準）；UI 動畫頁尚未實作。
+> 狀態：**已實作**。模擬引擎在 `domain/heat_pump/`（測試：`tests/test_heat_pump_simulation.py`，以 §4 數值為驗證基準）；
+> UI 動畫頁為「熱泵動態模擬」路由（`Flet_ui/ui/views/heat_pump_simulation_view.py`，測試：`tests/test_heat_pump_ui.py`）。
 > 標示「假設」的數值為暫定值，取得實測資料後應更新。
 
 ---

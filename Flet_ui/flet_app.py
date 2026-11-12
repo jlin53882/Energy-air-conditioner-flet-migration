@@ -28,6 +28,7 @@ from .ui.views.air_process_view import AirProcessView
 from .ui.views.psychrometric_chart_view import PsychrometricChartView
 from .ui.views.thermo_diagram_view import ThermoDiagramView
 from .ui.views.unit_converter_view import UnitConverterView
+from .ui.views.heat_pump_simulation_view import HeatPumpSimulationView
 from .ui_components.analysis_modules.air_load_module import AirLoadModule
 from .ui_components.analysis_modules.batch_module import BatchModule
 from .ui_components.analysis_modules.hvac_compressor_module import CompressorModule
@@ -48,6 +49,7 @@ from .ui_components.unit.ThermoStateCalculator import ThermoStateCalculator
 from .ui_components.unit.UnitConverter import UnitConverter
 from application.air_loads import AirLoadService
 from application.batch import BatchService
+from application.heat_pump_simulation import HeatPumpSimulationService
 from application.air_processes import AirProcessService
 from application.property_queries import PropertyQueryService
 from application.refrigeration import RefrigerationService
@@ -158,6 +160,12 @@ def main(page: ft.Page) -> None:
         psychrometric_chart_module, workspace_state=workspace_state
     )
     diagram_view = ThermoDiagramView(diagram_module)
+    # 熱泵動態模擬：性質表在背景建立，動畫協程在 page 事件迴圈執行。
+    heat_pump_view = HeatPumpSimulationView(
+        HeatPumpSimulationService(state_calculator.state_service),
+        runner=FletCalculationRunner(page),
+        start_loop=lambda loop: page.run_task(loop),
+    )
 
     # 使用者保存的狀態點（家目錄下的工作區資料夾）；可保存狀態點的畫面共用同一個服務。
     state_library = StateLibraryService(JsonDocumentStore(workspace_directory()))
@@ -212,6 +220,7 @@ def main(page: ft.Page) -> None:
         "saturation": saturation_view,
         "superheat_subcooling": superheat_view,
         "batch": batch_view,
+        "heat_pump_simulation": heat_pump_view,
         "psychrometrics": psychrometrics_view,
         "air_processes": air_process_view,
         "air_loads": air_load_view,
