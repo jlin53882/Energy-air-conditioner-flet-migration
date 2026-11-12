@@ -91,7 +91,7 @@ def test_new_domain_calculations_use_service_boundaries() -> None:
 
 回傳：
     無。"""
-    sources = _python_sources("domain/refrigeration") + [
+    sources = _python_sources("domain/refrigeration") + _python_sources("domain/heat_pump") + [
         ROOT / "domain/psychrometrics/processes.py",
         ROOT / "chart/psychrometric.py",
     ]

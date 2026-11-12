@@ -175,3 +175,15 @@ Invalid request shape、known property 不足、invalid fluid/policy 與 unknown
 - 冷媒清單：空白項目（例如「R32, , R290」或結尾逗號）是輸入錯誤；UI 讀取清單時與 application 驗證相同，不會默默略過空白項目。
 - 冷凝器等效傳熱邊界溫度：`boundary_at_dead_state` 為真（整體排熱至環境）時，每一點以該點的 T0 作為 T_b，T_b 不列為輸入，也不能單獨掃描或變動。
 - 冷凝器壓力：批次頁的冷凝器壓力只接受絕對壓力（與 application 契約相同）；錶壓輸入只在單次計算的冷凝器 Exergy 頁提供。
+
+## 14. Heat pump simulation contract
+
+`domain/heat_pump/` 是多元取熱雙效熱泵的動態模擬引擎，模型規格與參數來源見 [`simulation-model.md`](simulation-model.md)。
+
+- 單位：所有參數、狀態與記錄為 canonical SI（溫度 K、功率 W、熱導 W/K、流率 kg/s、壓力 Pa）；只有水泵流量以 US GPM 表示（`gpm_to_kg_s()` 換算，水密度 1000 kg/m³）。
+- 物性：`CycleTable.build()` 透過 `ThermodynamicStateProvider` 以 (蒸發溫度, 冷凝溫度) 網格預先建表，模擬時只做內插；`heat_pump` 套件不得直接匯入 CoolProp（由 `tests/characterization/test_phase9_architecture_guardrails.py` 檢查）。性質表綁定冷媒設定與壓縮機總效率，與模擬參數不一致時 `HeatPumpSimulation` 以 `ValueError` 拒絕。預設表範圍為蒸發 −30～20 °C、冷凝 10～70 °C，超出時夾在邊界。
+- 焓值的 reference state 由 `CycleSettings.reference_state` 指定（預設 ASHRAE），記錄中的焓供 P-h 圖使用，必須沿用同一基準。
+- 時間步進：`HeatPumpSimulation.step(dt)` 以本步開始時的運轉點計算熱量，顯式 Euler 更新水溫，之後切換冷媒模式與更新壓縮機；`dt` 必須介於 0 與 10 秒。`StepRecord` 的水溫為本步結束後的值，其餘為本步運轉點。
+- 設定：`SimulationSettings` 可在步與步之間以 `update_settings()` 變更；未知送風機、非正 GPM、手動頻率超出 30～60 Hz 以 `ValueError` 拒絕。切換冷房／暖房時冷媒模式回到雙效、PI 積分歸零。
+- 安全停機（冷凝溫度或排氣溫度超過上限）會保持到呼叫 `reset_trip()`。
+- 系統 COP 為送風機送出（或取走）的熱量除以壓縮機、開啟送風機與水泵的總耗電。
