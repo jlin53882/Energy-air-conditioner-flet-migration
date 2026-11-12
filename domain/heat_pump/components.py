@@ -297,12 +297,16 @@ class OperatingPointSolver:
             te, tc = guess
         for _ in range(self.ALTERNATIONS):
             tc_low = max(sink_k + self.MIN_APPROACH_K, te + 1.0, tc_min)
+            if tc_low >= tc_max:
+                raise ValueError("冷凝側溫度超出性質表範圍。")
             tc = _bisect(
                 lambda x: g_cond * (x - sink_k) - compressor_performance(self.table, compressor, te, x, f).heating_w,
                 tc_low,
                 tc_max,
             )
             te_upper = min(te_high, tc - 1.0)
+            if te_upper <= te_min:
+                raise ValueError("蒸發側溫度低於性質表範圍。")
             te = _bisect(
                 lambda x: compressor_performance(self.table, compressor, x, tc, f).cooling_w - g_evap * (source_k - x),
                 te_min,

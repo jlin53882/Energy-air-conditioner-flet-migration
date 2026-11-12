@@ -330,8 +330,8 @@ def test_heating_with_both_fans_switches_to_outdoor_evaporator(table: CycleTable
     switch = next(e for e in sim.events if e.code == "smart_heating")
     assert switch.time_s / 60 == pytest.approx(25.4, abs=1.0)
     after = [r for r in records if r.time_s > switch.time_s + 60]
-    assert all(r.mode is RefrigerantMode.SMART_HEATING for r in after)
-    assert all(r.evaporating_k < celsius(15.0) - 5.0 for r in after)
+    assert after and all(r.mode is RefrigerantMode.SMART_HEATING and r.compressor_on for r in after)
+    assert all(r.evaporating_k is not None and r.evaporating_k < celsius(10.0) for r in after)
 
 
 # ---- 控制行為 ----
@@ -350,8 +350,11 @@ def test_manual_frequency_is_respected_and_stops_at_setpoint(table: CycleTable) 
         frequency_mode=FrequencyMode.MANUAL,
         manual_frequency_hz=40.0,
     )
-    running = [r for r in records if r.compressor_on and r.time_s > 60]
+    running = [r for r in records if r.compressor_on]
     assert running and all(r.frequency_hz == pytest.approx(40.0) for r in running)
+    assert records[0].compressor_power_w < compressor_performance(
+        table, CompressorParameters(), records[0].evaporating_k, records[0].condensing_k, 60.0
+    ).power_w
     stop_index = next(i for i, e in enumerate(sim.events) if e.code == "stop")
     stop_time = sim.events[stop_index].time_s
     at_stop = min(records, key=lambda r: abs(r.time_s - stop_time + 5.0))
@@ -372,6 +375,23 @@ def test_safety_trip_latches_until_reset(table: CycleTable) -> None:
     assert WARNING_TRIPPED in records[-1].warnings
     sim.reset_trip()
     assert not sim.step().warnings & {WARNING_TRIPPED}
+    assert "trip_reset" in [e.code for e in sim.events]
+    trip = next(e for e in sim.events if e.code == "trip")
+    assert trip.time_s == pytest.approx(records[0].time_s + records[0].dt_s)
+
+
+def test_trip_reset_resumes_when_restart_condition_holds(table: CycleTable) -> None:
+    """復歸後依一般重啟條件（冰水 ≥ 10 °C、已停 ≥ 3 min）重新運轉。
+
+回傳：
+    無。"""
+    params = HeatPumpParameters(control=ControlParameters(trip_condensing_k=celsius(36.0)))
+    sim = HeatPumpSimulation(table, params, default_settings(OperationMode.COOLING))
+    sim.run(300.0)
+    sim.params = replace(params, control=ControlParameters())
+    sim.reset_trip()
+    records = sim.run(30.0)
+    assert any(r.compressor_on for r in records)
 
 
 def test_switching_operation_returns_to_dual_mode(table: CycleTable) -> None:
@@ -434,3 +454,94 @@ def test_invalid_time_step_and_mismatched_table_are_rejected(table: CycleTable) 
         HeatPumpSimulation(table, HeatPumpParameters(cycle=CycleSettings(superheat_k=3.0)))
     with pytest.raises(ValueError):
         HeatPumpSimulation(table, HeatPumpParameters(compressor=CompressorParameters(overall_efficiency=0.7)))
+
+
+def test_frequency_changes_apply_on_the_next_step(table: CycleTable) -> None:
+    """手動頻率與手動→自動切換在下一步立即生效；切回自動時為無擾切換。
+
+回傳：
+    無。"""
+    settings = replace(default_settings(OperationMode.COOLING), frequency_mode=FrequencyMode.MANUAL, manual_frequency_hz=40.0)
+    sim = HeatPumpSimulation(table, settings=settings)
+    assert sim.step().frequency_hz == pytest.approx(40.0)
+    sim.set_manual_frequency(35.0)
+    assert sim.step().frequency_hz == pytest.approx(35.0)
+    sim.update_settings(replace(sim.settings, frequency_mode=FrequencyMode.AUTO))
+    assert sim.step().frequency_hz == pytest.approx(35.0, abs=0.5)
+
+
+def test_heating_with_fan_a_cycles_with_auto_stop_and_restart(table: CycleTable) -> None:
+    """暖房、送風機 A：30 Hz 仍過頭時熱水 ≥ 46 °C 停機，≤ 42 °C 且停滿 3 min 重啟。
+
+回傳：
+    無。"""
+    sim, records, summary = _run(table, OperationMode.HEATING, {"A"}, hours=1.0)
+    stop = next(e for e in sim.events if e.code == "stop")
+    assert stop.time_s / 60 == pytest.approx(17.8, abs=1.0)
+    start = next(e for e in sim.events if e.code == "start")
+    assert start.time_s - stop.time_s >= 180.0
+    at_stop = next(r for r in records if r.time_s + r.dt_s == pytest.approx(stop.time_s))
+    at_start = next(r for r in records if r.time_s + r.dt_s == pytest.approx(start.time_s))
+    assert at_stop.hot_water_k >= celsius(46.0)
+    assert at_start.hot_water_k <= celsius(42.0)
+    assert summary.stops >= 2
+
+
+def test_switch_to_outdoor_condenser_preempts_high_pressure_trip(table: CycleTable) -> None:
+    """外氣 36 °C 時切換智慧冷房會讓冷凝溫度跳升；切換前預先限頻，不應安全停機。
+
+回傳：
+    無。"""
+    settings = replace(default_settings(OperationMode.COOLING), outdoor_k=celsius(36.0))
+    sim = HeatPumpSimulation(table, settings=settings)
+    records = sim.run(1_200.0)
+    codes = [e.code for e in sim.events]
+    assert "smart_cooling" in codes and "hp_preempt" in codes
+    assert "trip" not in codes
+    running = [r for r in records if r.compressor_on]
+    assert max(r.condensing_k for r in running) < celsius(60.0)
+
+
+def test_pump_and_fan_changes_mid_run_take_effect(table: CycleTable) -> None:
+    """執行中改 GPM 或送風機：下一步的換熱與送風機負荷跟著改變。
+
+回傳：
+    無。"""
+    sim = HeatPumpSimulation(table, settings=replace(default_settings(OperationMode.COOLING), fans=frozenset({"A"})))
+    sim.run(15 * 60.0)
+    base = sim.step()
+    sim.update_settings(replace(sim.settings, fans=frozenset({"A", "B"})))
+    both = sim.step()
+    assert base.fan_coil_load_w > 0
+    assert both.fan_coil_load_w > base.fan_coil_load_w * 2.0
+    sim.update_settings(replace(sim.settings, cold_pump_gpm=20.0))
+    faster = sim.step()
+    assert faster.evaporating_k > both.evaporating_k
+
+
+def test_summary_handles_uneven_last_step(table: CycleTable) -> None:
+    """時間不能整除步長時，最後一步較短，摘要以每步實際 dt 累計。
+
+回傳：
+    無。"""
+    sim = HeatPumpSimulation(table)
+    records = sim.run(1_000.0, dt_s=3.0)
+    assert records[-1].dt_s == pytest.approx(1.0)
+    summary = summarize(records, sim.events)
+    assert summary.duration_s == pytest.approx(1_000.0)
+    single = summarize(records[:1], sim.events)
+    assert single.duration_s == pytest.approx(3.0)
+    assert single.energy_used_j == pytest.approx(records[0].total_power_w * 3.0)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"outdoor_k": celsius(-15.0)}, {"outdoor_k": celsius(50.0)}, {"room_k": celsius(5.0)}],
+)
+def test_environment_out_of_range_is_rejected(table: CycleTable, overrides: dict) -> None:
+    """外氣 −10～45 °C、室溫 10～35 °C 以外明確失敗（避免超出性質表）。
+
+回傳：
+    無。"""
+    with pytest.raises(ValueError):
+        HeatPumpSimulation(table, settings=replace(SimulationSettings(), **overrides))

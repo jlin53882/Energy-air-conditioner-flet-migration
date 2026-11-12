@@ -40,6 +40,9 @@ class FrequencyMode(str, Enum):
     MANUAL = "manual"
 
 
+OUTDOOR_RANGE_K = (celsius(-10.0), celsius(45.0))
+ROOM_RANGE_K = (celsius(10.0), celsius(35.0))
+
 WARNING_HIGH_PRESSURE = "high_pressure"
 WARNING_HP_LIMITING = "hp_limiting"
 WARNING_FROST = "frost"
@@ -87,6 +90,7 @@ class StepRecord:
     """單一時間步的記錄（§5）。所有量為 canonical SI。"""
 
     time_s: float
+    dt_s: float
     operation: OperationMode
     mode: RefrigerantMode
     compressor_on: bool
@@ -243,13 +247,27 @@ class HeatPumpSimulation:
             raise ValueError(
                 f"手動頻率必須介於 {compressor.min_frequency_hz:g}～{compressor.max_frequency_hz:g} Hz。"
             )
+        for value, (low, high), label in (
+            (settings.outdoor_k, OUTDOOR_RANGE_K, "外氣溫度"),
+            (settings.room_k, ROOM_RANGE_K, "室溫"),
+        ):
+            if not low <= value <= high:
+                raise ValueError(f"{label}必須介於 {low - 273.15:g}～{high - 273.15:g} °C。")
         previous = self._settings
         self._settings = settings
+        ctrl = self._ctrl
         if previous.operation is not settings.operation:
             self.mode = RefrigerantMode.DUAL
-            self._ctrl.integral_hz = 0.0
+            ctrl.integral_hz = 0.0
             self._event("operation", f"運轉方式切換為{'冷房' if settings.operation is OperationMode.COOLING else '暖房'}")
             self._guess = None
+        elif previous.frequency_mode is FrequencyMode.MANUAL and settings.frequency_mode is FrequencyMode.AUTO:
+            # 無擾切換：讓 PI 輸出從目前頻率開始。
+            ctrl.integral_hz = (
+                ctrl.frequency_hz - compressor.min_frequency_hz - self.params.control.kp_hz_per_k * self._control_error()
+            )
+        if ctrl.compressor_on and not ctrl.tripped:
+            ctrl.frequency_hz = self._target_frequency(self._control_error())
 
     def set_manual_frequency(self, frequency_hz: float) -> None:
         """切換為手動頻率。
@@ -323,6 +341,7 @@ class HeatPumpSimulation:
 
         perf: CompressorPerformance | None = None
         warnings: set[str] = set()
+        tripped_now = False
         if ctrl.compressor_on and not ctrl.tripped:
             perf = self._solver.solve(self._conditions(ctrl.frequency_hz), self._guess)
             self._guess = (perf.evaporating_k, perf.condensing_k)
@@ -331,8 +350,7 @@ class HeatPumpSimulation:
             ):
                 ctrl.tripped = True
                 ctrl.compressor_on = False
-                ctrl.off_since_s = self.time_s
-                self._event("trip", "高壓或排氣溫度過高，安全停機（需手動復歸）")
+                tripped_now = True
                 perf = None
         if ctrl.tripped:
             warnings.add(WARNING_TRIPPED)
@@ -365,6 +383,7 @@ class HeatPumpSimulation:
 
         record = StepRecord(
             time_s=self.time_s,
+            dt_s=dt_s,
             operation=s.operation,
             mode=self.mode,
             compressor_on=perf is not None,
@@ -398,6 +417,9 @@ class HeatPumpSimulation:
         )
 
         self.time_s += dt_s
+        if tripped_now:
+            ctrl.off_since_s = self.time_s
+            self._event("trip", "高壓或排氣溫度過高，安全停機（需手動復歸）")
         self._update_mode()
         hp_limiting = self._update_compressor(perf, dt_s)
         if hp_limiting:
@@ -415,6 +437,7 @@ class HeatPumpSimulation:
             if self.mode is RefrigerantMode.DUAL and self.hot_water_k >= c.cooling_hot_switch_k:
                 self.mode = RefrigerantMode.SMART_COOLING
                 self._event("smart_cooling", "熱水達上限：關 SV8、開 SV9，切換智慧冷房")
+                self._preempt_high_pressure()
             elif self.mode is RefrigerantMode.SMART_COOLING and self.hot_water_k <= c.cooling_hot_return_k:
                 self.mode = RefrigerantMode.DUAL
                 self._event("dual", "熱水回落：關 SV9、開 SV8，回到雙效")
@@ -429,6 +452,29 @@ class HeatPumpSimulation:
                 self._event("dual", "冰水回升：關 SV11、開 SV10，回到雙效")
             elif self.mode is RefrigerantMode.SMART_COOLING:
                 self.mode = RefrigerantMode.DUAL
+
+    def _preempt_high_pressure(self) -> None:
+        """切換到室外冷凝時預先限頻：冷凝溫度會在一步內跳升，事後限頻來不及（§2.3）。
+
+以新模式預測冷凝溫度，每次降 2 Hz，直到低於限頻起點或到最低頻率。
+
+回傳：
+    無。"""
+        ctrl = self._ctrl
+        comp = self.params.compressor
+        if not ctrl.compressor_on or ctrl.tripped:
+            return
+        frequency = ctrl.frequency_hz
+        while True:
+            perf = self._solver.solve(self._conditions(frequency), None)
+            if perf.condensing_k < self.params.control.hp_limit_start_k or frequency <= comp.min_frequency_hz:
+                break
+            frequency = max(comp.min_frequency_hz, frequency - 2.0)
+        if frequency < ctrl.frequency_hz:
+            ctrl.frequency_limit_hz = min(ctrl.frequency_limit_hz, frequency)
+            ctrl.frequency_hz = frequency
+            self._event("hp_preempt", f"切換室外冷凝前預先限頻至 {frequency:.0f} Hz")
+        self._guess = None
 
     def _update_compressor(self, perf: CompressorPerformance | None, dt_s: float) -> bool:
         """更新高壓限頻、頻率與啟停（§2.3）。
@@ -450,7 +496,7 @@ class HeatPumpSimulation:
             return False
         cooling = s.operation is OperationMode.COOLING
         controlled = self.cold_water_k if cooling else self.hot_water_k
-        error = controlled - c.cooling_setpoint_k if cooling else c.heating_setpoint_k - controlled
+        error = self._control_error()
 
         if not ctrl.compressor_on:
             restart = controlled >= c.cooling_restart_k if cooling else controlled <= c.heating_restart_k
@@ -493,6 +539,16 @@ class HeatPumpSimulation:
             ctrl.off_since_s = self.time_s
             self._event("stop", "已達溫度目標，壓縮機停機")
         return limiting
+
+    def _control_error(self) -> float:
+        """PI 控制誤差：冷房為冰水 − 目標，暖房為目標 − 熱水（正值表示需要更多能力）。
+
+回傳：
+    K。"""
+        c = self.params.control
+        if self._settings.operation is OperationMode.COOLING:
+            return self.cold_water_k - c.cooling_setpoint_k
+        return c.heating_setpoint_k - self.hot_water_k
 
     def _target_frequency(self, error: float) -> float:
         """PI 輸出（夾在最低頻率與限頻上限之間）。
@@ -546,7 +602,7 @@ def summarize(records: list[StepRecord], events: list[SimulationEvent]) -> Simul
     """彙總記錄。
 
 參數：
-    records: 時間步記錄（需等距、連續）。
+    records: 連續的時間步記錄。
     events: 事件。
 
 回傳：
@@ -557,14 +613,12 @@ def summarize(records: list[StepRecord], events: list[SimulationEvent]) -> Simul
     if not records:
         raise ValueError("沒有模擬記錄。")
     start = records[0].time_s
-    dts = [b.time_s - a.time_s for a, b in zip(records, records[1:])]
-    dt = dts[-1] if dts else 0.0
-    duration = records[-1].time_s - start + dt
+    duration = sum(r.dt_s for r in records)
     running = [r for r in records if r.compressor_on]
-    run_time = len(running) * dt
-    energy = records[-1].energy_used_j - (records[0].energy_used_j - records[0].total_power_w * dt)
-    fan_energy = sum(r.fan_coil_load_w for r in records) * dt
-    stops = sum(1 for e in events if e.code == "stop" and start <= e.time_s <= start + duration)
+    run_time = sum(r.dt_s for r in running)
+    energy = records[-1].energy_used_j - (records[0].energy_used_j - records[0].total_power_w * records[0].dt_s)
+    fan_energy = sum(r.fan_coil_load_w * r.dt_s for r in records)
+    stops = sum(1 for e in events if e.code == "stop" and start < e.time_s <= start + duration)
     warnings: frozenset[str] = frozenset().union(*(r.warnings for r in records))
     condensing = [r.condensing_k for r in running if r.condensing_k is not None]
     evaporating = [r.evaporating_k for r in running if r.evaporating_k is not None]
@@ -572,7 +626,7 @@ def summarize(records: list[StepRecord], events: list[SimulationEvent]) -> Simul
         duration_s=duration,
         stops=stops,
         run_fraction=run_time / duration if duration else 0.0,
-        mean_frequency_hz=sum(r.frequency_hz for r in running) / len(running) if running else 0.0,
+        mean_frequency_hz=sum(r.frequency_hz * r.dt_s for r in running) / run_time if running else 0.0,
         mean_fan_coil_load_w=fan_energy / duration if duration else 0.0,
         energy_used_j=energy,
         system_cop=fan_energy / energy if energy > 0 else None,
