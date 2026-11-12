@@ -11,7 +11,12 @@ from math import isfinite
 import flet as ft
 # PropertyTab 繼承自 ft.Column，使其可以直接作為 Flet UI 中的一個垂直佈局容器。
 # 導入新類別的 "合約" (interfaces)
-from ..ui_components.unit.UnitConverter import UnitConverter
+from ..ui_components.unit.UnitConverter import (
+    ABSOLUTE_TO_GAUGE_UNIT,
+    GAUGE_PRESSURE,
+    GAUGE_TO_ABSOLUTE_UNIT,
+    UnitConverter,
+)
 from ..ui_components.unit.PropertyFormatter import PropertyFormatter
 from .analysis_modules.result_formatting import ResultFormatter
 from application.models import HumidAirQueryRequest, PropertyQueryRequest
@@ -61,6 +66,10 @@ HUMIDITY_INPUTS = (
     ("W", "濕度比 W", "W"),
 )
 HUMID_AIR_FLUID = "Air"
+# 錶壓換算預設使用的標準大氣壓力（Pa）；與分析頁一致。
+STANDARD_ATMOSPHERE_PA = 101_325.0
+PRESSURE_GAUGE = "Gauge"
+PRESSURE_ABSOLUTE = "Absolute"
 
 
 # PropertyTab 繼承自 ft.Column，使其可以直接作為 Flet UI 中的一個垂直佈局容器。
@@ -69,7 +78,8 @@ class PropertyTab(ft.Column):
                  formatter: PropertyFormatter, 
                  page: ft.Page,
                  query_service: PropertyQueryService,
-                 workspace_state: WorkspaceState | None = None):
+                 workspace_state: WorkspaceState | None = None,
+                 pressure_from_altitude: Callable[[float], float] | None = None):
         """建立查詢介面，並以外置欄名與預設隱藏的第三列維持欄位契約。
 
 參數：
@@ -78,6 +88,7 @@ class PropertyTab(ft.Column):
     page: Flet 應用程式頁面。
     query_service: 執行熱力性質查詢並管理參考狀態的服務。
     workspace_state: 選用的工作區狀態；未提供時建立預設狀態。
+    pressure_from_altitude: 「海拔（m）→ 大氣壓力（Pa）」換算；未提供時使用共用濕空氣服務的公式。
 
 回傳：
     無。"""
@@ -89,6 +100,30 @@ class PropertyTab(ft.Column):
         self.formatter = formatter
         self.query_service = query_service
         self.workspace_state = workspace_state or WorkspaceState()
+        self._pressure_from_altitude_fn = pressure_from_altitude
+        # 壓力輸入基準：與飽和性質等分析頁相同的錶壓／絕對壓切換；預設絕對壓（維持舊行為）。
+        self.pressure_basis = ft.SegmentedButton(
+            allow_empty_selection=False,
+            segments=[
+                ft.Segment(value=PRESSURE_ABSOLUTE, label=ft.Text("絕對壓力")),
+                ft.Segment(value=PRESSURE_GAUGE, label=ft.Text("錶壓力")),
+            ],
+            selected=[PRESSURE_ABSOLUTE],
+            # 窄版（320／375 px）時勾選圖示會擠壓標籤文字；選取狀態已由底色表示。
+            show_selected_icon=False,
+            expand=True,
+            on_change=self._on_pressure_basis_change,
+        )
+        self.pressure_basis_hint = ft.Text("", size=TOKENS.caption, color=TOKENS.text_muted)
+        self.altitude_tf = ft.TextField(
+            label="海拔高度（選填，m）", hint_text="未填時使用 101.325 kPa",
+            keyboard_type=ft.KeyboardType.NUMBER, expand=True, on_change=self._on_altitude_change,
+        )
+        self.atm_tf = ft.TextField(
+            label="大氣壓力（絕對，kPa）", value="101.325",
+            helper="填入海拔時自動計算；也可手動修改。",
+            keyboard_type=ft.KeyboardType.NUMBER, expand=True, on_change=self._on_semantic_input_change,
+        )
         
         # 性質代碼到名稱的映射 (用於下拉選單顯示)
         # 格式為: {代碼: "名稱 (中文), 代碼"} (例如: 'P' -> 'Pressure (壓力), P')
@@ -405,6 +440,18 @@ class PropertyTab(ft.Column):
             icon=ft.Icons.WATER_DROP_OUTLINED,
         )
         self.humid_air_card.visible = False
+        for control in (self.altitude_tf, self.atm_tf):
+            style_text_field(control)
+        self.atmosphere_section = ft.ResponsiveRow(
+            [
+                ft.Container(content=self.altitude_tf, col={"xs": 12, "md": 6}),
+                ft.Container(content=self.atm_tf, col={"xs": 12, "md": 6}),
+            ],
+            spacing=TOKENS.spacing_md,
+            run_spacing=TOKENS.spacing_md,
+            visible=False,
+        )
+        self._refresh_pressure_basis_hint()
         conditions = EngineeringCard(
             "已知條件（兩個獨立性質）",
             ft.Column([
@@ -413,6 +460,16 @@ class PropertyTab(ft.Column):
                         ft.Text("常用組合", size=TOKENS.caption, color=TOKENS.text_muted,
                                 weight=ft.FontWeight.W_600),
                         self.preset_buttons,
+                    ],
+                    spacing=6,
+                ),
+                ft.Column(
+                    [
+                        ft.Text("壓力類型", size=TOKENS.caption, color=TOKENS.text_muted,
+                                weight=ft.FontWeight.W_600),
+                        ft.Row([self.pressure_basis]),
+                        self.pressure_basis_hint,
+                        self.atmosphere_section,
                     ],
                     spacing=6,
                 ),
@@ -1126,6 +1183,127 @@ class PropertyTab(ft.Column):
         except RuntimeError:
             pass
 
+    @property
+    def is_gauge_pressure(self) -> bool:
+        """壓力輸入是否為錶壓力。"""
+        return PRESSURE_GAUGE in (self.pressure_basis.selected or [])
+
+    def _unit_code(self, prop_code: str | None) -> str | None:
+        """回傳輸入列實際使用的單位性質代碼：錶壓模式下壓力為 ``PGauge``。"""
+        if prop_code == "P" and self.is_gauge_pressure:
+            return GAUGE_PRESSURE
+        return prop_code
+
+    def _read_atmospheric_pa(self) -> float:
+        """讀取大氣壓力（絕對，Pa）。
+
+引發：
+    ValueError：欄位不是正的有限數值時。"""
+        value = float((self.atm_tf.value or "").strip())
+        if not isfinite(value) or value <= 0:
+            raise ValueError("大氣壓力必須大於 0。")
+        return value * 1000.0
+
+    def _refresh_pressure_basis_hint(self) -> None:
+        """更新壓力類型說明與大氣壓力欄位可見性。"""
+        gauge = self.is_gauge_pressure
+        self.atmosphere_section.visible = gauge
+        self.pressure_basis_hint.value = (
+            "錶壓力：計算前加上大氣壓力換成絕對壓力（例：152 kPag + 101.325 kPa = 253.325 kPa）。"
+            if gauge
+            else "絕對壓力：輸入值直接用於計算，不會加大氣壓力（蒸氣表通常為絕對壓）。"
+        )
+
+    def _on_pressure_basis_change(self, _event: ft.ControlEvent | None) -> None:
+        """切換錶壓／絕對壓：壓力列改用對應單位並換算為同一個實際壓力，不使結果失效。
+
+大氣壓力無效而需要換算時，恢復原模式並在大氣壓力欄位提示。
+
+參數：
+    _event: Flet 事件。
+
+回傳：
+    無。"""
+        to_gauge = self.is_gauge_pressure
+        new_code = GAUGE_PRESSURE if to_gauge else "P"
+        old_code = "P" if to_gauge else GAUGE_PRESSURE
+        unit_map = ABSOLUTE_TO_GAUGE_UNIT if to_gauge else GAUGE_TO_ABSOLUTE_UNIT
+        pressure_rows = [
+            index for index, row in enumerate(self.input_rows)
+            if self.get_prop_code(row["prop"].value) == "P"
+        ]
+        values: dict[int, float] = {}
+        for index in pressure_rows:
+            try:
+                value = float((self.input_rows[index]["val"].value or "").strip())
+            except ValueError:
+                continue
+            if isfinite(value):
+                values[index] = value
+        atmospheric_pa = 0.0
+        if values:
+            try:
+                atmospheric_pa = self._read_atmospheric_pa()
+            except ValueError:
+                self.pressure_basis.selected = [PRESSURE_GAUGE if not to_gauge else PRESSURE_ABSOLUTE]
+                self.atm_tf.error_text = "請輸入有效的大氣壓力，才能在錶壓與絕對壓力間換算"
+                self._refresh_pressure_basis_hint()
+                self._safe_update()
+                return
+        self.atm_tf.error_text = None
+        for index in pressure_rows:
+            row = self.input_rows[index]
+            old_unit = row["unit"].value
+            new_unit = unit_map.get(old_unit, self.unit_converter.default_units.get(new_code, ""))
+            if index in values:
+                current_si = self.unit_converter.convert_to_si(old_code, values[index], old_unit)
+                new_si = current_si - atmospheric_pa if to_gauge else current_si + atmospheric_pa
+                row["val"].value = f"{self.unit_converter.convert_from_si(new_code, new_si, new_unit):.7g}"
+            units = self.unit_converter.get_available_units(new_code)
+            row["unit"].options = [ft.dropdown.Option(unit) for unit in units]
+            row["unit"].value = new_unit
+            self._last_prop_units[index] = new_unit
+            self.workspace_state.set_input_unit(f"condition_{index}_{new_code}", new_unit)
+        self._refresh_pressure_basis_hint()
+        # 實際壓力不變：只換表示方式，不使舊結果失效。
+        self._safe_update()
+
+    def _on_altitude_change(self, _event: ft.ControlEvent | None) -> None:
+        """依海拔更新大氣壓力；錶壓模式下大氣壓力改變會改變絕對壓力，因此使舊結果失效。"""
+        raw_value = (self.altitude_tf.value or "").strip()
+        atmospheric_pa = STANDARD_ATMOSPHERE_PA
+        if raw_value:
+            try:
+                altitude = float(raw_value)
+                if not isfinite(altitude):
+                    raise ValueError("海拔必須是有限數值。")
+                atmospheric_pa = self._altitude_to_pressure()(altitude)
+                if isinstance(atmospheric_pa, complex) or not isfinite(atmospheric_pa) or atmospheric_pa <= 0:
+                    raise ValueError("海拔超出標準大氣公式的適用範圍。")
+            except (ValueError, TypeError, OverflowError) as error:
+                self.altitude_tf.error_text = str(error) if str(error) else "請輸入有效海拔。"
+                self._safe_update()
+                return
+        self.altitude_tf.error_text = None
+        self.atm_tf.value = f"{atmospheric_pa / 1000:.6g}"
+        self.atm_tf.error_text = None
+        self._on_semantic_input_change(None)
+
+    def _altitude_to_pressure(self) -> Callable[[float], float]:
+        """回傳「海拔 → 大氣壓力（Pa）」換算；未注入時使用共用濕空氣服務的公式。"""
+        if self._pressure_from_altitude_fn is None:
+            from .unit.PsychrometricCalculator import PsychrometricCalculator
+
+            self._pressure_from_altitude_fn = PsychrometricCalculator().service.calculate_pressure_from_altitude
+        return self._pressure_from_altitude_fn
+
+    def _safe_update(self) -> None:
+        """已掛載時更新畫面；未掛載時略過。"""
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
     def update_units_menu(self, row_index: int, *, update_view: bool = True) -> None:
         """依輸入列的性質更新單位選項、預設值與追蹤狀態。
 
@@ -1151,12 +1329,13 @@ class PropertyTab(ft.Column):
             quantity.property_code = prop_code
             quantity.label = row_label
             quantity.label_control.value = row_label
-        units = self.unit_converter.get_available_units(prop_code)
+        unit_code = self._unit_code(prop_code)
+        units = self.unit_converter.get_available_units(unit_code)
         row["unit"].options = [ft.dropdown.Option(unit) for unit in units]
 
-        default_unit = self.unit_converter.default_units.get(prop_code, "")
+        default_unit = self.unit_converter.default_units.get(unit_code, "")
         new_unit = default_unit if default_unit in units else (units[0] if units else "")
-        input_key = f"condition_{row_index}_{prop_code}"
+        input_key = f"condition_{row_index}_{unit_code}"
         saved_unit = self.workspace_state.input_units.get(input_key)
         if saved_unit in units:
             new_unit = saved_unit
@@ -1223,7 +1402,7 @@ class PropertyTab(ft.Column):
         self._is_updating_units = True
         try:
             changed_row = self.input_rows[changed_row_index]
-            property_code = self.get_prop_code(changed_row["prop"].value)
+            property_code = self._unit_code(self.get_prop_code(changed_row["prop"].value))
             new_unit = changed_row["unit"].value
             old_unit = self._last_prop_units[changed_row_index]
             raw_value = changed_row["val"].value
@@ -1281,11 +1460,23 @@ class PropertyTab(ft.Column):
             return None, "數值必須是有限數字。"
         if property_code is None:
             return None, "請選擇有效的熱力性質。"
+        unit_code = self._unit_code(property_code)
         try:
-            canonical_value = self.unit_converter.convert_to_si(property_code, value, unit)
+            canonical_value = self.unit_converter.convert_to_si(unit_code, value, unit)
         except ValueError:
             return None, "目前性質不支援所選單位。"
-        if property_code == "P" and canonical_value <= 0:
+        if unit_code == GAUGE_PRESSURE:
+            try:
+                atmospheric_pa = self._read_atmospheric_pa()
+            except ValueError:
+                return None, "錶壓換算需要有效的大氣壓力。"
+            try:
+                absolute_pa = self.unit_converter.gauge_to_absolute_pa(canonical_value, atmospheric_pa)
+            except ValueError:
+                absolute_pa = 0.0
+            if absolute_pa <= 0:
+                return None, "換算後的絕對壓力必須大於 0。"
+        elif property_code == "P" and canonical_value <= 0:
             return None, "絕對壓力必須大於 0。"
         if property_code == "T" and canonical_value <= 0:
             return None, "絕對溫度必須大於 0 K。"
@@ -1317,6 +1508,7 @@ class PropertyTab(ft.Column):
             return # 停止計算
 
         known_props, display_inputs = [], []
+        gauge_notes: list[str] = []
         has_field_errors = False
 
 
@@ -1332,8 +1524,20 @@ class PropertyTab(ft.Column):
             if error:
                 has_field_errors = True
                 continue
-            known_props.append((prop_code, value, unit))
             display_inputs.append(f"{row['prop'].value}={raw_value} {unit}")
+            if self._unit_code(prop_code) == GAUGE_PRESSURE:
+                # 錶壓只存在於 UI 邊界：送入計算前一律換成絕對壓力 Pa。
+                atmospheric_pa = self._read_atmospheric_pa()
+                absolute_pa = self.unit_converter.gauge_to_absolute_pa(
+                    self.unit_converter.convert_to_si(GAUGE_PRESSURE, value, unit), atmospheric_pa
+                )
+                known_props.append(("P", absolute_pa, "Pa"))
+                gauge_notes.append(
+                    f"壓力換算: {raw_value} {unit} + 大氣 {atmospheric_pa / 1000:.6g} kPa"
+                    f" = {absolute_pa / 1000:.6g} kPa（絕對）"
+                )
+            else:
+                known_props.append((prop_code, value, unit))
 
         if has_field_errors:
             self.result_panel.set_error("請先修正欄位旁的錯誤，再執行計算。")
@@ -1389,6 +1593,8 @@ class PropertyTab(ft.Column):
             f"物質: {fluid}",
             f"參考狀態（選擇）: {ref_code}",
             f"已知: {', '.join(display_inputs[:2])}",
+            f"壓力類型: {'錶壓力（計算時加大氣壓力）' if self.is_gauge_pressure else '絕對壓力'}",
+            *gauge_notes,
         ]
         if total_mass_kg is not None:
             input_summary.append(f"總質量: {self.mass_tf.value.strip()} {self.mass_unit_dd.value}")

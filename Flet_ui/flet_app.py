@@ -89,6 +89,7 @@ def main(page: ft.Page) -> None:
         page=page,
         query_service=property_query_service,
         workspace_state=workspace_state,
+        pressure_from_altitude=pressure_from_altitude,
     )
 
     # --- 每個分析分類擁有自己的既有模組實例，不再共用單一 AnalysisTab。 ---

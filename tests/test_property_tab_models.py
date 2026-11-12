@@ -248,3 +248,113 @@ def test_configuration_fields_stack_on_narrow_screens(shell) -> None:
     config_cells = [cell for cell in responsive_containers(view) if getattr(cell, "content", None) in
                     (view.mode_dd, view.fluid_tf)]
     assert len(config_cells) == 2 and all(cell.col == {"xs": 12, "md": 4} for cell in config_cells)
+
+
+# ======================================================
+# 壓力類型：與分析頁一致的錶壓／絕對壓切換
+# ======================================================
+def _set_pressure_basis(view, basis: str) -> None:
+    view.pressure_basis.selected = [basis]
+    view.pressure_basis.on_change(SimpleNamespace(control=view.pressure_basis))
+
+
+def _saturated_r717_by_pressure(view, value: str) -> None:
+    view.fluid_tf.value = "R717"
+    view.on_fluid_change(None)
+    view._apply_property_preset(("P", "Q"))
+    view.input_rows[0]["val"].value = value
+    view.input_rows[1]["val"].value = "1"
+    view.perform_calculation(None)
+
+
+def test_property_pressure_defaults_to_absolute_without_adding_atmosphere(shell) -> None:
+    """預設絕對壓：152 kPa 直接送入 152 000 Pa，不加大氣壓力；大氣壓力欄位隱藏。"""
+    view = _view(shell)
+    assert view.pressure_basis.selected == ["Absolute"]
+    assert view.atmosphere_section.visible is False
+    assert "不會加大氣壓力" in view.pressure_basis_hint.value
+
+    _saturated_r717_by_pressure(view, "152")
+    assert view.result_panel.status == "success", view.result_panel.message
+    assert view._last_si_results["P"] == pytest.approx(152_000.0)
+    assert view._last_si_results["T"] - 273.15 == pytest.approx(-24.92, abs=0.01)
+
+
+def test_property_gauge_pressure_adds_atmosphere_before_calculation(shell) -> None:
+    """錶壓：152 kPag + 101.325 kPa → 253 325 Pa（絕對）送入計算；摘要列出換算。"""
+    view = _view(shell)
+    _set_pressure_basis(view, "Gauge")
+    assert view.atmosphere_section.visible is True
+    assert view.input_rows[0]["unit"].value == "kPag"
+    assert {option.key for option in view.input_rows[0]["unit"].options} == {"Pag", "kPag", "MPag", "barg", "psig"}
+
+    _saturated_r717_by_pressure(view, "152")
+    assert view.result_panel.status == "success", view.result_panel.message
+    assert view._last_si_results["P"] == pytest.approx(253_325.0)
+    assert view._last_si_results["T"] - 273.15 == pytest.approx(-13.33, abs=0.01)
+    assert "= 253.325 kPa（絕對）" in view.result_text.value
+
+
+def test_pressure_basis_toggle_keeps_physical_pressure_and_result(shell) -> None:
+    """切換錶壓／絕對壓只換表示方式：數值換算為同一實際壓力，舊結果不失效。"""
+    view = _view(shell)
+    _query(view, "1000", "25")
+    assert view.result_panel.status == "success"
+
+    _set_pressure_basis(view, "Gauge")
+    assert view.input_rows[0]["val"].value == "898.675"
+    assert view.input_rows[0]["unit"].value == "kPag"
+    assert view.result_panel.status == "success"
+
+    _set_pressure_basis(view, "Absolute")
+    assert view.input_rows[0]["val"].value == "1000"
+    assert view.input_rows[0]["unit"].value == "kPa"
+    assert view.result_panel.status == "success"
+
+
+def test_gauge_unit_change_converts_within_gauge_units(shell) -> None:
+    """錶壓模式下切換單位（kPag → barg）在錶壓單位間換算。"""
+    view = _view(shell)
+    _set_pressure_basis(view, "Gauge")
+    view.input_rows[0]["val"].value = "150"
+    view.input_rows[0]["unit"].value = "barg"
+    view.on_property_unit_change(0)
+    assert view.input_rows[0]["val"].value == "1.5"
+
+
+def test_atmosphere_from_altitude_and_invalidates_gauge_result(shell) -> None:
+    """錶壓模式：填海拔自動換算大氣壓力並使舊結果失效；新結果使用新的大氣壓力。"""
+    view = _view(shell)
+    _set_pressure_basis(view, "Gauge")
+    _saturated_r717_by_pressure(view, "152")
+    assert view.result_panel.status == "success"
+
+    view.altitude_tf.value = "1500"
+    view.altitude_tf.on_change(SimpleNamespace(control=view.altitude_tf))
+    atmospheric_kpa = float(view.atm_tf.value)
+    assert 80.0 < atmospheric_kpa < 90.0
+    assert view.result_panel.status == "warning"
+
+    view.perform_calculation(None)
+    assert view._last_si_results["P"] == pytest.approx(152_000.0 + atmospheric_kpa * 1000.0, rel=1e-6)
+
+
+def test_gauge_toggle_rolls_back_when_atmosphere_invalid(shell) -> None:
+    """大氣壓力無效時不能換算：恢復原模式、欄位提示，壓力值不被改寫。"""
+    view = _view(shell)
+    view.atm_tf.value = "abc"
+    view.input_rows[0]["val"].value = "500"
+    _set_pressure_basis(view, "Gauge")
+
+    assert view.pressure_basis.selected == ["Absolute"]
+    assert view.atm_tf.error_text
+    assert view.input_rows[0]["val"].value == "500" and view.input_rows[0]["unit"].value == "kPa"
+
+
+def test_negative_absolute_after_gauge_conversion_is_rejected(shell) -> None:
+    """錶壓換算後絕對壓力 ≤ 0 時在欄位旁報錯，不送出計算。"""
+    view = _view(shell)
+    _set_pressure_basis(view, "Gauge")
+    _query(view, "-200", "25")
+    assert view.result_panel.status == "error"
+    assert view.quantity_inputs[0].error_control.value == "換算後的絕對壓力必須大於 0。"
