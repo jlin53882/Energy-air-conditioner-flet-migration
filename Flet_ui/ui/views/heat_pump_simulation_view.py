@@ -34,12 +34,10 @@ from ..components.engineering_card import EngineeringCard
 from ..components.heat_pump_schematic import HeatPumpSchematic
 from ..components.kpi_tile import KpiTile
 from ..heat_pump_presentation import (
-    LINE_COLORS,
-    LINE_LABELS,
     MODE_LABELS,
     MODE_SHORT_LABELS,
     WARNING_LABELS,
-    LineState,
+    TEMPERATURE_LEGEND,
     downsample,
     format_clock,
     format_power,
@@ -47,6 +45,7 @@ from ..heat_pump_presentation import (
     format_temperature,
     instant_cop,
     ph_cycle,
+    ts_cycle,
 )
 from ..theme import TOKENS, mono_style, primary_button_style, secondary_button_style, style_dropdown
 
@@ -60,6 +59,10 @@ EVENT_ROWS = 30
 COLD_COLOR = "#1F4E89"
 HOT_COLOR = "#C2410C"
 FREQ_COLOR = "#7A5195"
+QE_COLOR = "#2F6FB5"
+QC_COLOR = "#C2410C"
+POWER_COLOR = "#5E6764"
+COP_COLOR = "#2E7D4F"
 
 LoopStarter = Callable[[Callable[[], Awaitable[None]]], None]
 
@@ -258,12 +261,22 @@ class HeatPumpSimulationView(ft.Column):
         self.event_list = ft.ListView(height=160, spacing=2)
         self.trend_chart = self._make_trend_chart()
         self.ph_chart = self._make_ph_chart()
+        self.ts_chart = self._make_ts_chart()
+        self.response_chart = self._make_trend_chart(max_y=20, title="kW／COP")
         self._dome: SaturationDome | None = None
 
-        legend = ft.Row(
-            [self._legend_item(LINE_COLORS[state], LINE_LABELS[state]) for state in LineState],
-            wrap=True, spacing=TOKENS.spacing_md,
-        )
+        legend = ft.Row([
+            ft.Text("冷媒溫度", size=TOKENS.caption, color=TOKENS.text_secondary),
+            ft.Column([
+                ft.Container(width=220, height=8, border_radius=4, gradient=ft.LinearGradient(
+                    begin=ft.Alignment(-1, 0), end=ft.Alignment(1, 0), colors=[c for _t, c in TEMPERATURE_LEGEND])),
+                ft.Row([ft.Text(f"{t:g}", size=TOKENS.overline, color=TOKENS.text_muted) for t, _c in TEMPERATURE_LEGEND],
+                       width=220, alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ], spacing=2, tight=True),
+            ft.Text("°C", size=TOKENS.caption, color=TOKENS.text_muted),
+            self._legend_item("#CDCDC4", "虛線：未使用"),
+            self._legend_item(TOKENS.success, "綠色閥：開啟"),
+        ], wrap=True, spacing=TOKENS.spacing_md, vertical_alignment=ft.CrossAxisAlignment.CENTER)
         controls_card = EngineeringCard(
             "模擬控制",
             ft.Column([
@@ -305,6 +318,16 @@ class HeatPumpSimulationView(ft.Column):
                     self._legend_item(FREQ_COLOR, "壓縮機頻率 Hz")], spacing=TOKENS.spacing_md, wrap=True),
         ]), icon=ft.Icons.SHOW_CHART)
         trend_card.col = {"xs": 12, "lg": 6}
+        response_card = EngineeringCard("時間響應", ft.Column([
+            self.response_chart,
+            ft.Row([self._legend_item(QE_COLOR, "冷量 kW"), self._legend_item(QC_COLOR, "熱量 kW"),
+                    self._legend_item(POWER_COLOR, "總耗電 kW"), self._legend_item(COP_COLOR, "瞬時系統 COP")],
+                   spacing=TOKENS.spacing_md, wrap=True),
+        ]), icon=ft.Icons.TIMELINE)
+        response_card.col = {"xs": 12, "lg": 6}
+        ts_card = EngineeringCard("T-s 圖（R410A）", self.ts_chart, subtitle="目前運轉點的循環；熵基準 ASHRAE",
+                                  icon=ft.Icons.STACKED_LINE_CHART)
+        ts_card.col = {"xs": 12, "lg": 6}
         ph_card = EngineeringCard("P-h 圖（R410A）", self.ph_chart, subtitle="目前運轉點的循環；焓基準 ASHRAE",
                                   icon=ft.Icons.STACKED_LINE_CHART)
         ph_card.col = {"xs": 12, "lg": 6}
@@ -315,7 +338,9 @@ class HeatPumpSimulationView(ft.Column):
                 ft.ResponsiveRow([controls_card, schematic_card], spacing=TOKENS.spacing_md,
                                  run_spacing=TOKENS.spacing_md),
                 ft.ResponsiveRow(list(self.kpis.values()), spacing=TOKENS.spacing_sm, run_spacing=TOKENS.spacing_sm),
-                ft.ResponsiveRow([trend_card, ph_card], spacing=TOKENS.spacing_md, run_spacing=TOKENS.spacing_md),
+                ft.ResponsiveRow([trend_card, response_card], spacing=TOKENS.spacing_md,
+                                 run_spacing=TOKENS.spacing_md),
+                ft.ResponsiveRow([ph_card, ts_card], spacing=TOKENS.spacing_md, run_spacing=TOKENS.spacing_md),
                 events_card,
             ],
             spacing=TOKENS.spacing_md,
@@ -340,16 +365,20 @@ class HeatPumpSimulationView(ft.Column):
                        ft.Text(label, size=TOKENS.caption, color=TOKENS.text_secondary)], spacing=6, tight=True)
 
     @staticmethod
-    def _make_trend_chart() -> fch.LineChart:
-        """趨勢圖。
+    def _make_trend_chart(max_y: float = 65, title: str = "°C／Hz") -> fch.LineChart:
+        """時間軸折線圖。
+
+參數：
+            max_y: 縱軸上限。
+            title: 縱軸標題。
 
 回傳：
             LineChart。"""
         return fch.LineChart(
-            data_series=[], height=260, min_y=0, max_y=65, min_x=0, max_x=60,
+            data_series=[], height=260, min_y=0, max_y=max_y, min_x=0, max_x=60,
             interactive=False,
-            horizontal_grid_lines=fch.ChartGridLines(interval=10, color=TOKENS.border, width=0.6),
-            left_axis=fch.ChartAxis(label_size=36, title=ft.Text("°C／Hz", size=TOKENS.caption)),
+            horizontal_grid_lines=fch.ChartGridLines(interval=10 if max_y > 30 else 4, color=TOKENS.border, width=0.6),
+            left_axis=fch.ChartAxis(label_size=36, title=ft.Text(title, size=TOKENS.caption)),
             bottom_axis=fch.ChartAxis(label_size=24, title=ft.Text("模擬時間 (min)", size=TOKENS.caption)),
             top_axis=fch.ChartAxis(show_labels=False, label_size=0),
             right_axis=fch.ChartAxis(show_labels=False, label_size=0),
@@ -367,6 +396,22 @@ class HeatPumpSimulationView(ft.Column):
             horizontal_grid_lines=fch.ChartGridLines(interval=5, color=TOKENS.border, width=0.6),
             left_axis=fch.ChartAxis(label_size=36, title=ft.Text("P (bar，絕對)", size=TOKENS.caption)),
             bottom_axis=fch.ChartAxis(label_size=24, title=ft.Text("h (kJ/kg)", size=TOKENS.caption)),
+            top_axis=fch.ChartAxis(show_labels=False, label_size=0),
+            right_axis=fch.ChartAxis(show_labels=False, label_size=0),
+        )
+
+    @staticmethod
+    def _make_ts_chart() -> fch.LineChart:
+        """T-s 圖。
+
+回傳：
+            LineChart。"""
+        return fch.LineChart(
+            data_series=[], height=300, min_x=0.8, max_x=2.0, min_y=-20, max_y=100, interactive=False,
+            vertical_grid_lines=fch.ChartGridLines(interval=0.2, color=TOKENS.border, width=0.6),
+            horizontal_grid_lines=fch.ChartGridLines(interval=20, color=TOKENS.border, width=0.6),
+            left_axis=fch.ChartAxis(label_size=36, title=ft.Text("T (°C)", size=TOKENS.caption)),
+            bottom_axis=fch.ChartAxis(label_size=24, title=ft.Text("s (kJ/kg·K)", size=TOKENS.caption)),
             top_axis=fch.ChartAxis(show_labels=False, label_size=0),
             right_axis=fch.ChartAxis(show_labels=False, label_size=0),
         )
@@ -646,7 +691,8 @@ class HeatPumpSimulationView(ft.Column):
 
 回傳：
     無。"""
-        self.schematic.render(record, self._refrigerant_phase, self._water_phase, self._rotor_angle)
+        self.schematic.render(record, self._refrigerant_phase, self._water_phase, self._rotor_angle,
+                              self._settings.outdoor_k)
         self.clock_text.value = format_clock(self.sim.time_s if self.sim else 0.0)
         k = self.kpis
         if record is None:
@@ -732,8 +778,18 @@ class HeatPumpSimulationView(ft.Column):
                 series([r.hot_water_k - 273.15 for r in samples], HOT_COLOR),
                 series([r.frequency_hz for r in samples], FREQ_COLOR),
             ]
+            for attr in ("min_x", "max_x", "vertical_grid_lines"):
+                setattr(self.response_chart, attr, getattr(self.trend_chart, attr))
+            cops = [instant_cop(r) or 0.0 for r in samples]
+            self.response_chart.data_series = [
+                series([r.cooling_w / 1000 for r in samples], QE_COLOR),
+                series([r.heating_w / 1000 for r in samples], QC_COLOR),
+                series([r.total_power_w / 1000 for r in samples], POWER_COLOR),
+                series(cops, COP_COLOR),
+            ]
         else:
             self.trend_chart.data_series = []
+            self.response_chart.data_series = []
 
         series = []
         max_bar = self.ph_chart.max_y
@@ -759,6 +815,34 @@ class HeatPumpSimulationView(ft.Column):
                                            stroke_width=1.5),
             ))
         self.ph_chart.data_series = series
+
+        ts_series = []
+        if self._dome is not None and self._dome.liquid_ts:
+            # 橫軸依 −20～70 °C 的飽和線決定，右側保留排氣過熱區。
+            window = [s_ / 1000 for curve in (self._dome.liquid_ts, self._dome.vapor_ts)
+                      for s_, t in curve if celsius(-20.0) <= t <= celsius(70.0)]
+            if window:
+                self.ts_chart.min_x = math.floor(min(window) / 0.2) * 0.2
+                self.ts_chart.max_x = math.ceil((max(window) + 0.25) / 0.2) * 0.2
+            for curve in (self._dome.liquid_ts, self._dome.vapor_ts):
+                ts_series.append(fch.LineChartData(
+                    points=[fch.LineChartDataPoint(s_ / 1000, t - 273.15) for s_, t in curve],
+                    color=TOKENS.border_strong, stroke_width=1.5, curved=True,
+                ))
+        ts = (ts_cycle(self.latest, self._dome.liquid_ts, self._dome.vapor_ts)
+              if self.latest is not None and self._dome is not None else None)
+        if ts is not None:
+            ts_series.append(fch.LineChartData(
+                points=[fch.LineChartDataPoint(s_, t) for s_, t in ts.points],
+                color=TOKENS.highlight, stroke_width=2.5,
+            ))
+            ts_series.append(fch.LineChartData(
+                points=[fch.LineChartDataPoint(s_, t) for s_, t in ts.markers],
+                color="#00000000", stroke_width=0,
+                point=fch.ChartCirclePoint(color=TOKENS.highlight, radius=4, stroke_color=TOKENS.surface,
+                                           stroke_width=1.5),
+            ))
+        self.ts_chart.data_series = ts_series
 
     def _safe_update(self) -> None:
         """已掛載時才更新畫面。

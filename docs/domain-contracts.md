@@ -186,4 +186,5 @@ Invalid request shape、known property 不足、invalid fluid/policy 與 unknown
 - 時間步進：`HeatPumpSimulation.step(dt)` 以本步開始時的運轉點計算熱量，顯式 Euler 更新水溫，之後切換冷媒模式與更新壓縮機；`dt` 必須介於 0 與 10 秒。`StepRecord` 的水溫為本步結束後的值，其餘為本步運轉點。
 - 設定：`SimulationSettings` 可在步與步之間以 `update_settings()` 變更；未知送風機、非正 GPM、手動頻率超出 30～60 Hz 以 `ValueError` 拒絕。切換冷房／暖房時冷媒模式回到雙效、PI 積分歸零。
 - 安全停機（冷凝溫度或排氣溫度超過上限）會保持到呼叫 `reset_trip()`。
+- `StepRecord` 另提供 T-s 圖用的四點熵（`suction_entropy_j_kg_k` 等，節流後熵由飽和液／蒸氣以乾度內插）、吸氣與液管溫度，以及板式換熱器進出水溫（進水為本步開始時的桶溫，出水 = 進水 ∓ Q ÷ (ṁ·cp)；該換熱器不在流路中時為 None）與室外換熱量 `outdoor_heat_w`。
 - 系統 COP 為送風機送出（或取走）的熱量除以壓縮機、開啟送風機與水泵的總耗電。

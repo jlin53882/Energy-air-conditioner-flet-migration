@@ -4,9 +4,10 @@
 :class:`~domain.refrigeration.states.ThermodynamicStateProvider` 建表，之後只做內插。
 
 表內容（單位質量，canonical SI）：
-- 只依蒸發溫度 Te：蒸發壓力 pe、吸氣焓 h1、吸氣熵 s1、吸氣密度 ρ1。
-- 只依冷凝溫度 Tc：冷凝壓力 pc、液管焓 h3。
-- 依 (Te, Tc)：等熵排氣焓 h2s、實際排氣溫度 Td（以建表時的總效率計算）。
+- 只依蒸發溫度 Te：蒸發壓力 pe、吸氣焓 h1、吸氣熵 s1、吸氣密度 ρ1，以及飽和液／飽和蒸氣的 (h, s)
+  （計算節流後蒸發器入口的熵）。
+- 只依冷凝溫度 Tc：冷凝壓力 pc、液管焓 h3 與熵 s3。
+- 依 (Te, Tc)：等熵排氣焓 h2s、實際排氣溫度 Td 與熵 s2（以建表時的總效率計算）。
 """
 
 from __future__ import annotations
@@ -32,6 +33,10 @@ class CycleProperties:
     discharge_enthalpy_j_kg: float
     liquid_enthalpy_j_kg: float
     discharge_temperature_k: float
+    suction_entropy_j_kg_k: float = float("nan")
+    discharge_entropy_j_kg_k: float = float("nan")
+    liquid_entropy_j_kg_k: float = float("nan")
+    evaporator_inlet_entropy_j_kg_k: float = float("nan")
 
 
 def _grid(start: float, stop: float, step: float) -> list[float]:
@@ -87,9 +92,9 @@ class CycleTable:
         overall_efficiency: float,
         evaporating_grid_k: Sequence[float],
         condensing_grid_k: Sequence[float],
-        suction: Sequence[tuple[float, float, float, float]],
-        condensing: Sequence[tuple[float, float]],
-        discharge: Sequence[Sequence[tuple[float, float]]],
+        suction: Sequence[tuple[float, ...]],
+        condensing: Sequence[tuple[float, ...]],
+        discharge: Sequence[Sequence[tuple[float, ...]]],
     ) -> None:
         """以已計算的網格資料建立表（一般請用 :meth:`build`）。
 
@@ -98,9 +103,9 @@ class CycleTable:
     overall_efficiency: 建表時使用的壓縮機總效率。
     evaporating_grid_k: 蒸發溫度網格。
     condensing_grid_k: 冷凝溫度網格。
-    suction: 每個 Te 的 (pe, h1, s1, ρ1)。
-    condensing: 每個 Tc 的 (pc, h3)。
-    discharge: [Te][Tc] 的 (h2s, Td)。
+    suction: 每個 Te 的 (pe, h1, s1, ρ1, h_f, s_f, h_g, s_g)。
+    condensing: 每個 Tc 的 (pc, h3, s3)。
+    discharge: [Te][Tc] 的 (h2s, Td, s2)。
 
 回傳：
     無。"""
@@ -177,7 +182,10 @@ class CycleTable:
                 s1 = state([("T", te + settings.superheat_k), ("P", pe)], "壓縮機吸氣狀態")
             else:
                 s1 = state([("P", pe), ("Q", 1.0)], "壓縮機吸氣狀態")
-            suction.append((pe, float(s1["H"]), float(s1["S"]), float(s1["D"])))
+            vapor = state([("T", te), ("Q", 1.0)], "飽和蒸氣")
+            liquid = state([("T", te), ("Q", 0.0)], "飽和液")
+            suction.append((pe, float(s1["H"]), float(s1["S"]), float(s1["D"]),
+                            float(liquid["H"]), float(liquid["S"]), float(vapor["H"]), float(vapor["S"])))
         condensing = []
         for tc in tc_grid:
             pc = float(state([("T", tc), ("Q", 0.0)], "冷凝壓力")["P"])
@@ -185,18 +193,18 @@ class CycleTable:
                 s3 = state([("T", tc - settings.subcooling_k), ("P", pc)], "冷凝器出口狀態")
             else:
                 s3 = state([("P", pc), ("Q", 0.0)], "冷凝器出口狀態")
-            condensing.append((pc, float(s3["H"])))
+            condensing.append((pc, float(s3["H"]), float(s3["S"])))
         discharge = []
-        for te, (_pe, h1, s1, _rho) in zip(te_grid, suction):
+        for te, (_pe, h1, s1, *_rest) in zip(te_grid, suction):
             row = []
-            for tc, (pc, _h3) in zip(tc_grid, condensing):
+            for tc, (pc, *_rest3) in zip(tc_grid, condensing):
                 if tc <= te:
-                    row.append((math.nan, math.nan))
+                    row.append((math.nan, math.nan, math.nan))
                     continue
                 h2s = float(state([("P", pc), ("S", s1)], "等熵排氣狀態")["H"])
                 h2 = h1 + (h2s - h1) / overall_efficiency
-                td = float(state([("P", pc), ("H", h2)], "排氣狀態")["T"])
-                row.append((h2s, td))
+                outlet = state([("P", pc), ("H", h2)], "排氣狀態")
+                row.append((h2s, float(outlet["T"]), float(outlet["S"])))
             discharge.append(row)
         return cls(settings, overall_efficiency, te_grid, tc_grid, suction, condensing, discharge)
 
@@ -216,15 +224,16 @@ class CycleTable:
             raise ValueError("冷凝溫度必須高於蒸發溫度。")
         i, wi = _locate(self.evaporating_grid_k, evaporating_k)
         j, wj = _locate(self.condensing_grid_k, condensing_k)
-        pe = _lerp([row[0] for row in self._suction[i : i + 2]], 0, wi)
-        h1 = _lerp([row[1] for row in self._suction[i : i + 2]], 0, wi)
-        rho1 = _lerp([row[3] for row in self._suction[i : i + 2]], 0, wi)
-        pc = _lerp([row[0] for row in self._condensing[j : j + 2]], 0, wj)
-        h3 = _lerp([row[1] for row in self._condensing[j : j + 2]], 0, wj)
+        su = [_lerp([row[k] for row in self._suction[i : i + 2]], 0, wi) for k in range(8)]
+        pe, h1, s1, rho1, h_f, s_f, h_g, s_g = su
+        pc, h3, s3 = (_lerp([row[k] for row in self._condensing[j : j + 2]], 0, wj) for k in range(3))
         h2s = self._bilinear(i, wi, j, wj, 0)
         td = self._bilinear(i, wi, j, wj, 1)
+        s2 = self._bilinear(i, wi, j, wj, 2)
         h2 = h1 + (h2s - h1) / self.overall_efficiency
-        return CycleProperties(pe, pc, h1, rho1, h2, h3, td)
+        quality = (h3 - h_f) / (h_g - h_f) if h_g != h_f else 0.0
+        s4 = s_f + quality * (s_g - s_f)
+        return CycleProperties(pe, pc, h1, rho1, h2, h3, td, s1, s2, s3, s4)
 
     def _bilinear(self, i: int, wi: float, j: int, wj: float, k: int) -> float:
         """二維雙線性內插；鄰點缺值（Tc ≤ Te）時退回可用的鄰點。
@@ -234,7 +243,7 @@ class CycleTable:
     wi: Te 權重。
     j: Tc 左端索引。
     wj: Tc 權重。
-    k: 欄位（0 = h2s，1 = Td）。
+    k: 欄位（0 = h2s，1 = Td，2 = s2）。
 
 回傳：
     內插值。

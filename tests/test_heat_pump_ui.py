@@ -72,10 +72,16 @@ def test_schematic_state_follows_valve_table(service: HeatPumpSimulationService)
     assert active == hp.ACTIVE_PIPES[RefrigerantMode.DUAL]
     assert state.pipe_states["dis_hx2"] is hp.LineState.DISCHARGE
     assert state.pipe_states["lp_hx1"] is hp.LineState.TWO_PHASE
-    assert not state.outdoor_fan_on
+    assert state.outdoor_role is None
     assert state.fan_loop_tank == "cold_tank"
+    assert state.pipe_colors["dis_hx2"] == hp.refrigerant_color(record.discharge_k)
+    assert state.pipe_colors["suc_hx1"] == hp.refrigerant_color(record.suction_temperature_k)
+    assert state.pipe_colors["dis_out"] == hp.IDLE_LINE_COLOR
+    assert [c.key for c in state.callouts] == ["suction", "discharge", "liquid", "expansion"]
+    assert state.callouts[1].lines[0] == f"Td {record.discharge_k - 273.15:.1f} °C"
     off = hp.schematic_state(replace(record, compressor_on=False))
     assert all(value is hp.LineState.IDLE for value in off.pipe_states.values())
+    assert off.callouts == ()
 
 
 def test_active_pipes_cover_a_closed_refrigerant_loop() -> None:
@@ -242,3 +248,53 @@ def test_view_reports_invalid_settings(service: HeatPumpSimulationService) -> No
     view._apply_settings(replace(view._settings, manual_frequency_hz=70.0))
     assert view.error_text.visible
     assert view.sim.settings.manual_frequency_hz != 70.0
+
+
+def test_refrigerant_color_scale_runs_blue_to_red() -> None:
+    """冷媒色階：低溫偏藍、高溫偏紅，端點外夾住。
+
+回傳：
+    無。"""
+    cold = hp.refrigerant_color(celsius(-20.0))
+    hot = hp.refrigerant_color(celsius(120.0))
+    assert cold == hp.TEMPERATURE_LEGEND[0][1]
+    assert hot == hp.TEMPERATURE_LEGEND[-1][1]
+    r_cold, b_cold = int(cold[1:3], 16), int(cold[5:7], 16)
+    r_hot, b_hot = int(hot[1:3], 16), int(hot[5:7], 16)
+    assert b_cold > r_cold and r_hot > b_hot
+
+
+def test_outdoor_callout_and_role_in_smart_modes(service: HeatPumpSimulationService) -> None:
+    """智慧冷房：室外換熱器當冷凝器並顯示放熱量。
+
+回傳：
+    無。"""
+    sim = service.new_session()
+    sim.run(15 * 60.0)
+    record = sim.step()
+    state = hp.schematic_state(record)
+    assert state.outdoor_role == "condenser"
+    outdoor = next(c for c in state.callouts if c.key == "outdoor")
+    assert outdoor.lines[0] == f"冷凝放熱 {record.outdoor_heat_w / 1000:.2f} kW"
+
+
+def test_ts_cycle_follows_saturation_lines(service: HeatPumpSimulationService) -> None:
+    """T-s 路徑經過 Tc 飽和蒸氣／液與 Te 飽和蒸氣；四個狀態點的溫度正確。
+
+回傳：
+    無。"""
+    dome = service.saturation_dome()
+    record = service.new_session().step()
+    path = hp.ts_cycle(record, dome.liquid_ts, dome.vapor_ts)
+    assert path is not None
+    assert len(path.points) == 8 and path.points[0] == path.points[-1]
+    (s1, t1), (s2, t2), (s3, t3), (s4, t4) = path.markers
+    assert t1 == pytest.approx(record.suction_temperature_k - 273.15)
+    assert t2 == pytest.approx(record.discharge_k - 273.15)
+    assert t4 == pytest.approx(record.evaporating_k - 273.15)
+    assert s2 > s1 > s4 > s3
+    tc = record.condensing_k - 273.15
+    assert path.points[2][1] == pytest.approx(tc) and path.points[3][1] == pytest.approx(tc)
+    assert path.points[2][0] > path.points[3][0]
+    bare = hp.ts_cycle(record)
+    assert len(bare.points) == 5

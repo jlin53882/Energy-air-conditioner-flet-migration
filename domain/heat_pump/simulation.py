@@ -23,7 +23,7 @@ from .components import (
     refrigerant_side_resistance,
 )
 from .cycle_table import CycleTable
-from .parameters import HeatPumpParameters, celsius, gpm_to_kg_s
+from .parameters import WATER_CP_J_KG_K, HeatPumpParameters, celsius, gpm_to_kg_s
 
 
 class OperationMode(str, Enum):
@@ -121,6 +121,17 @@ class StepRecord:
     energy_used_j: float
     fan_coil_energy_j: float
     warnings: frozenset[str]
+    suction_temperature_k: float | None = None
+    liquid_temperature_k: float | None = None
+    suction_entropy_j_kg_k: float | None = None
+    discharge_entropy_j_kg_k: float | None = None
+    liquid_entropy_j_kg_k: float | None = None
+    evaporator_inlet_entropy_j_kg_k: float | None = None
+    evaporator_water_in_k: float | None = None
+    evaporator_water_out_k: float | None = None
+    condenser_water_in_k: float | None = None
+    condenser_water_out_k: float | None = None
+    outdoor_heat_w: float = 0.0
 
     @property
     def total_power_w(self) -> float:
@@ -371,6 +382,22 @@ class HeatPumpSimulation:
 
         q_evap_water = perf.cooling_w if perf is not None and self.mode is not RefrigerantMode.SMART_HEATING else 0.0
         q_cond_water = perf.heating_w if perf is not None and self.mode is not RefrigerantMode.SMART_COOLING else 0.0
+        # 板式換熱器進出水溫（進水 = 本步開始時的桶溫）；室外換熱量依模式取冷凝或蒸發側。
+        evap_in = cond_in = evap_out = cond_out = None
+        outdoor_heat = 0.0
+        if perf is not None:
+            cold_rate = gpm_to_kg_s(s.cold_pump_gpm) * WATER_CP_J_KG_K
+            hot_rate = gpm_to_kg_s(s.hot_pump_gpm) * WATER_CP_J_KG_K
+            if self.mode is not RefrigerantMode.SMART_HEATING:
+                evap_in = self.cold_water_k
+                evap_out = evap_in - perf.cooling_w / cold_rate
+            else:
+                outdoor_heat = perf.cooling_w
+            if self.mode is not RefrigerantMode.SMART_COOLING:
+                cond_in = self.hot_water_k
+                cond_out = cond_in + perf.heating_w / hot_rate
+            else:
+                outdoor_heat = perf.heating_w
         cold_loss = p.cold_tank.loss_ua_w_k * (s.room_k - self.cold_water_k)
         hot_loss = p.hot_tank.loss_ua_w_k * (s.room_k - self.hot_water_k)
         cold_net = (fan_load if cooling else 0.0) - q_evap_water + cold_loss
@@ -414,6 +441,17 @@ class HeatPumpSimulation:
             energy_used_j=self._energy_j,
             fan_coil_energy_j=self._fan_coil_energy_j,
             warnings=frozenset(warnings),
+            suction_temperature_k=perf.evaporating_k + p.cycle.superheat_k if perf else None,
+            liquid_temperature_k=perf.condensing_k - p.cycle.subcooling_k if perf else None,
+            suction_entropy_j_kg_k=perf.properties.suction_entropy_j_kg_k if perf else None,
+            discharge_entropy_j_kg_k=perf.properties.discharge_entropy_j_kg_k if perf else None,
+            liquid_entropy_j_kg_k=perf.properties.liquid_entropy_j_kg_k if perf else None,
+            evaporator_inlet_entropy_j_kg_k=perf.properties.evaporator_inlet_entropy_j_kg_k if perf else None,
+            evaporator_water_in_k=evap_in,
+            evaporator_water_out_k=evap_out,
+            condenser_water_in_k=cond_in,
+            condenser_water_out_k=cond_out,
+            outdoor_heat_w=outdoor_heat,
         )
 
         self.time_s += dt_s

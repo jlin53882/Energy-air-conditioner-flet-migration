@@ -23,11 +23,16 @@ from domain.refrigeration.states import ThermodynamicStateProvider, query_state
 
 @dataclass(frozen=True)
 class SaturationDome:
-    """P-h 圖飽和線（canonical SI；焓的 reference state 與模擬相同）。"""
+    """P-h 與 T-s 圖飽和線（canonical SI；焓、熵的 reference state 與模擬相同）。
+
+    ``liquid``／``vapor`` 為 (h, P)；``liquid_ts``／``vapor_ts`` 為 (s, T)。
+    """
 
     liquid: tuple[tuple[float, float], ...]
     vapor: tuple[tuple[float, float], ...]
     reference_state: str
+    liquid_ts: tuple[tuple[float, float], ...] = ()
+    vapor_ts: tuple[tuple[float, float], ...] = ()
 
 
 class HeatPumpSimulationService:
@@ -77,7 +82,7 @@ class HeatPumpSimulationService:
             return self._table
 
     def saturation_dome(self, low_k: float = celsius(-30.0), high_k: float = celsius(68.0), step_k: float = 2.0) -> SaturationDome:
-        """取得（必要時計算）飽和液線與飽和蒸氣線的 (h, P)。
+        """取得（必要時計算）飽和液線與飽和蒸氣線（P-h 與 T-s）。
 
 參數：
     low_k: 最低飽和溫度。
@@ -89,16 +94,19 @@ class HeatPumpSimulationService:
         with self._lock:
             if self._dome is None:
                 cycle = self.params.cycle
-                liquid, vapor = [], []
+                liquid, vapor, liquid_ts, vapor_ts = [], [], [], []
                 count = int(round((high_k - low_k) / step_k))
                 for i in range(count + 1):
                     t = low_k + i * step_k
-                    for quality, target in ((0.0, liquid), (1.0, vapor)):
+                    for quality, target, target_ts in ((0.0, liquid, liquid_ts), (1.0, vapor, vapor_ts)):
                         state = query_state(
                             self._provider, cycle.fluid, [("T", t), ("Q", quality)], cycle.reference_state, "飽和狀態"
                         )
                         target.append((float(state["H"]), float(state["P"])))
-                self._dome = SaturationDome(tuple(liquid), tuple(vapor), cycle.reference_state)
+                        target_ts.append((float(state["S"]), t))
+                self._dome = SaturationDome(
+                    tuple(liquid), tuple(vapor), cycle.reference_state, tuple(liquid_ts), tuple(vapor_ts)
+                )
             return self._dome
 
     def new_session(

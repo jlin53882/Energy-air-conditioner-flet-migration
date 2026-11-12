@@ -545,3 +545,45 @@ def test_environment_out_of_range_is_rejected(table: CycleTable, overrides: dict
     無。"""
     with pytest.raises(ValueError):
         HeatPumpSimulation(table, settings=replace(SimulationSettings(), **overrides))
+
+
+def test_cycle_entropies_match_direct_state_queries(
+    table: CycleTable, provider: ThermodynamicStateService
+) -> None:
+    """T-s 圖用的四點熵與直接查詢一致；節流後熵增加。
+
+回傳：
+    無。"""
+    te, tc = celsius(5.0), celsius(40.0)
+    props = table.properties(te, tc)
+    pe, pc = props.evaporating_pressure_pa, props.condensing_pressure_pa
+    s1 = provider.calculate_state_si("R410A", [("T", te + 5.0), ("P", pe)], "ASHRAE")["S"]
+    s2 = provider.calculate_state_si("R410A", [("P", pc), ("H", props.discharge_enthalpy_j_kg)], "ASHRAE")["S"]
+    s3 = provider.calculate_state_si("R410A", [("T", tc - 5.0), ("P", pc)], "ASHRAE")["S"]
+    s4 = provider.calculate_state_si("R410A", [("P", pe), ("H", props.liquid_enthalpy_j_kg)], "ASHRAE")["S"]
+    assert props.suction_entropy_j_kg_k == pytest.approx(s1, rel=1e-3)
+    assert props.discharge_entropy_j_kg_k == pytest.approx(s2, rel=2e-3)
+    assert props.liquid_entropy_j_kg_k == pytest.approx(s3, rel=1e-3)
+    assert props.evaporator_inlet_entropy_j_kg_k == pytest.approx(s4, rel=2e-3)
+    assert props.evaporator_inlet_entropy_j_kg_k > props.liquid_entropy_j_kg_k
+    assert props.discharge_entropy_j_kg_k > props.suction_entropy_j_kg_k
+
+
+def test_record_reports_plate_water_temperatures_and_outdoor_heat(table: CycleTable) -> None:
+    """雙效時兩個板式換熱器都有進出水溫；智慧冷房時冷凝熱改由室外排出。
+
+回傳：
+    無。"""
+    sim = HeatPumpSimulation(table)
+    record = sim.step()
+    flow = gpm_to_kg_s(12.06) * 4186.0
+    assert record.evaporator_water_in_k == pytest.approx(celsius(30.0))
+    assert record.evaporator_water_out_k == pytest.approx(celsius(30.0) - record.cooling_w / flow)
+    assert record.condenser_water_out_k == pytest.approx(celsius(30.0) + record.heating_w / flow)
+    assert record.outdoor_heat_w == 0.0
+    assert record.suction_temperature_k == pytest.approx(record.evaporating_k + 5.0)
+    sim.run(15 * 60.0)
+    smart = sim.step()
+    assert smart.mode is RefrigerantMode.SMART_COOLING
+    assert smart.condenser_water_in_k is None and smart.condenser_water_out_k is None
+    assert smart.outdoor_heat_w == pytest.approx(smart.heating_w)
