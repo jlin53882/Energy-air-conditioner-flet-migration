@@ -59,7 +59,7 @@ Property code `V` 不得與 CoolProp viscosity code 或 density 混淆。Telegra
 
 `ThermodynamicStateService` 接受至少兩個 known property，將 input 轉為 canonical SI，並為設定的 property 加上 `phase` 回傳 neutral numeric result。Request 會選擇 CoolProp-backed calculation 或 ideal-gas calculation；channel adapter 負責 display conversion 與 error presentation。
 
-Reference-state-sensitive calculation 必須攜帶明確的 request policy。一般 request 使用 `DEF`、`ASHRAE`、`IIR` 或 `NBP` 等 concrete policy。Internal operation 可以明確使用 `CURRENT`，表示該 scope 不修改 process reference state。一般 calculation 不得依賴前一個 request 留在 process 中的 state。`Water` 是一般 fluid request，使用明確的 `DEF` policy；backend 或 equation-model selection 與 reference-state policy 是不同責任。
+Reference-state-sensitive calculation 必須攜帶明確的 request policy。一般 request 使用 `DEF`、`ASHRAE`、`IIR` 或 `NBP` 等 concrete policy。Internal operation 可以明確使用 `CURRENT`，表示該 scope 不修改 process reference state。一般 calculation 不得依賴前一個 request 留在 process 中的 state。`Auto` 只能出現在 request 端：`domain/thermodynamics/thermo_policy.py` 的 `resolve_thermo_policy()` 是唯一的 Auto 入口，先解析計算模型（真實流體／理想氣體／濕空氣），再解析 reference state（Water → `DEF`、乾空氣 → `DEF`、其他流體在 CoolProp 支援時 → `IIR`，否則 `DEF` 並記錄備援原因；手動指定不支援的基準明確失敗）。每個 request 只解析一次，產生不可變的 `ResolvedThermoPolicy`，計算、顯示、圖表與保存都使用同一份快照。backend 或 equation-model selection 與 reference-state policy 是不同責任；詳見 [reference-state.md](reference-state.md)。
 
 ## 6. Reference-state contract
 
@@ -100,7 +100,7 @@ Flet 與 Telegram 負責 label、display unit、string 以及 message/control re
 
 ## 9. Refrigeration cycle contract
 
-`domain/refrigeration/` 透過 `ThermodynamicStateProvider` 協定（由 `ThermodynamicStateService.calculate_state_si` 實作）取得 canonical SI 狀態，不直接呼叫 CoolProp，也不自行修改 reference state。
+`domain/refrigeration/` 透過 `ThermodynamicStateProvider` 協定（由 `ThermodynamicStateService.calculate_state_si` 實作）取得 canonical SI 狀態，不直接呼叫 CoolProp，也不自行修改 reference state。對外函式（`saturation_properties`、`evaluate_superheat_subcooling`、`analyze_condenser_exergy`、`VaporCompressionInputs`）的 `reference_state` 為必填、沒有預設值：基準由呼叫端（application 層的 `thermo_policy` resolver）解析後傳入，domain 不自行假設 ASHRAE 或 DEF。
 
 - `solve_vapor_compression_cycle`：單級蒸氣壓縮循環。蒸發壓力取蒸發溫度的露點（Q = 1），冷凝壓力取冷凝溫度的泡點（Q = 0）；壓縮以等熵效率修正，節流為等焓。只有提供冷凍能力時才回傳質量流率、功率與吸入體積流量，不推估未提供的系統量。結果的 `reference_state` 是求解時實際使用的 policy code；reference-state policy 只在 application（`RefrigerationService`）解析一次，繪製同一循環的圖表必須使用這個值，不得再以 `Auto` 重新解析。
 - `saturation_properties`：已知絕對壓力或飽和溫度（恰好一個，且為正值），回傳 `SaturationPropertiesResult`：飽和液體（泡點，Q = 0，`key="liquid"`）與飽和蒸氣（露點，Q = 1，`key="vapor"`）兩個 `ThermoStatePoint`（`source=saturation`）。已知壓力時兩者同壓、溫度差為溫度滑移；已知溫度時兩者同溫、`pressure_difference_pa` 為泡點與露點壓力差；純冷媒兩者皆約為 0。蒸發潛熱 `latent_heat_j_kg`：
@@ -119,7 +119,7 @@ Flet 與 Telegram 負責 label、display unit、string 以及 message/control re
 `domain/state_points/` 定義跨工具共用的狀態點，全部使用 canonical SI。
 
 - `ThermoStatePoint`（冷媒／工作流體）：`fluid`、`reference_state`、`pressure_pa`、`temperature_k`、`enthalpy_j_kg`、`entropy_j_kgk`、`density_kg_m3`、`quality`、`source`、`is_ideal_gas`，以及選填的 `key`、`label`。
-  - `reference_state` 必須是求解時實際使用的明確 policy code（`DEF`、`ASHRAE`、`IIR`、`NBP`，別名會正規化）；不接受 `Auto` 或 `CURRENT`。
+  - `reference_state` 必須是求解時實際使用的明確 policy code（`DEF`、`ASHRAE`、`IIR`、`NBP`，別名會正規化）；不接受 `Auto` 或 `CURRENT`。理想氣體狀態點固定為 `IDEAL_GAS`（h = cp·T，不是 CoolProp reference state），且 `entropy_j_kgk` 為 `None`（schema v2；v1 文件讀取時轉換，見 [reference-state.md](reference-state.md) §7）。
   - 乾度 `quality`：-1 為 CoolProp 單相標記（過冷液、過熱蒸氣或超臨界）；0–1 為合法乾度範圍；其他數值屬於無效狀態點資料，建立或讀取時一律拒絕。
   - 比容 `specific_volume_m3_kg` 與相態 `phase` 由其他欄位推導，不另外保存：乾度 0 為飽和液、1 為飽和蒸氣、介於兩者之間為兩相、-1 為單相。
   - 冷凍循環的冷凍效果、壓縮功與冷凝放熱，都以 `enthalpy_difference` 由循環狀態點相減。

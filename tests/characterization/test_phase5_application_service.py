@@ -76,11 +76,12 @@ def test_query_policy_is_not_consumed_by_compressor() -> None:
             PropertyQueryRequest(
                 fluid="R134a",
                 known_properties=(("T", 25.0, "°C"), ("P", 1.0, "bar")),
-                reference_state="IIR",
+                reference_state="NBP",
             )
         )
-        assert service.requested_reference_state("R134a") == "IIR"
-        assert compressor._reference_state_for("R134a") == "ASHRAE"
+        assert service.requested_reference_state("R134a") == "NBP"
+        # 壓縮機例題使用集中 Auto 規則（支援 IIR 的冷媒 → IIR），不沿用物性頁的 NBP。
+        assert compressor._reference_state_for("R134a") == "IIR"
     finally:
         service.set_reference_state("R134a", "DEF")
 

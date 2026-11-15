@@ -242,7 +242,9 @@ def test_differences_require_same_basis(provider) -> None:
     with pytest.raises(StateBasisMismatchError):
         require_same_basis(ashrae_a, replace(ashrae_a, fluid="R134a"))
     with pytest.raises(StateBasisMismatchError):
-        require_same_basis(ashrae_a, replace(ashrae_a, is_ideal_gas=True))
+        require_same_basis(
+            ashrae_a, replace(ashrae_a, is_ideal_gas=True, reference_state="IDEAL_GAS", entropy_j_kgk=None)
+        )
     require_same_basis(ashrae_a, replace(ashrae_b, fluid="r32"))
 
 
@@ -276,7 +278,7 @@ def test_thermo_state_point_round_trips_through_json(provider) -> None:
     restored = ThermoStatePoint.from_dict(json.loads(json.dumps(document, allow_nan=False)))
 
     assert document["schema"] == "thermo_state_point"
-    assert document["schema_version"] == 1
+    assert document["schema_version"] == 2
     assert document["source"] == "property_query"
     assert restored == point
     assert state_point_from_dict(document) == point
@@ -286,7 +288,7 @@ def test_thermo_state_point_round_trips_through_json(provider) -> None:
     ("mutate", "message"),
     [
         (lambda doc: doc.update(schema="air_state_point"), "文件種類不符"),
-        (lambda doc: doc.update(schema_version=2), "較新的版本"),
+        (lambda doc: doc.update(schema_version=3), "較新的版本"),
         (lambda doc: doc.update(schema_version=0), "不支援"),
         (lambda doc: doc.update(schema_version=True), "schema_version"),
         (lambda doc: doc.pop("schema_version"), "schema_version"),
@@ -435,7 +437,7 @@ def test_all_cycle_enthalpy_differences_go_through_basis_guard(provider, monkeyp
         return original(first, second)
 
     monkeypatch.setattr(vapor_compression, "enthalpy_difference", recording)
-    solve_vapor_compression_cycle(provider, VaporCompressionInputs("R32", 278.15, 318.15, 5.0, 5.0, 0.7))
+    solve_vapor_compression_cycle(provider, VaporCompressionInputs("R32", 278.15, 318.15, 5.0, 5.0, 0.7, reference_state="ASHRAE"))
 
     assert sorted(pairs) == [("1", "3"), ("2", "1"), ("2", "3")]
 
@@ -445,7 +447,7 @@ def test_cycles_with_different_reference_states_cannot_be_mixed(provider) -> Non
 
 回傳：
     無。"""
-    inputs = VaporCompressionInputs("R32", 278.15, 318.15, 5.0, 5.0, 0.7)
+    inputs = VaporCompressionInputs("R32", 278.15, 318.15, 5.0, 5.0, 0.7, reference_state="ASHRAE")
     ashrae = solve_vapor_compression_cycle(provider, inputs)
     iir = solve_vapor_compression_cycle(provider, replace(inputs, reference_state="IIR"))
 

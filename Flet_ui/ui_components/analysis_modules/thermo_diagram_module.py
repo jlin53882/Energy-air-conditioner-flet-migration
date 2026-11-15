@@ -2,7 +2,7 @@ from collections.abc import Callable
 import flet as ft
 import flet_charts as fch
 import matplotlib.pyplot as plt
-from .base_analysis_module import BaseAnalysisModule
+from .base_analysis_module import REFERENCE_STATE_OPTIONS, BaseAnalysisModule
 from ...ui.theme import (
     TOKENS,
     card_shadow,
@@ -12,6 +12,7 @@ from ...ui.theme import (
 )
 from ..unit.thermo_draw.coolprop_utils import generate_thermo_diagram, safe_props, check_coolprop_fluid 
 from chart.state_point_parser import StatePointParser
+from domain.thermodynamics.thermo_policy import AUTO, Workflow, resolve_thermo_policy
 import traceback # 用於印出詳細錯誤
 
 class ThermoDiagramModule(BaseAnalysisModule):
@@ -127,14 +128,13 @@ class ThermoDiagramModule(BaseAnalysisModule):
         # --- 參考狀態選項 ---
         self.ref_state_dd = style_dropdown(ft.Dropdown(
             options=[
-                ft.dropdown.Option("Auto", "自動 (冷媒:ASHRAE, 水:Default)"),
-                ft.dropdown.Option("ASHRAE", "ASHRAE (冷媒常用)"),
-                ft.dropdown.Option("NBP", "NBP (常壓沸點為 0)"),
-                ft.dropdown.Option("IIR", "IIR (0°C 飽和液體為基準)"),
+                ft.dropdown.Option(code, text) for code, text in REFERENCE_STATE_OPTIONS
             ],
             value="Auto",
             expand=True,
         ))
+        # 初始值採工作區預設；使用者選過後，之後套用的設定不再改動它。
+        self.reference_state_default.register(self.ref_state_dd)
 
         # --- 壓力軸單位選項 ---
         self.pressure_unit_dd = style_dropdown(ft.Dropdown(
@@ -526,7 +526,12 @@ class ThermoDiagramModule(BaseAnalysisModule):
 
             # 取得 UI 選項
             diagram = self.diagram_dd.value
-            ref_state = self.ref_state_dd.value  
+            ref_state, preferred = self.reference_state_default.request_reference(self.ref_state_dd)
+            if preferred is not None:
+                # 工作區預設只是偏好：流體不支援時退回 Auto 規則（例如 Water 不支援 IIR）。
+                ref_state = resolve_thermo_policy(
+                    fluid, reference=AUTO, workflow=Workflow.CHART, preferred_reference=preferred
+                ).reference_state
             pressure_unit_y_axis = self.pressure_unit_dd.value 
             input_mode = self.input_pair_dd.value 
             connect_points = self.connect_points_cb.value

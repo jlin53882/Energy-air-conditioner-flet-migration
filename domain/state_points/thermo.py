@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from domain.schema import document_payload, require_exact_fields, versioned_document
+from domain.thermodynamics.ideal_gas import IDEAL_GAS_BASIS
 from domain.thermodynamics.reference_state import ReferenceStatePolicy, normalize_reference_state_policy
 
 from .base import (
@@ -19,7 +20,10 @@ from .base import (
 )
 
 THERMO_STATE_POINT_SCHEMA = "thermo_state_point"
-THERMO_STATE_POINT_VERSION = 1
+# v2：理想氣體狀態點的 reference_state 固定為 ``IDEAL_GAS``、比熵為 None（v1 以 0 代表「未提供」）。
+# 讀取 v1 文件時依 v1 文件語意轉換，非理想氣體狀態點內容不變。
+THERMO_STATE_POINT_VERSION = 2
+LEGACY_THERMO_STATE_POINT_VERSIONS = frozenset({1})
 # CoolProp 以乾度 -1 表示單相（過冷液、過熱蒸氣或超臨界）。
 COOLPROP_SINGLE_PHASE_QUALITY = -1.0
 
@@ -49,11 +53,12 @@ class ThermoStatePoint:
     屬性：
         fluid: 流體名稱（例如 ``R32``）。
         reference_state: 求解時實際使用的 policy code（``DEF``、``ASHRAE``、``IIR``、``NBP``）；
-            不接受 ``Auto`` 或 ``CURRENT``，必須是已解析的明確基準。
+            不接受 ``Auto`` 或 ``CURRENT``，必須是已解析的明確基準。理想氣體狀態點固定為
+            ``IDEAL_GAS``（h = cp·T，不是 CoolProp reference state）。
         pressure_pa: 絕對壓力（Pa）。
         temperature_k: 溫度（K）。
         enthalpy_j_kg: 比焓（J/kg）。
-        entropy_j_kgk: 比熵（J/(kg·K)）；理想氣體模型不提供（值為 0）。
+        entropy_j_kgk: 比熵（J/(kg·K)）；理想氣體模型不提供，必須為 None。
         density_kg_m3: 密度（kg/m³）。
         quality: 乾度；-1 為 CoolProp 單相標記，0–1 為合法乾度，其他值拒絕。
         source: 產生此狀態點的工具。
@@ -67,7 +72,7 @@ class ThermoStatePoint:
     pressure_pa: float
     temperature_k: float
     enthalpy_j_kg: float
-    entropy_j_kgk: float
+    entropy_j_kgk: float | None
     density_kg_m3: float
     quality: float
     source: StateSource
@@ -87,9 +92,20 @@ class ThermoStatePoint:
         fluid = text("流體名稱", self.fluid).strip()
         if not fluid:
             raise ValueError("狀態點必須指定流體名稱。")
-        reference_state = self._explicit_reference_state(self.reference_state)
         if not isinstance(self.is_ideal_gas, bool):
             raise ValueError("is_ideal_gas 必須是布林值。")
+        if self.is_ideal_gas:
+            if self.reference_state != IDEAL_GAS_BASIS:
+                raise ValueError(
+                    f"理想氣體狀態點的 reference_state 必須是 {IDEAL_GAS_BASIS}（目前為 {self.reference_state!r}）。"
+                )
+            if self.entropy_j_kgk is not None:
+                raise ValueError("理想氣體模型不提供比熵，entropy_j_kgk 必須為 None。")
+            reference_state = IDEAL_GAS_BASIS
+            entropy = None
+        else:
+            reference_state = self._explicit_reference_state(self.reference_state)
+            entropy = finite_float("比熵", self.entropy_j_kgk)
         quality = finite_float("乾度", self.quality)
         if quality != COOLPROP_SINGLE_PHASE_QUALITY and not 0.0 <= quality <= 1.0:
             raise ValueError(f"乾度必須為 CoolProp 單相標記 -1，或介於 0 與 1 之間（目前為 {quality}）。")
@@ -99,7 +115,7 @@ class ThermoStatePoint:
             "pressure_pa": positive_float("壓力", self.pressure_pa),
             "temperature_k": positive_float("溫度", self.temperature_k),
             "enthalpy_j_kg": finite_float("比焓", self.enthalpy_j_kg),
-            "entropy_j_kgk": finite_float("比熵", self.entropy_j_kgk),
+            "entropy_j_kgk": entropy,
             "density_kg_m3": positive_float("密度", self.density_kg_m3),
             "quality": quality,
             "source": parse_source(self.source),
@@ -148,7 +164,7 @@ class ThermoStatePoint:
 參數：
     state: 含 ``P``、``T``、``H``、``S``、``D``、``Q`` 的狀態 dict。
     fluid: 流體名稱。
-    reference_state: 求解時實際使用的 policy。
+    reference_state: 求解時實際使用的 policy；理想氣體時忽略並記為 ``IDEAL_GAS``。
     source: 產生此狀態點的工具。
     key: 所屬計算中的穩定鍵。
     label: 顯示用名稱。
@@ -162,11 +178,11 @@ class ThermoStatePoint:
         try:
             return cls(
                 fluid=fluid,
-                reference_state=reference_state,
+                reference_state=IDEAL_GAS_BASIS if is_ideal_gas else reference_state,
                 pressure_pa=state["P"],
                 temperature_k=state["T"],
                 enthalpy_j_kg=state["H"],
-                entropy_j_kgk=state["S"],
+                entropy_j_kgk=None if is_ideal_gas else state["S"],
                 density_kg_m3=state["D"],
                 quality=state["Q"],
                 source=source,
@@ -248,9 +264,40 @@ class ThermoStatePoint:
 
 引發：
     ValueError：schema 種類或版本不符、欄位缺漏或多出、數值無效時。"""
-        payload = document_payload(data, kind=THERMO_STATE_POINT_SCHEMA, version=THERMO_STATE_POINT_VERSION)
-        require_exact_fields(payload, _FIELDS, kind=THERMO_STATE_POINT_SCHEMA)
+        version = data.get("schema_version") if isinstance(data, Mapping) else None
+        if (
+            isinstance(version, int)
+            and not isinstance(version, bool)
+            and version in LEGACY_THERMO_STATE_POINT_VERSIONS
+        ):
+            payload = document_payload(data, kind=THERMO_STATE_POINT_SCHEMA, version=version)
+            require_exact_fields(payload, _FIELDS, kind=THERMO_STATE_POINT_SCHEMA)
+            payload = _migrate_v1_payload(payload)
+        else:
+            payload = document_payload(data, kind=THERMO_STATE_POINT_SCHEMA, version=THERMO_STATE_POINT_VERSION)
+            require_exact_fields(payload, _FIELDS, kind=THERMO_STATE_POINT_SCHEMA)
         return cls(**payload)  # type: ignore[arg-type]
+
+
+def _migrate_v1_payload(payload: dict[str, object]) -> dict[str, object]:
+    """將 v1 狀態點內容轉為 v2 語意。
+
+v1 的理想氣體狀態點以 0 表示「未提供比熵」，且焓一律為 ``cp·T``、與記錄的 reference_state
+無關；v2 以 None 與 ``IDEAL_GAS`` 明確表示。非理想氣體狀態點內容不變。
+
+參數：
+    payload: v1 文件內容（不含 schema 標記）。
+
+回傳：
+    v2 文件內容。
+
+引發：
+    ValueError：v1 理想氣體狀態點的比熵不是 0（不是 v1 寫入的值）時。"""
+    if payload.get("is_ideal_gas") is not True:
+        return payload
+    if payload.get("entropy_j_kgk") not in (0, 0.0):
+        raise ValueError("v1 理想氣體狀態點的比熵應為 0（未提供），無法安全轉換。")
+    return {**payload, "reference_state": IDEAL_GAS_BASIS, "entropy_j_kgk": None}
 
 
 def require_same_basis(first: ThermoStatePoint, second: ThermoStatePoint) -> None:
@@ -267,10 +314,21 @@ def require_same_basis(first: ThermoStatePoint, second: ThermoStatePoint) -> Non
     StateBasisMismatchError：流體、reference state 或性質模型不同時。"""
     if not first.is_same_basis(second):
         raise StateBasisMismatchError(
-            "狀態點基準不同，不能直接比較或相減："
-            f"{first.fluid}／{first.reference_state}{'／理想氣體' if first.is_ideal_gas else ''} 與 "
-            f"{second.fluid}／{second.reference_state}{'／理想氣體' if second.is_ideal_gas else ''}。"
+            f"狀態點基準不同，不能直接比較或相減：{basis_label(first)} 與 {basis_label(second)}。"
         )
+
+
+def basis_label(point: ThermoStatePoint) -> str:
+    """回傳狀態點的焓／熵基準說明，例如 ``R32／IIR`` 或 ``Air／理想氣體（h = cp·T）``。
+
+參數：
+    point: 狀態點。
+
+回傳：
+    顯示文字。"""
+    if point.is_ideal_gas:
+        return f"{point.fluid}／理想氣體（h = cp·T）"
+    return f"{point.fluid}／{point.reference_state}"
 
 
 def enthalpy_difference(first: ThermoStatePoint, second: ThermoStatePoint) -> float:
@@ -303,6 +361,6 @@ def entropy_difference(first: ThermoStatePoint, second: ThermoStatePoint) -> flo
     StateBasisMismatchError：基準不同時。
     ValueError：理想氣體模型未提供比熵時。"""
     require_same_basis(first, second)
-    if first.is_ideal_gas:
+    if first.entropy_j_kgk is None or second.entropy_j_kgk is None:
         raise ValueError("理想氣體模型未提供比熵，不能計算熵差。")
     return first.entropy_j_kgk - second.entropy_j_kgk

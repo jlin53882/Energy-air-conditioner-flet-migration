@@ -2,10 +2,12 @@
 # 核心計算引擎：負責所有熱力學性質的計算，與使用者介面分離。
 
 import CoolProp.CoolProp as CP
+import html
 import math
 import numpy as np
 from domain.thermodynamics.reference_state import ReferenceStatePolicy
 from domain.thermodynamics.state_service import ThermodynamicStateService
+from domain.thermodynamics.thermo_policy import ResolvedThermoPolicy, Workflow, resolve_thermo_policy
 from domain.psychrometrics.service import PsychrometricService
 from infrastructure.psychrometrics import LegacyPsychrometricModelAdapter
 from domain.thermodynamics.reference_state import ReferenceStateService
@@ -324,6 +326,47 @@ class ThermoCalculator:
         return self._shared_state_service.calculate_properties(
             fluid, known_props, is_ideal_gas, reference_state
         )
+
+    def calculate_properties_auto(self, fluid, known_props):
+        """以 Auto 解析計算模型與參考基準後計算物性（與 Flet 物性頁同一套規則）。
+
+Telegram 物性查詢只提供真實流體，因此模型層一律解析為 CoolProp 真實流體；
+基準層依 ``thermo_policy``：冷媒支援 IIR 時用 IIR，Water 與乾空氣用 DEF，其他流體改用 DEF 並附備援原因。
+同一次查詢只解析一次，計算與顯示都使用同一份快照。
+
+參數：
+    fluid (str): 流體名稱（可為 CoolProp 別名）。
+    known_props (list): 已知性質列表，格式為 [(屬性代碼, 值, 單位), ...]。
+
+回傳：
+    tuple：(SI 結果字典, ResolvedThermoPolicy)。
+
+引發：
+    ValueError：流體無法解析（``ThermoPolicyError``）或輸入無效時。
+    RuntimeError：舊比容（V）路徑的計算錯誤。"""
+        policy = resolve_thermo_policy(fluid, workflow=Workflow.PROPERTY_QUERY)
+        results = self.calculate_properties(fluid, known_props, reference_state=policy.reference_state)
+        return results, policy
+
+    @staticmethod
+    def format_policy_lines(policy: ResolvedThermoPolicy) -> str:
+        """把模型與基準快照格式化為 Telegram 結果文字（已做 HTML escape）。
+
+參數：
+    policy (ResolvedThermoPolicy): 本次查詢的解析快照。
+
+回傳：
+    str：多行文字。"""
+        rows = [
+            ("計算模型", policy.model_label),
+            ("參考基準", policy.reference_label),
+            ("焓／熵基準", policy.enthalpy_basis),
+        ]
+        if policy.fallback_reason:
+            rows.append(("備援說明", policy.fallback_reason))
+        lines = ["--- 模型與基準 ---"]
+        lines.extend(f"{html.escape(name)}: {html.escape(value)}" for name, value in rows)
+        return "\n".join(lines)
 
     def _calculate_legacy_properties(
         self,

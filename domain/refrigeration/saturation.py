@@ -82,7 +82,7 @@ def saturation_properties(
     *,
     pressure_pa: float | None = None,
     temperature_k: float | None = None,
-    reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.ASHRAE,
+    reference_state: ReferenceStatePolicy | str,
 ) -> SaturationPropertiesResult:
     """以已知絕對壓力或已知溫度（擇一）計算飽和液體與飽和蒸氣狀態。
 
@@ -196,7 +196,7 @@ def evaluate_superheat_subcooling(
     fluid: str,
     pressure_pa: float,
     measured_temperature_k: float,
-    reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
+    reference_state: ReferenceStatePolicy | str,
 ) -> SaturationCheckResult:
     """依量測壓力與溫度判斷過熱、過冷或兩相，並計算過熱度／過冷度。
 

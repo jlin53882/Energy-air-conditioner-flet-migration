@@ -11,6 +11,7 @@ from ..unit.UnitConverter import (
     GAUGE_TO_ABSOLUTE_UNIT,
     UnitConverter,
 )
+from ...ui.reference_state_default import DefaultReferenceApplied, ReferenceStateDefault
 from ...ui.theme import TOKENS, mono_style, style_dropdown, style_text_field
 
 # 現場工具提供的常用冷媒快捷；全部為 CoolProp 可直接計算的名稱。
@@ -21,12 +22,14 @@ COMMON_REFRIGERANTS = (
 # 未填海拔時，錶壓換算使用的標準大氣壓力（Pa）。
 STANDARD_ATMOSPHERE_PA = 101_325.0
 
-# 分析頁 Reference State 選單的選項；Auto 依流體決定（冷媒 ASHRAE、水 Default）。
+# 分析頁 Reference State 選單的選項；Auto 規則集中於 domain/thermodynamics/thermo_policy.py：
+# 支援 IIR 的冷媒 → IIR，水 → DEF，不支援 IIR 的流體 → DEF（結果會標示備援原因）。
 REFERENCE_STATE_OPTIONS = (
-    ("Auto", "自動（冷媒 ASHRAE、水 Default）"),
-    ("ASHRAE", "ASHRAE（冷媒常用）"),
-    ("NBP", "NBP（常壓沸點為 0）"),
-    ("IIR", "IIR（0 °C 飽和液體為基準）"),
+    ("Auto", "Auto（推薦：冷媒 IIR、水 DEF）"),
+    ("IIR", "IIR（0 °C 飽和液 h=200、s=1）"),
+    ("ASHRAE", "ASHRAE（−40 °C 飽和液 h=0、s=0）"),
+    ("NBP", "NBP（101.325 kPa 沸點飽和液 h=0）"),
+    ("DEF", "DEF（CoolProp 流體預設）"),
 )
 
 class BaseAnalysisModule:
@@ -57,6 +60,8 @@ class BaseAnalysisModule:
         # 只改變表示方式、不改變實際數值的輸入控制項（例如錶壓／絕對壓切換）；
         # AnalysisModuleAdapter 不會因這些控制項變更而使結果失效。
         self.presentation_only_controls: list[ft.Control] = []
+        # 本頁 Reference State 選單的工作區預設值（見 apply_default_reference_state）。
+        self.reference_state_default = ReferenceStateDefault()
         # ---
 
     def get_analysis_definitions(self) -> dict:
@@ -537,15 +542,50 @@ class BaseAnalysisModule:
     label: 欄位名稱。
 
 回傳：
-    (輸入列, 下拉選單)；選單值為 ``Auto``、``ASHRAE``、``NBP`` 或 ``IIR``。"""
+    (輸入列, 下拉選單)；選單值為 ``Auto``、``IIR``、``ASHRAE``、``NBP`` 或 ``DEF``。"""
         dropdown = style_dropdown(ft.Dropdown(
             options=[ft.dropdown.Option(code, text) for code, text in REFERENCE_STATE_OPTIONS],
             value="Auto",
             expand=True,
         ))
+        # 初始值採工作區預設；使用者在本頁選過後，之後套用的設定不再改動它。
+        self.reference_state_default.register(dropdown)
         label_control = ft.Text(label, size=TOKENS.body, weight=ft.FontWeight.W_500,
                                 color=TOKENS.text_primary)
         return ft.Column([label_control, dropdown], spacing=6), dropdown
+
+    def resolve_reference_policy(self, fluid: str, dropdown: ft.Dropdown):
+        """以本頁的 Reference State 選單解析冷凍工作流的模型與基準快照。
+
+使用者沒選過的工作區預設只當成偏好（見
+:meth:`~Flet_ui.ui.reference_state_default.ReferenceStateDefault.request_reference`），
+流體不支援時退回 Auto 規則。需要子類別提供 ``self.refrigeration``。
+
+參數：
+    fluid: 流體名稱。
+    dropdown: 已登記的 Reference State 選單。
+
+回傳：
+    ResolvedThermoPolicy。"""
+        requested, preferred = self.reference_state_default.request_reference(dropdown)
+        return self.refrigeration.resolve(fluid, requested, preferred=preferred)
+
+    def apply_default_reference_state(self, choice: object) -> None:
+        """套用工作區設定的預設 Reference State 到本頁使用者尚未改過的選單。
+
+不呼叫 process-global 的 ``set_reference_state()``；值有改變的選單會以
+:class:`~Flet_ui.ui.reference_state_default.DefaultReferenceApplied` 事件通知 ``on_select``，
+讓既有結果照常失效，但不算使用者的選擇。
+
+參數：
+    choice: 設定值（``Auto`` 或 policy code）；無效時改用 ``Auto``。
+
+回傳：
+    無。"""
+        for dropdown in self.reference_state_default.apply(choice):
+            if dropdown.on_select is not None:
+                dropdown.on_select(DefaultReferenceApplied(dropdown))
+            self._update_controls(dropdown)
 
     @staticmethod
     def _update_controls(*controls: ft.Control) -> None:
