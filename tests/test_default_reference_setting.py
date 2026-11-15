@@ -241,8 +241,56 @@ def test_property_page_restores_default_after_non_reference_model(build_shell, i
 
     _user_select(view.ref_state_dd, "NBP")
     select_model("ideal_gas")
+    assert view.ref_state_dd.value == "Auto" and view.ref_state_dd.disabled is True
     select_model("real_fluid")
-    assert view.ref_state_dd.value == "Auto"
+    # 使用者選過的基準照原樣還原，之後套用新的設定也不覆寫。
+    assert view.ref_state_dd.value == "NBP"
+    view.apply_default_reference_state("DEF")
+    assert view.ref_state_dd.value == "NBP"
+
+
+# ======================================================
+# 工作區預設只是偏好：流體不支援時退回 Auto 規則
+# ======================================================
+def test_property_page_default_falls_back_to_auto_for_unsupported_fluids(build_shell, isolated_workspace) -> None:
+    """預設 IIR 時 Water 改用 Auto 規則（DEF）並說明；R32 標示「工作區預設」而不是「手動」。"""
+    _save_default(isolated_workspace, "IIR")
+    shell = build_shell()
+    view = shell.views["thermo_properties"]
+
+    view.fluid_tf.value = "Water"
+    policy = view._refresh_policy_preview()
+    assert policy is not None and policy.reference_state == "DEF"
+    assert "不支援工作區預設 IIR" in view.policy_preview.value
+
+    view.fluid_tf.value = "R32"
+    policy = view._refresh_policy_preview()
+    assert policy is not None and policy.reference_label == "IIR（工作區預設）"
+
+    # 使用者自行選的 IIR 是手動指定：不支援時照樣明確報錯，不靜默改用其他基準。
+    _user_select(view.ref_state_dd, "IIR")
+    view.fluid_tf.value = "Water"
+    assert view._refresh_policy_preview() is None
+    assert "手動指定" in view.policy_preview.value
+
+
+@pytest.mark.parametrize(("route_key", "attribute"), ANALYSIS_DROPDOWNS)
+def test_analysis_default_falls_back_to_auto_for_unsupported_fluids(
+    build_shell, isolated_workspace, route_key, attribute
+) -> None:
+    """分析頁同樣把工作區預設當成偏好；使用者選過後才是手動指定。"""
+    _save_default(isolated_workspace, "IIR")
+    module = _module(build_shell(), route_key)
+    dropdown = getattr(module, attribute)
+
+    water = module.resolve_reference_policy("Water", dropdown)
+    assert water.reference_state == "DEF" and "不支援工作區預設 IIR" in water.fallback_reason
+    assert module.resolve_reference_policy("R32", dropdown).reference_label == "IIR（工作區預設）"
+
+    _user_select(dropdown, "IIR")
+    assert module.resolve_reference_policy("R32", dropdown).reference_label == "IIR（手動）"
+    with pytest.raises(ValueError, match="手動指定"):
+        module.resolve_reference_policy("Water", dropdown)
 
 
 # ======================================================

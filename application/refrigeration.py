@@ -43,7 +43,9 @@ class RefrigerationService:
         self.state_provider = state_provider
 
     @staticmethod
-    def resolve(fluid: str, requested: str | None) -> ResolvedThermoPolicy:
+    def resolve(
+        fluid: str, requested: str | None, *, preferred: str | None = None
+    ) -> ResolvedThermoPolicy:
         """解析冷凍工作流的模型與基準快照（真實流體；Auto 依集中規則）。
 
 UI 應在建立 request 前呼叫一次，把 ``policy.reference_state`` 放入 request，並以同一份
@@ -52,6 +54,7 @@ UI 應在建立 request 前呼叫一次，把 ``policy.reference_state`` 放入 
 參數：
     fluid: 流體名稱（可為 CoolProp 別名）。
     requested: 使用者要求的基準，可為 None 或 "Auto"。
+    preferred: 工作區預設基準；只在 ``requested`` 為 Auto 時使用，流體不支援時退回 Auto 規則。
 
 回傳：
     ResolvedThermoPolicy。
@@ -64,6 +67,7 @@ UI 應在建立 request 前呼叫一次，把 ``policy.reference_state`` 放入 
             model=CalculationModel.AUTO,
             reference=requested,
             workflow=Workflow.REFRIGERATION,
+            preferred_reference=preferred,
         )
 
     @classmethod

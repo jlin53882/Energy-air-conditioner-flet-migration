@@ -484,3 +484,57 @@ def test_comparison_blocks_cross_basis_and_cross_model_subtraction() -> None:
     assert compare_states(iir, ashrae).rows[2].difference is None
     same = compare_states(iir, replace(iir, enthalpy_j_kg=iir.enthalpy_j_kg + 1000.0))
     assert same.rows[2].difference == pytest.approx(1000.0)
+
+
+# ======================================================
+# 工作區預設基準（preferred_reference）：偏好，不是手動指定
+# ======================================================
+def test_workspace_preference_is_used_when_the_fluid_supports_it() -> None:
+    """要求 Auto、流體支援工作區預設時採用預設值，並標示為「工作區預設」而非手動。"""
+    policy = resolve_thermo_policy("R32", preferred_reference="ASHRAE")
+    assert policy.reference_state == "ASHRAE"
+    assert policy.is_auto_reference and policy.fallback_reason == ""
+    assert policy.reference_label == "ASHRAE（工作區預設）"
+    assert "工作區預設 ASHRAE" in policy.reason
+
+
+@pytest.mark.parametrize(
+    ("fluid", "expected"),
+    [("Water", "DEF"), ("Air", "DEF"), ("Nitrogen", "DEF")],
+)
+def test_unsupported_workspace_preference_falls_back_to_auto_rules(fluid: str, expected: str) -> None:
+    """流體不支援工作區預設（IIR）時退回 Auto 規則並說明，不像手動指定那樣無法計算。"""
+    policy = resolve_thermo_policy(fluid, preferred_reference="IIR")
+    assert policy.reference_state == expected
+    assert policy.reference_label == f"{expected}（Auto）"
+    assert "不支援工作區預設 IIR" in policy.fallback_reason
+    assert policy.fallback_reason.count("不支援") == 1
+    with pytest.raises(ThermoPolicyError, match="手動指定"):
+        resolve_thermo_policy(fluid, reference="IIR")
+
+
+def test_manual_reference_overrides_workspace_preference() -> None:
+    """使用者手動指定的基準優先於工作區預設。"""
+    policy = resolve_thermo_policy("R32", reference="NBP", preferred_reference="ASHRAE")
+    assert policy.reference_state == "NBP"
+    assert policy.reference_label == "NBP（手動）"
+
+
+def test_workspace_preference_is_ignored_by_models_without_reference_state() -> None:
+    """理想氣體、濕空氣沒有 reference state；工作區預設不造成錯誤。"""
+    ideal = resolve_thermo_policy("Air", model="ideal_gas", preferred_reference="IIR")
+    humid = resolve_thermo_policy("Air", humidity_specified=True, preferred_reference="IIR")
+    assert ideal.reference_state is None and humid.reference_state is None
+    assert ideal.reference_label == humid.reference_label == "不適用"
+
+
+def test_property_query_request_passes_workspace_preference() -> None:
+    """application 層的物性查詢與冷凍工作流都會把工作區預設交給 resolver。"""
+    service = PropertyQueryService(ThermodynamicStateService(CanonicalUnitConverter()))
+    known = (("P", 101_325.0, "Pa"), ("T", 373.15, "K"))
+    water = service.query_with_policy(
+        PropertyQueryRequest("Water", known, False, AUTO, model="auto", preferred_reference="IIR")
+    )
+    assert water.policy.reference_state == "DEF" and "工作區預設 IIR" in water.policy.fallback_reason
+    assert RefrigerationService.resolve("R32", AUTO, preferred="ASHRAE").reference_label == "ASHRAE（工作區預設）"
+    assert RefrigerationService.resolve("Water", AUTO, preferred="IIR").reference_state == "DEF"

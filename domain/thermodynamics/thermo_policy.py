@@ -16,6 +16,8 @@ Auto 基準規則（不維護冷媒白名單，以 CoolProp 能力探測為準�
   ``fallback_reason`` 明示原因。
 
 手動指定的基準若 CoolProp 不支援，一律引發 :class:`ThermoPolicyError`，不靜默改用其他基準。
+工作區預設（``preferred_reference``）不是手動指定：只在使用者選 Auto 時當成偏好，流體支援就採用，
+不支援時退回上述 Auto 規則，並在 ``fallback_reason`` 說明。
 同一個 request 只解析一次，結果 :class:`ResolvedThermoPolicy` 是不可變快照，之後的計算、
 顯示、圖表與保存都使用這份快照，不再讀取 process-global 的目前基準。
 """
@@ -109,6 +111,8 @@ class ResolvedThermoPolicy:
         property_basis: 比性質的質量基準。
         backend: 實際計算後端說明。
         library_version: CoolProp 版本。
+        preferred_reference: 工作區預設基準（``Auto`` 表示沒有偏好）；只在 ``requested_reference``
+            為 ``Auto`` 時參與解析。
     """
 
     fluid: str
@@ -123,6 +127,7 @@ class ResolvedThermoPolicy:
     property_basis: PropertyBasis
     backend: str
     library_version: str
+    preferred_reference: str = AUTO
 
     @property
     def is_auto_reference(self) -> bool:
@@ -143,10 +148,15 @@ class ResolvedThermoPolicy:
 
     @property
     def reference_label(self) -> str:
-        """實際基準的顯示文字，例如 ``IIR（Auto）`` 或 ``不適用``。"""
+        """實際基準的顯示文字，例如 ``IIR（Auto）``、``ASHRAE（工作區預設）`` 或 ``不適用``。"""
         if self.reference_state is None:
             return "不適用"
-        suffix = "（Auto）" if self.is_auto_reference else "（手動）"
+        if not self.is_auto_reference:
+            suffix = "（手動）"
+        elif self.preferred_reference != AUTO and self.reference_state == self.preferred_reference:
+            suffix = "（工作區預設）"
+        else:
+            suffix = "（Auto）"
         return f"{self.reference_state}{suffix}"
 
     @property
@@ -228,6 +238,7 @@ class ThermoPolicyResolver:
         reference: object = None,
         workflow: Workflow = Workflow.PROPERTY_QUERY,
         humidity_specified: bool = False,
+        preferred_reference: object = None,
     ) -> ResolvedThermoPolicy:
         """解析一次 request 的模型與基準。
 
@@ -238,6 +249,8 @@ class ThermoPolicyResolver:
     workflow: 工作流程。
     humidity_specified: request 是否帶有明確且足以定義濕空氣的濕度條件（RH、Twb、W 等）。
         只有 Auto + Air + 此旗標為 True 才會自動路由到濕空氣模型。
+    preferred_reference: 工作區預設基準；None 或 ``Auto`` 表示沒有偏好。只在 ``reference``
+        為 Auto 且模型為真實流體時使用；流體不支援時退回 Auto 規則，不引發錯誤。
 
 回傳：
     ResolvedThermoPolicy。
@@ -249,6 +262,7 @@ class ThermoPolicyResolver:
             raise ThermoPolicyError("請輸入流體名稱。")
         requested_model = normalize_model_selection(model)
         requested_reference = normalize_reference_selection(reference)
+        preferred = normalize_reference_selection(preferred_reference)
         canonical = canonical_fluid_name(name)
         if canonical is None:
             raise ThermoPolicyError(
@@ -267,6 +281,7 @@ class ThermoPolicyResolver:
             model=resolved_model,
             requested_reference=requested_reference,
             library_version=version,
+            preferred_reference=preferred,
         )
         if resolved_model is not CalculationModel.REAL_FLUID:
             if requested_reference != AUTO:
@@ -288,7 +303,7 @@ class ThermoPolicyResolver:
             )
 
         reference_state, reference_reason, fallback = self._resolve_reference(
-            name, canonical, requested_reference
+            name, canonical, requested_reference, preferred
         )
         return ResolvedThermoPolicy(
             reference_state=reference_state,
@@ -334,7 +349,7 @@ class ThermoPolicyResolver:
         return CalculationModel.REAL_FLUID, "Auto：CoolProp 真實流體"
 
     def _resolve_reference(
-        self, name: str, canonical: str, requested: str
+        self, name: str, canonical: str, requested: str, preferred: str = AUTO
     ) -> tuple[str, str, str]:
         """解析基準層；回傳 (policy code, 原因, 備援說明)。"""
         if requested != AUTO:
@@ -344,6 +359,20 @@ class ThermoPolicyResolver:
                     f"{name} 不支援手動指定的參考基準 {requested}：{reason}"
                 )
             return requested, f"手動指定 {requested}", ""
+        if preferred != AUTO:
+            reason = self.reference_state.unsupported_reason(canonical, preferred)
+            if reason is None:
+                return preferred, f"工作區預設 {preferred}", ""
+            code, auto_reason, auto_fallback = self._resolve_auto_reference(name, canonical)
+            fallback = f"{name} 不支援工作區預設 {preferred}（{reason}）；改用 Auto 規則的 {code}。"
+            if auto_fallback and preferred != ReferenceStatePolicy.IIR.value:
+                # 預設本身就是 IIR 時，Auto 的「不支援 IIR」說明只會重複同一件事。
+                fallback = f"{fallback} {auto_fallback}"
+            return code, auto_reason, fallback
+        return self._resolve_auto_reference(name, canonical)
+
+    def _resolve_auto_reference(self, name: str, canonical: str) -> tuple[str, str, str]:
+        """套用 Auto 基準規則；回傳 (policy code, 原因, 備援說明)。"""
         if canonical == WATER:
             return (
                 ReferenceStatePolicy.DEFAULT.value,
@@ -391,8 +420,14 @@ def resolve_thermo_policy(
     reference: object = None,
     workflow: Workflow = Workflow.PROPERTY_QUERY,
     humidity_specified: bool = False,
+    preferred_reference: object = None,
 ) -> ResolvedThermoPolicy:
     """以共用 resolver 解析（見 :meth:`ThermoPolicyResolver.resolve`）。"""
     return default_resolver().resolve(
-        fluid, model=model, reference=reference, workflow=workflow, humidity_specified=humidity_specified
+        fluid,
+        model=model,
+        reference=reference,
+        workflow=workflow,
+        humidity_specified=humidity_specified,
+        preferred_reference=preferred_reference,
     )

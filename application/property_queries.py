@@ -114,12 +114,14 @@ class PropertyQueryService:
     ThermoPolicyError（ValueError）：流體、模型或基準無法解析時。"""
         model = request.model
         reference = request.reference_state
+        preferred = request.preferred_reference
         if model is None:
             model = CalculationModel.IDEAL_GAS if request.is_ideal_gas else CalculationModel.AUTO
             if request.is_ideal_gas:
                 # 舊語意：is_ideal_gas=True 時 reference_state（預設 DEF）一律被忽略，
                 # 理想氣體沒有 CoolProp reference state。
                 reference = None
+                preferred = None
         elif request.is_ideal_gas and str(model) not in (CalculationModel.IDEAL_GAS, "ideal_gas"):
             raise ThermoPolicyError("is_ideal_gas 與 model 互相矛盾。")
         return resolve_thermo_policy(
@@ -127,6 +129,7 @@ class PropertyQueryService:
             model=model,
             reference=reference,
             workflow=Workflow.PROPERTY_QUERY,
+            preferred_reference=preferred,
         )
 
     def query_with_policy(self, request: PropertyQueryRequest) -> PropertyQueryResult:

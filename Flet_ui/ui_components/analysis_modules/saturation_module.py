@@ -191,7 +191,7 @@ class SaturationModule(BaseAnalysisModule):
         known = self.known
         fluid = self.read_text("sat_fluid")
         # 每次 request 只解析一次模型與基準；request 帶 concrete code，顯示使用同一份快照。
-        policy = self.refrigeration.resolve(fluid, self.sat_ref_state.value)
+        policy = self.resolve_reference_policy(fluid, self.sat_ref_state)
         if known == KNOWN_PRESSURE:
             request = SaturationPropertiesRequest(
                 fluid=fluid,

@@ -14,7 +14,8 @@ class PropertyQueryRequest:
 
     ``model`` 為 None 時沿用舊語意：``is_ideal_gas`` 為 True 時選理想氣體，否則 Auto（不帶
     濕度條件的 Auto 即 CoolProp 真實流體）。``reference_state`` 可為 ``Auto`` 或明確 code；
-    預設保留舊版的 ``DEF``。濕空氣請使用 :class:`HumidAirQueryRequest`。
+    預設保留舊版的 ``DEF``。``preferred_reference`` 是工作區預設基準，只在 ``reference_state``
+    為 ``Auto`` 時使用，流體不支援時退回 Auto 規則。濕空氣請使用 :class:`HumidAirQueryRequest`。
     """
 
     fluid: str
@@ -22,6 +23,7 @@ class PropertyQueryRequest:
     is_ideal_gas: bool = False
     reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT
     model: str | None = None
+    preferred_reference: str | None = None
 
 
 @dataclass(frozen=True)
