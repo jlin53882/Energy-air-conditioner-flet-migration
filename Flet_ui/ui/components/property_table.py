@@ -9,6 +9,21 @@ from ..theme import TOKENS
 
 __all__ = ["PropertyGroup", "PropertyRow", "PropertyTable"]
 
+# 沒有單位且超過此字數的值視為說明文字（例如決策原因、基準說明），改為上下排列並自動換行；
+# 數值列維持左右排列、數值靠右對齊。
+LONG_TEXT_MIN_CHARS = 24
+
+
+def is_long_text(row: PropertyRow) -> bool:
+    """此列的值是否為需要換行顯示的長說明文字。
+
+參數：
+    row: 列內容。
+
+回傳：
+    bool。"""
+    return not row.unit and len(row.value) > LONG_TEXT_MIN_CHARS
+
 
 class PropertyTable(ft.Column):
     """依分組呈現性質；數值靠右對齊，方便上下比較。"""
@@ -53,8 +68,18 @@ class PropertyTable(ft.Column):
 
 回傳：
     表格列容器。"""
-        return ft.Container(
-            content=ft.Row(
+        if is_long_text(row):
+            # 長說明文字：名稱在上、內容在下佔滿整列寬度並自動換行，避免名稱被擠成直排、內容被裁切。
+            content: ft.Control = ft.Column(
+                [
+                    ft.Text(row.label, size=TOKENS.body, color=TOKENS.text_primary),
+                    ft.Text(row.value, size=TOKENS.body, color=TOKENS.text_secondary, selectable=True),
+                ],
+                spacing=4,
+                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+            )
+        else:
+            content = ft.Row(
                 [
                     ft.Text(row.label, size=TOKENS.body, color=TOKENS.text_primary, expand=True),
                     ft.Text(row.value, size=TOKENS.body + 1, weight=ft.FontWeight.W_500,
@@ -67,7 +92,9 @@ class PropertyTable(ft.Column):
                 ],
                 spacing=TOKENS.spacing_sm,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
+            )
+        return ft.Container(
+            content=content,
             padding=ft.Padding.symmetric(horizontal=10, vertical=9),
             bgcolor=TOKENS.surface_variant if highlighted else None,
             border=None if highlighted else ft.Border.only(bottom=ft.BorderSide(1, TOKENS.border)),
