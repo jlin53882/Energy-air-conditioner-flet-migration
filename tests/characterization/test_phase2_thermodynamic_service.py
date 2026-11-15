@@ -38,7 +38,7 @@ def test_flet_and_telegram_property_calculators_delegate_shared_service() -> Non
     telegram = ThermoCalculator()
 
     flet_result = flet.calculate_properties("Air", known_props, is_ideal_gas=True)
-    telegram_result = telegram.calculate_properties("Air", known_props, is_ideal_gas=True)
+    telegram_result = telegram.calculate_properties("Air", known_props, is_ideal_gas=True, reference_state="DEF")
 
     assert flet_result == telegram_result
 

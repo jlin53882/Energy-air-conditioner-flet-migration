@@ -282,8 +282,8 @@ def test_calculation_default_policy_does_not_inherit_ambient_state() -> None:
     assert channel_default["S"] == pytest.approx(default_expected["S"])
 
 
-def test_telegram_uses_explicit_default_after_flet_changes_state() -> None:
-    """Telegram 的 default policy 不受先前 Flet request 影響。
+def test_telegram_auto_policy_ignores_flet_global_state() -> None:
+    """Telegram 以 Auto 解析的基準（R134a → IIR）不受先前 Flet 設定的 process-global 基準影響。
 
 回傳：
     無。"""
@@ -291,13 +291,15 @@ def test_telegram_uses_explicit_default_after_flet_changes_state() -> None:
     flet = ThermoStateCalculator(UnitConverter())
     telegram = ThermoCalculator()
     expected = ThermodynamicStateService(CanonicalUnitConverter()).calculate_properties(
-        "R134a", known_props, reference_state="DEF"
+        "R134a", known_props, reference_state="IIR"
     )
     try:
-        flet.set_coolprop_ref_state("R134a", "IIR")
-        actual = telegram.calculate_properties("R134a", known_props)
+        flet.set_coolprop_ref_state("R134a", "ASHRAE")
+        actual, policy = telegram.calculate_properties_auto("R134a", known_props)
     finally:
         flet.set_coolprop_ref_state("R134a", "DEF")
+
+    assert policy.reference_state == "IIR"
 
     assert actual["H"] == pytest.approx(expected["H"])
     assert actual["S"] == pytest.approx(expected["S"])
@@ -313,12 +315,11 @@ def test_telegram_legacy_v_path_accepts_explicit_policy() -> None:
     known_props = [("T", 25.0, "°C"), ("V", 0.2, "m³/kg")]
     try:
         flet.set_coolprop_ref_state("R134a", "IIR")
-        actual = telegram.calculate_properties("R134a", known_props)
-        expected = telegram.calculate_properties(
-            "R134a", known_props, reference_state="DEF"
-        )
+        actual = telegram.calculate_properties("R134a", known_props, reference_state="DEF")
     finally:
         flet.set_coolprop_ref_state("R134a", "DEF")
+    # 全域基準恢復後再算一次：明確指定的 policy 不受先前全域狀態影響。
+    expected = telegram.calculate_properties("R134a", known_props, reference_state="DEF")
 
     assert actual["H"] == pytest.approx(expected["H"])
     assert actual["S"] == pytest.approx(expected["S"])
@@ -332,12 +333,12 @@ def test_thermodynamic_entrypoints_have_non_ambient_defaults() -> None:
     assert inspect.signature(ThermodynamicStateService.calculate_properties).parameters[
         "reference_state"
     ].default is not None
-    assert inspect.signature(ThermoCalculator.calculate_properties).parameters[
-        "reference_state"
-    ].default is not None
-    assert inspect.signature(ThermoCalculator._calculate_legacy_properties).parameters[
-        "reference_state"
-    ].default is not None
+    # Telegram 計算器的基準為必填（沒有預設值），呼叫端必須明確指定或改用 calculate_properties_auto。
+    telegram_reference = inspect.signature(ThermoCalculator.calculate_properties).parameters["reference_state"]
+    assert telegram_reference.default is inspect.Parameter.empty
+    assert telegram_reference.kind is inspect.Parameter.KEYWORD_ONLY
+    for private in (ThermoCalculator._calculate_legacy_properties, ThermoCalculator._calculate_coolprop):
+        assert inspect.signature(private).parameters["reference_state"].default is inspect.Parameter.empty
     assert PropertyQueryRequest(
         "R134a", (("P", 1.0, "bar"), ("T", 25.0, "°C"))
     ).reference_state is not None

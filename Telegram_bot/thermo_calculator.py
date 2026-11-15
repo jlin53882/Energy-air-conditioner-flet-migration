@@ -307,15 +307,19 @@ class ThermoCalculator:
         fluid,
         known_props,
         is_ideal_gas=False,
-        reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
+        *,
+        reference_state: ReferenceStatePolicy | str,
     ):
-        """在 Telegram 明確的 default reference-state policy 下計算。
+        """在呼叫端指定的 reference-state policy 下計算。
+
+基準為必填且只能以關鍵字指定，不再預設 ``DEF``；Telegram 物性查詢請用
+:meth:`calculate_properties_auto`，由 ``thermo_policy`` resolver 解析基準。
 
 參數：
     fluid (未指定型別): 函數輸入值。
     known_props (未指定型別): 函數輸入值。
     is_ideal_gas (未指定型別): 函數輸入值。
-    reference_state (ReferenceStatePolicy | str): 函數輸入值。
+    reference_state (ReferenceStatePolicy | str): 已解析的 reference-state policy（必填）。
 
 回傳：
     未指定型別：函數計算或處理後的結果。"""
@@ -372,8 +376,8 @@ Telegram 物性查詢只提供真實流體，因此模型層一律解析為 Cool
         self,
         fluid,
         known_props,
-        is_ideal_gas=False,
-        reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
+        is_ideal_gas,
+        reference_state: ReferenceStatePolicy | str,
     ):
         """
         主計算函式，返回原始 SI 結果字典。
@@ -424,7 +428,7 @@ Telegram 物性查詢只提供真實流體，因此模型層一律解析為 Cool
         self,
         fluid,
         known_props_si,
-        reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
+        reference_state: ReferenceStatePolicy | str,
     ):
         """在明確 policy 下查詢舊版 Telegram path。
 
