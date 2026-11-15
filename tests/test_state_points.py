@@ -242,7 +242,9 @@ def test_differences_require_same_basis(provider) -> None:
     with pytest.raises(StateBasisMismatchError):
         require_same_basis(ashrae_a, replace(ashrae_a, fluid="R134a"))
     with pytest.raises(StateBasisMismatchError):
-        require_same_basis(ashrae_a, replace(ashrae_a, is_ideal_gas=True))
+        require_same_basis(
+            ashrae_a, replace(ashrae_a, is_ideal_gas=True, reference_state="IDEAL_GAS", entropy_j_kgk=None)
+        )
     require_same_basis(ashrae_a, replace(ashrae_b, fluid="r32"))
 
 
@@ -276,7 +278,7 @@ def test_thermo_state_point_round_trips_through_json(provider) -> None:
     restored = ThermoStatePoint.from_dict(json.loads(json.dumps(document, allow_nan=False)))
 
     assert document["schema"] == "thermo_state_point"
-    assert document["schema_version"] == 1
+    assert document["schema_version"] == 2
     assert document["source"] == "property_query"
     assert restored == point
     assert state_point_from_dict(document) == point
@@ -286,7 +288,7 @@ def test_thermo_state_point_round_trips_through_json(provider) -> None:
     ("mutate", "message"),
     [
         (lambda doc: doc.update(schema="air_state_point"), "文件種類不符"),
-        (lambda doc: doc.update(schema_version=2), "較新的版本"),
+        (lambda doc: doc.update(schema_version=3), "較新的版本"),
         (lambda doc: doc.update(schema_version=0), "不支援"),
         (lambda doc: doc.update(schema_version=True), "schema_version"),
         (lambda doc: doc.pop("schema_version"), "schema_version"),

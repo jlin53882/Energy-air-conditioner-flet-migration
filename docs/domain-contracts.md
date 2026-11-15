@@ -59,7 +59,7 @@ Property code `V` 不得與 CoolProp viscosity code 或 density 混淆。Telegra
 
 `ThermodynamicStateService` 接受至少兩個 known property，將 input 轉為 canonical SI，並為設定的 property 加上 `phase` 回傳 neutral numeric result。Request 會選擇 CoolProp-backed calculation 或 ideal-gas calculation；channel adapter 負責 display conversion 與 error presentation。
 
-Reference-state-sensitive calculation 必須攜帶明確的 request policy。一般 request 使用 `DEF`、`ASHRAE`、`IIR` 或 `NBP` 等 concrete policy。Internal operation 可以明確使用 `CURRENT`，表示該 scope 不修改 process reference state。一般 calculation 不得依賴前一個 request 留在 process 中的 state。`Water` 是一般 fluid request，使用明確的 `DEF` policy；backend 或 equation-model selection 與 reference-state policy 是不同責任。
+Reference-state-sensitive calculation 必須攜帶明確的 request policy。一般 request 使用 `DEF`、`ASHRAE`、`IIR` 或 `NBP` 等 concrete policy。Internal operation 可以明確使用 `CURRENT`，表示該 scope 不修改 process reference state。一般 calculation 不得依賴前一個 request 留在 process 中的 state。`Auto` 只能出現在 request 端：`domain/thermodynamics/thermo_policy.py` 的 `resolve_thermo_policy()` 是唯一的 Auto 入口，先解析計算模型（真實流體／理想氣體／濕空氣），再解析 reference state（Water → `DEF`、乾空氣 → `DEF`、其他流體在 CoolProp 支援時 → `IIR`，否則 `DEF` 並記錄備援原因；手動指定不支援的基準明確失敗）。每個 request 只解析一次，產生不可變的 `ResolvedThermoPolicy`，計算、顯示、圖表與保存都使用同一份快照。backend 或 equation-model selection 與 reference-state policy 是不同責任；詳見 [reference-state.md](reference-state.md)。
 
 ## 6. Reference-state contract
 
@@ -119,7 +119,7 @@ Flet 與 Telegram 負責 label、display unit、string 以及 message/control re
 `domain/state_points/` 定義跨工具共用的狀態點，全部使用 canonical SI。
 
 - `ThermoStatePoint`（冷媒／工作流體）：`fluid`、`reference_state`、`pressure_pa`、`temperature_k`、`enthalpy_j_kg`、`entropy_j_kgk`、`density_kg_m3`、`quality`、`source`、`is_ideal_gas`，以及選填的 `key`、`label`。
-  - `reference_state` 必須是求解時實際使用的明確 policy code（`DEF`、`ASHRAE`、`IIR`、`NBP`，別名會正規化）；不接受 `Auto` 或 `CURRENT`。
+  - `reference_state` 必須是求解時實際使用的明確 policy code（`DEF`、`ASHRAE`、`IIR`、`NBP`，別名會正規化）；不接受 `Auto` 或 `CURRENT`。理想氣體狀態點固定為 `IDEAL_GAS`（h = cp·T，不是 CoolProp reference state），且 `entropy_j_kgk` 為 `None`（schema v2；v1 文件讀取時轉換，見 [reference-state.md](reference-state.md) §7）。
   - 乾度 `quality`：-1 為 CoolProp 單相標記（過冷液、過熱蒸氣或超臨界）；0–1 為合法乾度範圍；其他數值屬於無效狀態點資料，建立或讀取時一律拒絕。
   - 比容 `specific_volume_m3_kg` 與相態 `phase` 由其他欄位推導，不另外保存：乾度 0 為飽和液、1 為飽和蒸氣、介於兩者之間為兩相、-1 為單相。
   - 冷凍循環的冷凍效果、壓縮功與冷凝放熱，都以 `enthalpy_difference` 由循環狀態點相減。

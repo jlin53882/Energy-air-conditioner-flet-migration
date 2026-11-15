@@ -16,6 +16,7 @@ from functools import lru_cache
 
 from domain.thermodynamics.fluid_policy import resolve_reference_state_policy
 from domain.thermodynamics.reference_state import ReferenceStatePolicy, ReferenceStateService
+from domain.thermodynamics.thermo_policy import Workflow
 
 _REFERENCE_STATE = ReferenceStateService()
 
@@ -31,9 +32,10 @@ def _effective_reference_state(
 回傳：
     ReferenceStatePolicy | str：函數計算或處理後的結果。"""
     if ref_state == "Auto":
-        return resolve_reference_state_policy(fluid)
+        return resolve_reference_state_policy(fluid, workflow=Workflow.CHART)
     if ref_state in {"ASHRAE", "NBP", "IIR", "DEF"}:
-        return ref_state
+        # 手動基準同樣經集中 resolver 驗證能力；不支援時明確報錯，不靜默改用其他基準。
+        return resolve_reference_state_policy(fluid, ref_state, workflow=Workflow.CHART)
     raise ValueError(f"Unsupported chart reference-state policy: {ref_state}")
 
 

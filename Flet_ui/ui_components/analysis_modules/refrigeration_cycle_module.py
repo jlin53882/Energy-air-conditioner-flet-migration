@@ -18,6 +18,7 @@ from ..unit.UnitConverter import UnitConverter
 from ..unit.thermo_draw.coolprop_utils import generate_thermo_diagram
 from .base_analysis_module import BaseAnalysisModule
 from .result_formatting import ResultFormatter
+from .thermo_state_presentation import add_policy_lines
 
 CYCLE_STATE_LABELS = {
     "1": "1 壓縮機入口",
@@ -106,7 +107,9 @@ class RefrigerationCycleModule(BaseAnalysisModule):
 回傳：
     格式化結果文字。"""
         self.last_result = None
+        self.last_policy = None
         fluid = self.read_text("cyc_fluid")
+        policy = self.refrigeration.resolve(fluid, self.cyc_ref_state.value)
         result = self.refrigeration.solve_cycle(RefrigerationCycleRequest(
             fluid=fluid,
             evaporating_temperature_k=self.read_si("cyc_te"),
@@ -115,9 +118,10 @@ class RefrigerationCycleModule(BaseAnalysisModule):
             subcooling_k=self.read_si("cyc_sc"),
             isentropic_efficiency=self.read_si("cyc_eta"),
             refrigeration_capacity_w=self.read_si("cyc_capacity"),
-            reference_state=self.cyc_ref_state.value,
+            reference_state=policy.reference_state,
         ))
         self.last_result = result
+        self.last_policy = policy
         self._plot_cycle(result)
 
         formatter = ResultFormatter(self.unit_converter, use_imperial)
@@ -142,6 +146,7 @@ class RefrigerationCycleModule(BaseAnalysisModule):
         formatter.section("狀態點比焓")
         for key, label in CYCLE_STATE_LABELS.items():
             formatter.add(label, "H", result.states[key].enthalpy_j_kg, 1)
+        add_policy_lines(formatter, policy)
         return formatter.text()
 
     def _plot_cycle(self, result) -> None:

@@ -590,12 +590,13 @@ def test_application_resolves_auto_reference_state(provider) -> None:
 
     auto = service.saturation_properties(SaturationPropertiesRequest("R32", pressure_pa=1e6, reference_state="Auto"))
     iir = service.saturation_properties(SaturationPropertiesRequest("R32", pressure_pa=1e6, reference_state="IIR"))
-    assert auto.reference_state == "ASHRAE"
+    # Auto 集中規則：支援 IIR 的冷媒 → IIR（冷凍工程 SI 慣例）。
+    assert auto.reference_state == "IIR"
     assert iir.reference_state == "IIR"
 
     default = service.check_superheat(SuperheatCheckRequest("R32", 1e6, 300.0))
     nbp = service.check_superheat(SuperheatCheckRequest("R32", 1e6, 300.0, reference_state="NBP"))
-    assert default.reference_state == "ASHRAE"
+    assert default.reference_state == "IIR"
     assert nbp.reference_state == "NBP"
     assert nbp.superheat_k == pytest.approx(default.superheat_k, rel=1e-9)
     assert nbp.dew_state.enthalpy_j_kg != pytest.approx(default.dew_state.enthalpy_j_kg, rel=1e-3)
@@ -740,7 +741,10 @@ def test_saturation_page_converts_gauge_pressure_and_shows_structured_result(she
     assert kpis["泡點溫度"] == (f"{bubble_c:.2f}", "°C")
     latent = (_coolprop("H", "P", absolute, "Q", 1, "R32") - _coolprop("H", "P", absolute, "Q", 0, "R32")) / 1000
     assert kpis["蒸發潛熱 h_fg"] == (f"{latent:.2f}", "kJ/kg")
-    assert _group(view, "輸入") == {"冷媒": "R32", "已知飽和壓力（絕對）": "1001.33", "參考狀態": "ASHRAE"}
+    assert _group(view, "輸入") == {"冷媒": "R32", "已知飽和壓力（絕對）": "1001.33", "參考狀態": "IIR"}
+    policy = _group(view, "模型與基準")
+    assert policy["參考基準"] == "IIR（Auto）"
+    assert policy["計算模型"] == "真實流體（CoolProp）"
     liquid = _group(view, "飽和液體（泡點）")
     assert liquid["絕對壓力"] == "1001.33"
     assert list(liquid) == ["溫度", "絕對壓力", "比焓 h", "比熵 s", "密度 ρ", "比容 v"]
@@ -814,13 +818,13 @@ def test_saturation_reference_state_changes_enthalpy_but_not_latent_heat(shell) 
     latent = _kpis(view)["蒸發潛熱 h_fg"]
     enthalpy = _group(view, "飽和液體（泡點）")["比焓 h"]
 
-    module.sat_ref_state.value = "IIR"
+    module.sat_ref_state.value = "ASHRAE"
     module.sat_ref_state.on_select(SimpleNamespace(control=module.sat_ref_state))
     assert view.result_panel.status == "warning"
     view.perform_calculation(None)
 
     assert _kpis(view)["蒸發潛熱 h_fg"] == latent
-    assert _group(view, "輸入")["參考狀態"] == "IIR"
+    assert _group(view, "輸入")["參考狀態"] == "ASHRAE"
     assert _group(view, "飽和液體（泡點）")["比焓 h"] != enthalpy
 
 
@@ -878,9 +882,9 @@ def test_superheat_page_shows_structured_result_with_state_points(shell) -> None
     assert kpis["露點溫度"] == (f"{dew_c:.1f}", "°C")
     assert kpis["絕對壓力"] == ("1001.33", "kPa")
     titles = [group.title for group in view.workspace.result_view.property_table.groups]
-    assert titles == ["量測", "露點（飽和蒸氣）", "泡點（飽和液體）", "量測點"]
+    assert titles == ["量測", "露點（飽和蒸氣）", "泡點（飽和液體）", "量測點", "模型與基準"]
     assert _group(view, "量測點")["溫度"] == "20.00"
-    assert _group(view, "量測")["參考狀態"] == "ASHRAE"
+    assert _group(view, "量測")["參考狀態"] == "IIR"
     assert "狀態: 過熱蒸氣" in view.adapter.result_text
     assert "絕對壓力: 1001.33 kPa" in view.adapter.result_text
 
@@ -916,12 +920,12 @@ def test_superheat_page_uses_its_own_reference_state(shell) -> None:
     superheat = _kpis(view)["過熱蒸氣・過熱度"]
     enthalpy = _group(view, "露點（飽和蒸氣）")["比焓 h"]
 
-    module.sh_ref_state.value = "IIR"
+    module.sh_ref_state.value = "ASHRAE"
     module.sh_ref_state.on_select(SimpleNamespace(control=module.sh_ref_state))
     assert view.result_panel.status == "warning"
     view.perform_calculation(None)
 
-    assert _group(view, "量測")["參考狀態"] == "IIR"
+    assert _group(view, "量測")["參考狀態"] == "ASHRAE"
     assert _group(view, "露點（飽和蒸氣）")["比焓 h"] != enthalpy
     assert _kpis(view)["過熱蒸氣・過熱度"] == superheat
 
@@ -933,7 +937,9 @@ def test_state_point_table_values_match_the_state_point(shell, provider) -> None
     無。"""
     view, _module = _open(shell, "saturation")
     view.perform_calculation(None)
-    point = saturation_properties(provider, "R32", pressure_pa=900_000.0 + STANDARD_ATMOSPHERE_PA).vapor
+    point = saturation_properties(
+        provider, "R32", pressure_pa=900_000.0 + STANDARD_ATMOSPHERE_PA, reference_state="IIR"
+    ).vapor
 
     vapor = _group(view, "飽和蒸氣（露點）")
     assert vapor["溫度"] == f"{point.temperature_k - 273.15:.2f}"

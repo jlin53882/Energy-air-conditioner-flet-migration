@@ -11,7 +11,13 @@ from dataclasses import dataclass
 
 from .air import AirStatePoint
 from .base import StateBasisMismatchError
-from .thermo import COOLPROP_SINGLE_PHASE_QUALITY, ThermoStatePoint, enthalpy_difference, entropy_difference
+from .thermo import (
+    COOLPROP_SINGLE_PHASE_QUALITY,
+    ThermoStatePoint,
+    basis_label,
+    enthalpy_difference,
+    entropy_difference,
+)
 
 BASIS_MISMATCH_NOTE = "基準不同（流體、Reference State 或性質模型），不相減"
 IDEAL_GAS_ENTROPY_NOTE = "理想氣體模型未提供比熵"
@@ -81,8 +87,7 @@ def _basis_label(point: ThermoStatePoint) -> str:
 
 回傳：
     例如 ``R32／ASHRAE`` 或 ``Water／DEF／理想氣體``。"""
-    suffix = "／理想氣體" if point.is_ideal_gas else ""
-    return f"{point.fluid}／{point.reference_state}{suffix}"
+    return basis_label(point)
 
 
 def _compare_thermo(a: ThermoStatePoint, b: ThermoStatePoint) -> StateComparison:

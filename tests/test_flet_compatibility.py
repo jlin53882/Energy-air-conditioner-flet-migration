@@ -54,6 +54,27 @@ class DummyPage:
     無。"""
 
 
+
+def _stub_property_query(monkeypatch, service, fake_values) -> None:
+    """以假 SI 數值替換物性查詢的計算部分，模型／基準仍由真正的集中 resolver 解析。
+
+物性頁以 ``query_with_policy`` 取得數值與解析快照；此 helper 讓測試只替換數值來源。
+
+參數：
+    monkeypatch: pytest monkeypatch。
+    service: PropertyQueryService。
+    fake_values: 接收 request、回傳 SI dict（或引發例外）的函式。
+
+回傳：
+    無。"""
+    from application.property_queries import PropertyQueryResult
+
+    def query_with_policy(request):
+        return PropertyQueryResult(values=fake_values(request), policy=service.resolve(request))
+
+    monkeypatch.setattr(service, "query_with_policy", query_with_policy)
+
+
 def _control_tree_contains(root: object, target: object) -> bool:
     """深度搜尋 Flet 控制項樹，判斷目標控制項是否位於 root 之下。
 
@@ -793,7 +814,7 @@ def test_global_output_unit_switch_renders_new_metrics_without_mutating_inputs(m
             "phase": "gas",
         }
 
-    monkeypatch.setattr(service, "query", fake_query)
+    _stub_property_query(monkeypatch, service, fake_query)
 
     property_tab.perform_calculation(None)
     si_pressure = property_tab.result_panel.metrics["Pressure"]
@@ -1078,11 +1099,14 @@ def test_reference_state_selector_uses_short_executable_codes_with_helper_copy()
         query_service=PropertyQueryService(ThermoStateCalculator(converter).state_service),
     )
 
-    assert tab.ref_state_dd.value == "ASHRAE"
-    assert {option.key for option in tab.ref_state_dd.options} == {"ASHRAE", "IIR", "NBP", "Default"}
+    assert tab.ref_state_dd.value == "Auto"
+    assert [option.key for option in tab.ref_state_dd.options] == ["Auto", "IIR", "ASHRAE", "NBP", "DEF"]
+    # Auto 預覽必須顯示實際採用的 concrete 基準，而不是只顯示「Auto」。
+    assert "IIR（Auto）" in tab.policy_preview.value
     tab.ref_state_dd.value = "NBP"
     tab.on_ref_state_change(None)
-    assert "Normal boiling point" in tab.reference_state_helper.value
+    assert "正常沸點" in tab.reference_state_helper.value
+    assert "NBP（手動）" in tab.policy_preview.value
 
 
 def test_property_query_validation_errors_are_attached_to_the_offending_field() -> None:
@@ -1193,7 +1217,7 @@ def _build_property_tab_with_fake_query(monkeypatch: pytest.MonkeyPatch) -> tupl
             "Q": 0.88, "phase": "gas",
         }
 
-    monkeypatch.setattr(service, "query", query)
+    _stub_property_query(monkeypatch, service, query)
     tab = PropertyTab(
         unit_converter=converter,
         formatter=PropertyFormatter(converter),
@@ -1483,7 +1507,7 @@ def test_failed_recalculation_clears_previous_result_snapshot(monkeypatch: pytes
         """
         raise RuntimeError("injected query failure")
 
-    monkeypatch.setattr(tab.query_service, "query", fail_query)
+    _stub_property_query(monkeypatch, tab.query_service, fail_query)
     tab.perform_calculation(None)
 
     assert tab.result_panel.status == "error"
@@ -1526,11 +1550,11 @@ def test_all_semantic_controls_invalidate_cached_property_result(
         row["prop"].value = tab.prop_names_map["H"]
         row["prop"].on_select(SimpleNamespace(control=row["prop"]))
     elif semantic_change == "mode":
-        tab.mode_dd.value = "Water (水/水蒸氣)"
+        tab.mode_dd.value = "humid_air"
         tab.mode_dd.on_select(SimpleNamespace(control=tab.mode_dd))
     elif semantic_change == "ideal_gas":
-        tab.ideal_gas_cb.value = True
-        tab.ideal_gas_cb.on_change(SimpleNamespace(control=tab.ideal_gas_cb))
+        tab.mode_dd.value = "ideal_gas"
+        tab.mode_dd.on_select(SimpleNamespace(control=tab.mode_dd))
     elif semantic_change == "third_condition":
         tab.input_rows[2]["val"].value = "1"
         tab.input_rows[2]["val"].on_change(
@@ -1614,7 +1638,7 @@ def test_property_summary_and_detail_track_output_unit_without_requery(
     input_summary = tab._last_input_summary
     si_output = tab._last_formatted_output
 
-    assert "計算模式" in si_summary
+    assert "計算模型" in si_summary
     assert "R32" in si_summary
     assert "參考狀態" in si_summary
     assert "已知:" in si_summary
@@ -1632,7 +1656,7 @@ def test_property_summary_and_detail_track_output_unit_without_requery(
     imperial_output = tab._last_formatted_output
 
     assert tab._last_input_summary == input_summary
-    assert "計算模式" in imperial_summary
+    assert "計算模型" in imperial_summary
     assert "R32" in imperial_summary
     assert "參考狀態" in imperial_summary
     assert "已知:" in imperial_summary
@@ -1689,7 +1713,7 @@ def test_property_summary_does_not_duplicate_raw_detail_output(
 
     assert tab.result_text.visible is True
     assert tab.raw_output.visible is False
-    assert "計算模式" in tab.result_text.value
+    assert "計算模型" in tab.result_text.value
     assert "R32" in tab.result_text.value
     assert "參考狀態" in tab.result_text.value
     assert "已知:" in tab.result_text.value
@@ -1771,7 +1795,7 @@ def test_property_copy_result_contract_is_stable_across_unit_rerender(
     assert tab._last_formatted_output in imperial_copy
 
     for result in (si_copy, imperial_copy):
-        assert "計算模式" in result
+        assert "計算模型" in result
         assert "R32" in result
         assert "已知:" in result
         assert "1000 kPa" in result

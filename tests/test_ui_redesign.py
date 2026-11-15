@@ -286,7 +286,11 @@ def test_ideal_gas_option_is_part_of_property_layout() -> None:
         children.extend(getattr(root, "controls", None) or [])
         return any(contains(child, target) for child in children)
 
-    assert contains(tab, tab.ideal_gas_cb)
+    # 理想氣體改由「計算模型」選單選擇；模型、基準與解析預覽都在版面中。
+    assert contains(tab, tab.mode_dd)
+    assert contains(tab, tab.ref_state_dd)
+    assert contains(tab, tab.policy_preview)
+    assert {option.key for option in tab.mode_dd.options} == {"auto", "real_fluid", "ideal_gas", "humid_air"}
 
 
 def test_analysis_result_renders_metric_tiles_and_error_state() -> None:

@@ -20,7 +20,7 @@ from ...ui.theme import TOKENS
 from ..unit.UnitConverter import GAUGE_PRESSURE, UnitConverter
 from .base_analysis_module import BaseAnalysisModule
 from .result_formatting import ResultFormatter
-from .thermo_state_presentation import state_point_rows
+from .thermo_state_presentation import add_policy_lines, policy_rows, state_point_rows
 
 REGION_LABELS = {
     REGION_SUPERHEATED: "過熱蒸氣",
@@ -144,13 +144,17 @@ class SuperheatSubcoolingModule(BaseAnalysisModule):
         self.last_result = None
         # 錶壓力只在通道層處理：application／domain 一律收到絕對壓力 Pa。
         pressure = self.read_absolute_pressure_pa("sh_p", "sh_atm")
+        self.last_policy = None
+        fluid = self.read_text("sh_fluid")
+        policy = self.refrigeration.resolve(fluid, self.sh_ref_state.value)
         result = self.refrigeration.check_superheat(SuperheatCheckRequest(
-            fluid=self.read_text("sh_fluid"),
+            fluid=fluid,
             pressure_pa=pressure,
             measured_temperature_k=self.read_si("sh_t"),
-            reference_state=self.sh_ref_state.value,
+            reference_state=policy.reference_state,
         ))
         self.last_result = result
+        self.last_policy = policy
         self.last_structured_result = self._build_structured(result, use_imperial)
         formatter = ResultFormatter(self.unit_converter, use_imperial)
         formatter.section("判讀")
@@ -164,6 +168,7 @@ class SuperheatSubcoolingModule(BaseAnalysisModule):
         formatter.add("泡點（飽和液體）", "T", result.bubble_point_k, 1)
         formatter.add("溫度滑移", "DeltaT", result.temperature_glide_k, 2)
         formatter.add("絕對壓力", "P", result.pressure_pa)
+        add_policy_lines(formatter, policy)
         return formatter.text()
 
     def _build_structured(self, result: SaturationCheckResult, use_imperial: bool) -> StructuredResult:
@@ -206,4 +211,6 @@ class SuperheatSubcoolingModule(BaseAnalysisModule):
         if result.measured_state is not None:
             groups.append(PropertyGroup(result.measured_state.label,
                                         state_point_rows(formatter, result.measured_state)))
+        if getattr(self, "last_policy", None) is not None:
+            groups.append(PropertyGroup("模型與基準", policy_rows(self.last_policy)))
         return StructuredResult(key_metrics=key_metrics, groups=tuple(groups))

@@ -11,12 +11,27 @@ from math import isfinite
 import flet as ft
 # PropertyTab 繼承自 ft.Column，使其可以直接作為 Flet UI 中的一個垂直佈局容器。
 # 導入新類別的 "合約" (interfaces)
-from ..ui_components.unit.UnitConverter import UnitConverter
+from ..ui_components.unit.UnitConverter import (
+    ABSOLUTE_TO_GAUGE_UNIT,
+    GAUGE_PRESSURE,
+    GAUGE_TO_ABSOLUTE_UNIT,
+    UnitConverter,
+)
 from ..ui_components.unit.PropertyFormatter import PropertyFormatter
-from application.models import PropertyQueryRequest
-from application.property_queries import PropertyQueryService
-from domain.state_points import StateSource, ThermoStatePoint
-from domain.thermodynamics.fluid_policy import resolve_reference_state_policy
+from .analysis_modules.result_formatting import ResultFormatter
+from application.models import HumidAirQueryRequest, PropertyQueryRequest
+from application.property_queries import PropertyQueryResult, PropertyQueryService
+from domain.state_points import AirStatePoint, StateSource, ThermoStatePoint
+from domain.thermodynamics.thermo_policy import (
+    AUTO,
+    MODEL_LABELS,
+    REFERENCE_STATE_DESCRIPTIONS,
+    CalculationModel,
+    ResolvedThermoPolicy,
+    ThermoPolicyError,
+    Workflow,
+    resolve_thermo_policy,
+)
 from ..ui.components.engineering_card import EngineeringCard
 from ..ui.components.quantity_input import QuantityInput
 from ..ui.components.result_panel import ResultPanel
@@ -32,13 +47,39 @@ from ..ui.theme import (
 )
 from ..ui.state import WorkspaceState
 
+# 計算模型選單：值為 CalculationModel 的值。模型與參考基準分開選擇（模型是第一層）。
+MODEL_OPTIONS = tuple((model.value, MODEL_LABELS[model]) for model in (
+    CalculationModel.AUTO, CalculationModel.REAL_FLUID, CalculationModel.IDEAL_GAS, CalculationModel.HUMID_AIR,
+))
+# 參考基準選單：Auto 規則集中於 domain/thermodynamics/thermo_policy.py。
+REFERENCE_OPTIONS = (
+    (AUTO, "Auto（推薦）"),
+    ("IIR", "IIR"),
+    ("ASHRAE", "ASHRAE"),
+    ("NBP", "NBP"),
+    ("DEF", "DEF（CoolProp 預設）"),
+)
+# 濕空氣模型的濕度條件：(代碼, 顯示名稱, 單位性質代碼)。
+HUMIDITY_INPUTS = (
+    ("RH", "相對濕度 RH", "RH"),
+    ("Twb", "濕球溫度 Twb", "T"),
+    ("W", "濕度比 W", "W"),
+)
+HUMID_AIR_FLUID = "Air"
+# 錶壓換算預設使用的標準大氣壓力（Pa）；與分析頁一致。
+STANDARD_ATMOSPHERE_PA = 101_325.0
+PRESSURE_GAUGE = "Gauge"
+PRESSURE_ABSOLUTE = "Absolute"
+
+
 # PropertyTab 繼承自 ft.Column，使其可以直接作為 Flet UI 中的一個垂直佈局容器。
 class PropertyTab(ft.Column):
     def __init__(self, unit_converter: UnitConverter, 
                  formatter: PropertyFormatter, 
                  page: ft.Page,
                  query_service: PropertyQueryService,
-                 workspace_state: WorkspaceState | None = None):
+                 workspace_state: WorkspaceState | None = None,
+                 pressure_from_altitude: Callable[[float], float] | None = None):
         """建立查詢介面，並以外置欄名與預設隱藏的第三列維持欄位契約。
 
 參數：
@@ -47,6 +88,7 @@ class PropertyTab(ft.Column):
     page: Flet 應用程式頁面。
     query_service: 執行熱力性質查詢並管理參考狀態的服務。
     workspace_state: 選用的工作區狀態；未提供時建立預設狀態。
+    pressure_from_altitude: 「海拔（m）→ 大氣壓力（Pa）」換算；未提供時使用共用濕空氣服務的公式。
 
 回傳：
     無。"""
@@ -58,6 +100,30 @@ class PropertyTab(ft.Column):
         self.formatter = formatter
         self.query_service = query_service
         self.workspace_state = workspace_state or WorkspaceState()
+        self._pressure_from_altitude_fn = pressure_from_altitude
+        # 壓力輸入基準：與飽和性質等分析頁相同的錶壓／絕對壓切換；預設絕對壓（維持舊行為）。
+        self.pressure_basis = ft.SegmentedButton(
+            allow_empty_selection=False,
+            segments=[
+                ft.Segment(value=PRESSURE_ABSOLUTE, label=ft.Text("絕對壓力")),
+                ft.Segment(value=PRESSURE_GAUGE, label=ft.Text("錶壓力")),
+            ],
+            selected=[PRESSURE_ABSOLUTE],
+            # 窄版（320／375 px）時勾選圖示會擠壓標籤文字；選取狀態已由底色表示。
+            show_selected_icon=False,
+            expand=True,
+            on_change=self._on_pressure_basis_change,
+        )
+        self.pressure_basis_hint = ft.Text("", size=TOKENS.caption, color=TOKENS.text_muted)
+        self.altitude_tf = ft.TextField(
+            label="海拔高度（選填，m）", hint_text="未填時使用 101.325 kPa",
+            keyboard_type=ft.KeyboardType.NUMBER, expand=True, on_change=self._on_altitude_change,
+        )
+        self.atm_tf = ft.TextField(
+            label="大氣壓力（絕對，kPa）", value="101.325",
+            helper="填入海拔時自動計算；也可手動修改。",
+            keyboard_type=ft.KeyboardType.NUMBER, expand=True, on_change=self._on_semantic_input_change,
+        )
         
         # 性質代碼到名稱的映射 (用於下拉選單顯示)
         # 格式為: {代碼: "名稱 (中文), 代碼"} (例如: 'P' -> 'Pressure (壓力), P')
@@ -74,44 +140,65 @@ class PropertyTab(ft.Column):
 
         # --- UI 控制項建立 ---
         
-        # 1. 模式/物質區塊 (Mode/Fluid Block)
+        # 1. 模型/物質區塊：模型（第一層）與參考基準（第二層）分開選擇。
         self.mode_dd = ft.Dropdown(
-            label="計算模式", value="CoolProp (冷媒)",
-            options=[ft.dropdown.Option("CoolProp (冷媒)"), ft.dropdown.Option("Water (水/水蒸氣)")],
+            label="計算模型", value=CalculationModel.AUTO.value,
+            options=[ft.dropdown.Option(key, text) for key, text in MODEL_OPTIONS],
             on_select=self.on_mode_change,
             expand=True, # 佔滿同行剩餘空間
         )
         self.fluid_tf = ft.TextField(label="物質名稱", value="R32", expand=True, on_change=self.on_fluid_change)
-        # 理想氣體核取方塊 (僅在 Water 模式下可見)
-        self.ideal_gas_cb = ft.Checkbox(
-            label="理想氣體計算", value=False, visible=False,
-            on_change=self._on_semantic_input_change,
-        )
+        # 切到濕空氣模型時暫存原本的物質名稱，切回其他模型時還原（不靜默覆寫使用者輸入）。
+        self._fluid_before_humid_air: str | None = None
+        self.mode_notice = ft.Text("", size=TOKENS.caption, color=TOKENS.warning, visible=False)
 
-        # --- 新增 1: 參考點區塊 (Reference State Block) ---
+        # --- 參考基準區塊 (Reference State Block) ---
         self.ref_state_descriptions = {
-            "ASHRAE": "常見 HVAC reference convention。",
-            "IIR": "International Institute of Refrigeration convention。",
-            "NBP": "Normal boiling point reference。",
-            "Default": "CoolProp default reference state。",
+            AUTO: "依流體自動選擇：支援 IIR 的冷媒 → IIR；水 → DEF；其他 → DEF 並標示原因。",
+            **{code: f"{code}：{text}" for code, text in REFERENCE_STATE_DESCRIPTIONS.items()},
         }
         self.ref_state_dd = ft.Dropdown(
-            label="Reference State",
-            value="ASHRAE",
-            options=[
-                ft.dropdown.Option("Default", "Default"),
-                ft.dropdown.Option("IIR", "IIR"),
-                ft.dropdown.Option("ASHRAE", "ASHRAE"),
-                ft.dropdown.Option("NBP", "NBP"),
-            ],
+            label="參考基準 (Reference State)",
+            value=AUTO,
+            options=[ft.dropdown.Option(key, text) for key, text in REFERENCE_OPTIONS],
             on_select=self.on_ref_state_change,
             expand=True,
         )
         self.reference_state_helper = ft.Text(
-            self.ref_state_descriptions["ASHRAE"],
+            self.ref_state_descriptions[AUTO],
             size=TOKENS.caption,
             color=TOKENS.text_secondary,
         )
+        # 依目前輸入預覽實際模型與基準；計算時會重新解析一次並以那份快照為準。
+        self.policy_preview = ft.Text(
+            "", size=TOKENS.caption, color=TOKENS.text_secondary, selectable=True, expand=True,
+        )
+
+        # --- 濕空氣輸入（只在濕空氣模型顯示）---
+        self.humid_dry_bulb_tf = ft.TextField(
+            keyboard_type=ft.KeyboardType.NUMBER, expand=True, on_change=self._on_semantic_input_change,
+        )
+        self.humid_dry_bulb_unit = ft.Dropdown(
+            options=[ft.dropdown.Option(unit) for unit in self.unit_converter.get_available_units("T")],
+            value=self.unit_converter.default_units.get("T", "°C"), width=120,
+            on_select=self._on_semantic_input_change,
+        )
+        self.humidity_type_dd = ft.Dropdown(
+            label="濕度條件",
+            value="RH",
+            options=[ft.dropdown.Option(code, text) for code, text, _ in HUMIDITY_INPUTS],
+            on_select=self._on_humidity_type_change,
+            expand=True,
+        )
+        self.humidity_value_tf = ft.TextField(
+            keyboard_type=ft.KeyboardType.NUMBER, expand=True, on_change=self._on_semantic_input_change,
+        )
+        self.humidity_unit_dd = ft.Dropdown(width=120, on_select=self._on_semantic_input_change)
+        self.humid_altitude_tf = ft.TextField(
+            label="海拔 (m)", value="0", keyboard_type=ft.KeyboardType.NUMBER, expand=True,
+            on_change=self._on_semantic_input_change,
+        )
+        self._refresh_humidity_units()
         
         # 2. 性質輸入區塊 (Property Input Block)
         self.input_rows = [] # 儲存三行輸入控制項的字典列表
@@ -165,32 +252,18 @@ class PropertyTab(ft.Column):
         )
         self._has_calculated_result = False
         self._last_si_results: dict[str, object] | None = None
+        self._last_policy: ResolvedThermoPolicy | None = None
         self._last_total_mass_kg: float | None = None
         self._last_result_metadata: dict[str, str] = {}
         self._last_input_summary = ""
         self._last_formatted_output = ""
 
-        # 初始化模式設定 (設定 fluid_tf 和 ideal_gas_cb 的初始狀態)
-        self.on_mode_change_internal()
-
         self.controls = self._build_workspace_controls()
         self.scroll = None
         self.expand = True
-        # --- 新增步驟：設定初始預設參考點 ---
-        # 目的：確保程式啟動時，即使使用者沒有點擊下拉選單，參考點也已經是 ASHRAE。
-        try:
-            # 預設使用的流體 (例如 R134a 或 UI 預設的 R32)
-            # 必須使用 self.fluid_tf.value 來獲取預設物質名稱
-            default_fluid = self.fluid_tf.value 
-            # 預設的標準，即下拉選單的初始值 "ASHRAE"
-            default_ref_state = "ASHRAE" 
-            
-            self.query_service.set_reference_state(default_fluid, default_ref_state)
-            
-        except Exception as e:
-            # 如果預設流體無效或設定參考點失敗，顯示錯誤 (但不應該阻礙程式啟動)
-            # 這裡使用 print 或 logging，因為此時 UI 可能還未完全載入
-            print(f"警告：初始化 CoolProp 參考點失敗 ({default_fluid} to {default_ref_state}): {e}")
+        # 初始化模型相關的欄位狀態與預覽。不在此設定 process-global reference state：
+        # 每次查詢都在 calculation_scope 內以當次解析的 concrete 基準計算。
+        self.on_mode_change_internal()
 
 
     def _build_workspace_controls(self) -> list[ft.Control]:
@@ -200,9 +273,11 @@ class PropertyTab(ft.Column):
 
 回傳：
     由可捲動內容區與固定操作列組成的控制項清單。"""
-        for control in (self.mode_dd, self.ref_state_dd, self.mass_unit_dd):
+        for control in (self.mode_dd, self.ref_state_dd, self.mass_unit_dd, self.humid_dry_bulb_unit,
+                        self.humidity_type_dd, self.humidity_unit_dd):
             style_dropdown(control)
-        for control in (self.fluid_tf, self.mass_tf):
+        for control in (self.fluid_tf, self.mass_tf, self.humid_dry_bulb_tf, self.humidity_value_tf,
+                        self.humid_altitude_tf):
             style_text_field(control)
         self.fluid_tf.prefix_icon = ft.Icons.PROPANE_TANK_OUTLINED
         self.mass_tf.hint_text = "例如 1.0"
@@ -327,13 +402,56 @@ class PropertyTab(ft.Column):
                         ),
                     ], spacing=TOKENS.spacing_md, run_spacing=TOKENS.spacing_md,
                         vertical_alignment=ft.CrossAxisAlignment.START),
-                    self.ideal_gas_cb,
+                    self.mode_notice,
+                    ft.Row(
+                        [ft.Icon(ft.Icons.RULE, size=14, color=TOKENS.text_muted), self.policy_preview],
+                        spacing=6,
+                        vertical_alignment=ft.CrossAxisAlignment.START,
+                    ),
                 ],
                 spacing=TOKENS.spacing_sm,
             ),
-            "選擇計算引擎、物質與參考狀態（Reference State）。",
+            "選擇計算模型、物質與參考基準；Auto 會顯示實際採用的模型、基準與原因。",
             icon=ft.Icons.SETTINGS_OUTLINED,
         )
+        def labelled(label: str, *controls: ft.Control) -> ft.Column:
+            """建立欄名在上、輸入在下的欄位（窄視窗時不會截斷欄名）。"""
+            return ft.Column(
+                [ft.Text(label, size=TOKENS.body, weight=ft.FontWeight.W_500, color=TOKENS.text_primary),
+                 ft.Row(list(controls), spacing=TOKENS.spacing_sm)],
+                spacing=6,
+            )
+
+        self.humid_air_card = EngineeringCard(
+            "濕空氣條件（乾球溫度＋一個濕度條件）",
+            ft.Column([
+                ft.ResponsiveRow([
+                    ft.Container(content=labelled("乾球溫度 Tdb", self.humid_dry_bulb_tf, self.humid_dry_bulb_unit),
+                                 col={"xs": 12, "md": 6}),
+                    ft.Container(content=self.humid_altitude_tf, col={"xs": 12, "md": 6}),
+                ], spacing=TOKENS.spacing_md, run_spacing=TOKENS.spacing_md),
+                self.humidity_type_dd,
+                ft.Row([self.humidity_value_tf, self.humidity_unit_dd], spacing=TOKENS.spacing_sm),
+                ft.Text(
+                    "總壓由海拔依標準大氣換算；焓、比容以每 kg 乾空氣為基準，與乾空氣／冷媒的 kJ/kg 不可互比。",
+                    size=TOKENS.caption, color=TOKENS.text_muted,
+                ),
+            ], spacing=TOKENS.spacing_md),
+            icon=ft.Icons.WATER_DROP_OUTLINED,
+        )
+        self.humid_air_card.visible = False
+        for control in (self.altitude_tf, self.atm_tf):
+            style_text_field(control)
+        self.atmosphere_section = ft.ResponsiveRow(
+            [
+                ft.Container(content=self.altitude_tf, col={"xs": 12, "md": 6}),
+                ft.Container(content=self.atm_tf, col={"xs": 12, "md": 6}),
+            ],
+            spacing=TOKENS.spacing_md,
+            run_spacing=TOKENS.spacing_md,
+            visible=False,
+        )
+        self._refresh_pressure_basis_hint()
         conditions = EngineeringCard(
             "已知條件（兩個獨立性質）",
             ft.Column([
@@ -342,6 +460,16 @@ class PropertyTab(ft.Column):
                         ft.Text("常用組合", size=TOKENS.caption, color=TOKENS.text_muted,
                                 weight=ft.FontWeight.W_600),
                         self.preset_buttons,
+                    ],
+                    spacing=6,
+                ),
+                ft.Column(
+                    [
+                        ft.Text("壓力類型", size=TOKENS.caption, color=TOKENS.text_muted,
+                                weight=ft.FontWeight.W_600),
+                        ft.Row([self.pressure_basis]),
+                        self.pressure_basis_hint,
+                        self.atmosphere_section,
                     ],
                     spacing=6,
                 ),
@@ -363,6 +491,7 @@ class PropertyTab(ft.Column):
             ], spacing=TOKENS.spacing_md),
             icon=ft.Icons.TUNE,
         )
+        self.conditions_card = conditions
         extensive = EngineeringCard(
             "廣延性質",
             ft.Column([self.extensive_toggle, self.extensive_section], spacing=TOKENS.spacing_sm),
@@ -398,11 +527,12 @@ class PropertyTab(ft.Column):
                        vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 self.raw_output_box,
             ], spacing=TOKENS.spacing_sm + 4),
-            "結果由 CoolProp 查詢服務提供；切換輸出單位不會重新查詢。",
+            "結果附實際計算模型與參考基準；切換輸出單位不會重新查詢。",
             icon=ft.Icons.INSIGHTS_OUTLINED,
             accent=TOKENS.accent,
         )
         self.results_card = results
+        self.extensive_card = extensive
         self._sync_result_boxes()
         scroll_area = ft.Column(
             [
@@ -410,7 +540,7 @@ class PropertyTab(ft.Column):
                 ft.ResponsiveRow(
                     [
                         ft.Column(
-                            [conditions, extensive],
+                            [conditions, self.humid_air_card, extensive],
                             spacing=TOKENS.spacing_md,
                             col={"xs": 12, "lg": 6},
                         ),
@@ -606,21 +736,21 @@ class PropertyTab(ft.Column):
 
     @staticmethod
     def _state_point_from_results(
-        si_results: dict[str, object], fluid: str, reference_state: str, is_ideal_gas: bool
+        si_results: dict[str, object], fluid: str, reference_state: str | None, is_ideal_gas: bool
     ) -> ThermoStatePoint | None:
         """由查詢結果建立可保存的狀態點；結果無法構成有效狀態點時回傳 None（不影響查詢結果顯示）。
 
 參數：
     si_results: 查詢服務回傳的 canonical SI 結果。
     fluid: 流體名稱。
-    reference_state: 查詢時實際使用的 policy code。
+    reference_state: 本次解析的 concrete 基準；理想氣體為 None（記為 IDEAL_GAS）。
     is_ideal_gas: 是否為理想氣體模型（不提供比熵）。
 
 回傳：
     ThermoStatePoint 或 None。"""
         try:
             return ThermoStatePoint.from_state_mapping(
-                si_results, fluid=fluid, reference_state=reference_state,
+                si_results, fluid=fluid, reference_state=reference_state or "DEF",
                 source=StateSource.PROPERTY_QUERY, label="狀態查詢", is_ideal_gas=is_ideal_gas,
             )
         except ValueError:
@@ -634,6 +764,7 @@ class PropertyTab(ft.Column):
         """
         self._has_calculated_result = False
         self._last_si_results = None
+        self._last_policy = None
         self._last_total_mass_kg = None
         self._last_result_metadata = {}
         self._last_input_summary = ""
@@ -740,6 +871,9 @@ class PropertyTab(ft.Column):
         self.extensive_section.visible = False
         self.mass_tf.value = ""
         self.mass_tf.error_text = None
+        for control in (self.humid_dry_bulb_tf, self.humidity_value_tf):
+            control.value = ""
+            control.error_text = None
         self._clear_result_presentation_snapshot()
         self.result_panel.set_status("empty", "尚未計算", "輸入至少兩個獨立性質後執行計算。")
         try:
@@ -776,18 +910,34 @@ class PropertyTab(ft.Column):
             **self._last_result_metadata,
             "Output": "Imperial" if use_imperial else "SI",
         }
-        phase = self.formatter._get_phase_description(
-            self._last_si_results.get("phase", "unknown")
-        )
-        self.result_panel.set_metrics(
-            self._format_result_metrics(self._last_si_results, use_imperial),
-            metadata,
-            status_detail=phase,
-        )
-        output = self.formatter.format_specific_properties(self._last_si_results, use_imperial)
-        if self._last_total_mass_kg is not None:
-            output += self.formatter.format_extensive_properties(
-                self._last_si_results, self._last_total_mass_kg, use_imperial
+        if self._last_policy is not None and self._last_policy.model is CalculationModel.HUMID_AIR:
+            formatter = ResultFormatter(self.unit_converter, use_imperial)
+            self.result_panel.set_metrics(
+                self._format_humid_air_metrics(formatter, self._last_si_results),
+                metadata,
+                status_detail="濕空氣（每 kg 乾空氣）",
+            )
+            formatter.section("濕空氣狀態（每 kg 乾空氣）")
+            formatter.add("大氣壓力（絕對）", "P", self._last_si_results["P"])
+            formatter.add_air_state(self._last_si_results)
+            output = formatter.text()
+        else:
+            phase = self.formatter._get_phase_description(
+                self._last_si_results.get("phase", "unknown")
+            )
+            self.result_panel.set_metrics(
+                self._format_result_metrics(self._last_si_results, use_imperial),
+                metadata,
+                status_detail=phase,
+            )
+            output = self.formatter.format_specific_properties(self._last_si_results, use_imperial)
+            if self._last_total_mass_kg is not None:
+                output += self.formatter.format_extensive_properties(
+                    self._last_si_results, self._last_total_mass_kg, use_imperial
+                )
+        if self._last_policy is not None:
+            output += "\n\n--- 模型與基準 ---\n" + "\n".join(
+                f"{label}: {value}" for label, value in self._last_policy.summary_rows()
             )
         self._last_formatted_output = output
         self.raw_output.value = output
@@ -797,6 +947,30 @@ class PropertyTab(ft.Column):
         self.copy_result_button.disabled = False
         self.save_menu.show_points((self._last_state_point,) if self._last_state_point else ())
         self._sync_result_boxes()
+
+    @staticmethod
+    def _format_humid_air_metrics(formatter: ResultFormatter, state: dict[str, object]) -> dict[str, str]:
+        """濕空氣結果卡片指標；焓與比容標示每 kg 乾空氣。
+
+參數：
+    formatter: 決定輸出單位的格式化器。
+    state: PsychrometricService 結果。
+
+回傳：
+    指標名稱與顯示文字。"""
+        def quantity(code: str, value: float, digits: int = 2) -> str:
+            text, unit = formatter.parts(code, value, digits)
+            return f"{text} {unit}".strip()
+
+        return {
+            "乾球溫度": quantity("T", state["Tdb"]),
+            "濕球溫度": quantity("T", state["Twb"]),
+            "露點溫度": quantity("T", state["Tdp"]),
+            "相對濕度": f"{state['RH'] * 100:.1f} %",
+            "濕度比": quantity("W", state["W"], 3),
+            "比焓 (每 kg 乾空氣)": quantity("H", state["H"]),
+            "比容 (每 kg 乾空氣)": quantity("V", state["V"], 4),
+        }
 
     def _format_result_metrics(self, si_results: dict[str, object], use_imperial: bool) -> dict[str, str]:
         """將計算結果中可用的數值格式化為結果卡片指標。
@@ -843,8 +1017,43 @@ class PropertyTab(ft.Column):
                 return code # 找到匹配項，返回性質代碼
         return None # 未找到匹配項
 
+    @property
+    def selected_model(self) -> CalculationModel:
+        """目前選擇的計算模型。"""
+        try:
+            return CalculationModel(self.mode_dd.value)
+        except ValueError:
+            return CalculationModel.AUTO
+
+    def _refresh_policy_preview(self) -> ResolvedThermoPolicy | None:
+        """依目前輸入預覽實際模型與基準；無法解析時顯示原因，不改動使用者輸入。
+
+回傳：
+    解析結果；無法解析時為 None。"""
+        model = self.selected_model
+        try:
+            policy = resolve_thermo_policy(
+                self.fluid_tf.value or "",
+                model=model,
+                reference=self.ref_state_dd.value,
+                workflow=Workflow.PROPERTY_QUERY,
+                humidity_specified=model is CalculationModel.HUMID_AIR,
+            )
+        except ThermoPolicyError as exc:
+            self.policy_preview.value = f"無法解析：{exc}"
+            self.policy_preview.color = TOKENS.error
+            return None
+        preview = f"實際採用：{policy.model_label}／參考基準 {policy.reference_label}\n{policy.reason}"
+        if policy.fallback_reason:
+            preview += f"\n{policy.fallback_reason}"
+        self.policy_preview.value = preview
+        self.policy_preview.color = TOKENS.warning if policy.fallback_reason else TOKENS.text_secondary
+        return policy
+
     def on_fluid_change(self, e: ft.ControlEvent) -> None:
-        """驗證流體名稱、套用參考狀態，並使先前計算結果失效。
+        """驗證流體名稱、更新模型／基準預覽，並使先前計算結果失效。
+
+        不設定 process-global reference state；每次查詢都以當次解析的 concrete 基準計算。
 
         參數：
             e: 流體名稱欄位觸發的 Flet 控制事件。
@@ -854,21 +1063,14 @@ class PropertyTab(ft.Column):
         """
         self._mark_calculated_result_stale()
         fluid_name = self.fluid_tf.value.strip()
-
-        if self.mode_dd.value.startswith("CoolProp"):
-            is_valid = self.query_service.is_fluid_valid(fluid_name)
-            if is_valid:
+        if self.selected_model is not CalculationModel.HUMID_AIR:
+            if self.query_service.is_fluid_valid(fluid_name):
                 self.fluid_tf.error_text = None
                 self.fluid_tf.border_color = ft.Colors.OUTLINE
-                ref_code = self.ref_state_dd.value.split(" ", 1)[0]
-                try:
-                    self.query_service.set_reference_state(fluid_name, ref_code)
-                except Exception as err:
-                    self.show_error(f"為 {fluid_name} 設定參考點 {ref_code} 失敗: {err}")
             else:
                 self.fluid_tf.error_text = f"錯誤：CoolProp 資料庫中找不到物質 '{fluid_name}'"
                 self.fluid_tf.border_color = ft.Colors.RED_700
-
+        self._refresh_policy_preview()
         self.update()
 
     def show_error(self, message):
@@ -882,29 +1084,53 @@ class PropertyTab(ft.Column):
         snack.open = True
         self.page.update()
 
-    
-    
-
     def on_mode_change_internal(self, e=None):
-        """
-        模式切換的內部邏輯處理。根據模式調整物質名稱、輸入框狀態和核取方塊可見性。
-        此方法不直接呼叫 self.update()。
-        
+        """依模型調整欄位可用性；不靜默覆寫使用者輸入的物質。
+
+        只有濕空氣模型會把物質設為 ``Air``（並明確提示、暫存原輸入）；切回其他模型時還原。
+        理想氣體與濕空氣沒有 CoolProp reference state，參考基準固定為 Auto 並停用。
+
         :param e: Flet 事件物件 (可選)
         """
-        is_water = self.mode_dd.value == "Water (水/水蒸氣)"
-        # 根據模式設定物質名稱和其是否可編輯
-        self.fluid_tf.value = "Water" if is_water else "R32"
-        self.fluid_tf.disabled = is_water
-        # 水模式下才顯示理想氣體選項，並重設其值
-        self.ideal_gas_cb.visible = is_water
-        self.ideal_gas_cb.value = False
-    
+        model = self.selected_model
+        is_humid = model is CalculationModel.HUMID_AIR
+        notice = ""
+        if is_humid:
+            current = (self.fluid_tf.value or "").strip()
+            if current != HUMID_AIR_FLUID:
+                self._fluid_before_humid_air = current
+                self.fluid_tf.value = HUMID_AIR_FLUID
+                notice = f"濕空氣模型只適用 Air：物質已設為 Air（原輸入「{current}」已保留，切回其他模型時還原）。"
+        elif self._fluid_before_humid_air is not None:
+            restored = self._fluid_before_humid_air
+            self._fluid_before_humid_air = None
+            if (self.fluid_tf.value or "").strip() == HUMID_AIR_FLUID:
+                self.fluid_tf.value = restored
+                notice = f"已還原切換到濕空氣前的物質「{restored}」。"
+        self.fluid_tf.disabled = is_humid
+        self.fluid_tf.error_text = None
+        self.mode_notice.value = notice
+        self.mode_notice.visible = bool(notice)
+        reference_applicable = model in (CalculationModel.AUTO, CalculationModel.REAL_FLUID)
+        if not reference_applicable:
+            self.ref_state_dd.value = AUTO
+        self.ref_state_dd.disabled = not reference_applicable
+        self.reference_state_helper.value = (
+            self.ref_state_descriptions.get(self.ref_state_dd.value, "")
+            if reference_applicable
+            else f"{MODEL_LABELS[model]}沒有 CoolProp reference state，參考基準不適用。"
+        )
+        if hasattr(self, "conditions_card"):
+            self.conditions_card.visible = not is_humid
+            self.extensive_card.visible = not is_humid
+            self.humid_air_card.visible = is_humid
+        self._refresh_policy_preview()
+
     def on_mode_change(self, e: ft.ControlEvent | None = None) -> None:
-        """使先前結果失效，並更新計算模式衍生的控制項狀態。
+        """使先前結果失效，並更新計算模型衍生的控制項狀態。
 
         參數：
-            e: 模式選單觸發的 Flet 控制事件；程式初始化時可省略。
+            e: 模型選單觸發的 Flet 控制事件；程式初始化時可省略。
 
         回傳：
             無。
@@ -915,7 +1141,7 @@ class PropertyTab(ft.Column):
             self.update()
 
     def on_ref_state_change(self, e: ft.ControlEvent) -> None:
-        """依目前流體套用所選的參考狀態政策。
+        """更新所選參考基準的說明與預覽，並使舊結果失效（不設定 process-global 狀態）。
 
 參數：
     e: 參考狀態選單觸發的 Flet 控制事件。
@@ -924,18 +1150,159 @@ class PropertyTab(ft.Column):
     無。"""
         self._mark_calculated_result_stale()
         ref_code = self.ref_state_dd.value
-        self.reference_state_helper.value = self.ref_state_descriptions[ref_code]
-        if self.mode_dd.value.startswith("CoolProp"):
-            try:
-                self.query_service.set_reference_state(self.fluid_tf.value, ref_code)
-            except Exception:
-                logging.getLogger(__name__).exception(
-                    "Unable to update thermodynamic reference state",
-                    extra={"fluid": self.fluid_tf.value, "reference_state": ref_code},
-                )
-                self.show_error("無法套用此參考狀態，請確認物質與計算模式。")
+        self.reference_state_helper.value = self.ref_state_descriptions.get(ref_code, "")
+        self._refresh_policy_preview()
         if self.parent:
             self.update()
+
+    def _refresh_humidity_units(self) -> None:
+        """依濕度條件種類更新單位選單。
+
+回傳：
+    無。"""
+        unit_code = next(code for key, _, code in HUMIDITY_INPUTS if key == self.humidity_type_dd.value)
+        units = self.unit_converter.get_available_units(unit_code)
+        self.humidity_unit_dd.options = [ft.dropdown.Option(unit) for unit in units]
+        default = self.unit_converter.default_units.get(unit_code, units[0] if units else "")
+        self.humidity_unit_dd.value = default if default in units else (units[0] if units else "")
+
+    def _on_humidity_type_change(self, _event: ft.ControlEvent | None) -> None:
+        """切換濕度條件種類：清除數值（不同物理量不可沿用），更新單位並使舊結果失效。
+
+參數：
+    _event: Flet 事件。
+
+回傳：
+    無。"""
+        self._mark_calculated_result_stale()
+        self.humidity_value_tf.value = ""
+        self.humidity_value_tf.error_text = None
+        self._refresh_humidity_units()
+        try:
+            self.update()
+        except RuntimeError:
+            pass
+
+    @property
+    def is_gauge_pressure(self) -> bool:
+        """壓力輸入是否為錶壓力。"""
+        return PRESSURE_GAUGE in (self.pressure_basis.selected or [])
+
+    def _unit_code(self, prop_code: str | None) -> str | None:
+        """回傳輸入列實際使用的單位性質代碼：錶壓模式下壓力為 ``PGauge``。"""
+        if prop_code == "P" and self.is_gauge_pressure:
+            return GAUGE_PRESSURE
+        return prop_code
+
+    def _read_atmospheric_pa(self) -> float:
+        """讀取大氣壓力（絕對，Pa）。
+
+引發：
+    ValueError：欄位不是正的有限數值時。"""
+        value = float((self.atm_tf.value or "").strip())
+        if not isfinite(value) or value <= 0:
+            raise ValueError("大氣壓力必須大於 0。")
+        return value * 1000.0
+
+    def _refresh_pressure_basis_hint(self) -> None:
+        """更新壓力類型說明與大氣壓力欄位可見性。"""
+        gauge = self.is_gauge_pressure
+        self.atmosphere_section.visible = gauge
+        self.pressure_basis_hint.value = (
+            "錶壓力：計算前加上大氣壓力換成絕對壓力（例：152 kPag + 101.325 kPa = 253.325 kPa）。"
+            if gauge
+            else "絕對壓力：輸入值直接用於計算，不會加大氣壓力（蒸氣表通常為絕對壓）。"
+        )
+
+    def _on_pressure_basis_change(self, _event: ft.ControlEvent | None) -> None:
+        """切換錶壓／絕對壓：壓力列改用對應單位並換算為同一個實際壓力，不使結果失效。
+
+大氣壓力無效而需要換算時，恢復原模式並在大氣壓力欄位提示。
+
+參數：
+    _event: Flet 事件。
+
+回傳：
+    無。"""
+        to_gauge = self.is_gauge_pressure
+        new_code = GAUGE_PRESSURE if to_gauge else "P"
+        old_code = "P" if to_gauge else GAUGE_PRESSURE
+        unit_map = ABSOLUTE_TO_GAUGE_UNIT if to_gauge else GAUGE_TO_ABSOLUTE_UNIT
+        pressure_rows = [
+            index for index, row in enumerate(self.input_rows)
+            if self.get_prop_code(row["prop"].value) == "P"
+        ]
+        values: dict[int, float] = {}
+        for index in pressure_rows:
+            try:
+                value = float((self.input_rows[index]["val"].value or "").strip())
+            except ValueError:
+                continue
+            if isfinite(value):
+                values[index] = value
+        atmospheric_pa = 0.0
+        if values:
+            try:
+                atmospheric_pa = self._read_atmospheric_pa()
+            except ValueError:
+                self.pressure_basis.selected = [PRESSURE_GAUGE if not to_gauge else PRESSURE_ABSOLUTE]
+                self.atm_tf.error_text = "請輸入有效的大氣壓力，才能在錶壓與絕對壓力間換算"
+                self._refresh_pressure_basis_hint()
+                self._safe_update()
+                return
+        self.atm_tf.error_text = None
+        for index in pressure_rows:
+            row = self.input_rows[index]
+            old_unit = row["unit"].value
+            new_unit = unit_map.get(old_unit, self.unit_converter.default_units.get(new_code, ""))
+            if index in values:
+                current_si = self.unit_converter.convert_to_si(old_code, values[index], old_unit)
+                new_si = current_si - atmospheric_pa if to_gauge else current_si + atmospheric_pa
+                row["val"].value = f"{self.unit_converter.convert_from_si(new_code, new_si, new_unit):.7g}"
+            units = self.unit_converter.get_available_units(new_code)
+            row["unit"].options = [ft.dropdown.Option(unit) for unit in units]
+            row["unit"].value = new_unit
+            self._last_prop_units[index] = new_unit
+            self.workspace_state.set_input_unit(f"condition_{index}_{new_code}", new_unit)
+        self._refresh_pressure_basis_hint()
+        # 實際壓力不變：只換表示方式，不使舊結果失效。
+        self._safe_update()
+
+    def _on_altitude_change(self, _event: ft.ControlEvent | None) -> None:
+        """依海拔更新大氣壓力；錶壓模式下大氣壓力改變會改變絕對壓力，因此使舊結果失效。"""
+        raw_value = (self.altitude_tf.value or "").strip()
+        atmospheric_pa = STANDARD_ATMOSPHERE_PA
+        if raw_value:
+            try:
+                altitude = float(raw_value)
+                if not isfinite(altitude):
+                    raise ValueError("海拔必須是有限數值。")
+                atmospheric_pa = self._altitude_to_pressure()(altitude)
+                if isinstance(atmospheric_pa, complex) or not isfinite(atmospheric_pa) or atmospheric_pa <= 0:
+                    raise ValueError("海拔超出標準大氣公式的適用範圍。")
+            except (ValueError, TypeError, OverflowError) as error:
+                self.altitude_tf.error_text = str(error) if str(error) else "請輸入有效海拔。"
+                self._safe_update()
+                return
+        self.altitude_tf.error_text = None
+        self.atm_tf.value = f"{atmospheric_pa / 1000:.6g}"
+        self.atm_tf.error_text = None
+        self._on_semantic_input_change(None)
+
+    def _altitude_to_pressure(self) -> Callable[[float], float]:
+        """回傳「海拔 → 大氣壓力（Pa）」換算；未注入時使用共用濕空氣服務的公式。"""
+        if self._pressure_from_altitude_fn is None:
+            from .unit.PsychrometricCalculator import PsychrometricCalculator
+
+            self._pressure_from_altitude_fn = PsychrometricCalculator().service.calculate_pressure_from_altitude
+        return self._pressure_from_altitude_fn
+
+    def _safe_update(self) -> None:
+        """已掛載時更新畫面；未掛載時略過。"""
+        try:
+            self.update()
+        except RuntimeError:
+            pass
 
     def update_units_menu(self, row_index: int, *, update_view: bool = True) -> None:
         """依輸入列的性質更新單位選項、預設值與追蹤狀態。
@@ -962,12 +1329,13 @@ class PropertyTab(ft.Column):
             quantity.property_code = prop_code
             quantity.label = row_label
             quantity.label_control.value = row_label
-        units = self.unit_converter.get_available_units(prop_code)
+        unit_code = self._unit_code(prop_code)
+        units = self.unit_converter.get_available_units(unit_code)
         row["unit"].options = [ft.dropdown.Option(unit) for unit in units]
 
-        default_unit = self.unit_converter.default_units.get(prop_code, "")
+        default_unit = self.unit_converter.default_units.get(unit_code, "")
         new_unit = default_unit if default_unit in units else (units[0] if units else "")
-        input_key = f"condition_{row_index}_{prop_code}"
+        input_key = f"condition_{row_index}_{unit_code}"
         saved_unit = self.workspace_state.input_units.get(input_key)
         if saved_unit in units:
             new_unit = saved_unit
@@ -1034,7 +1402,7 @@ class PropertyTab(ft.Column):
         self._is_updating_units = True
         try:
             changed_row = self.input_rows[changed_row_index]
-            property_code = self.get_prop_code(changed_row["prop"].value)
+            property_code = self._unit_code(self.get_prop_code(changed_row["prop"].value))
             new_unit = changed_row["unit"].value
             old_unit = self._last_prop_units[changed_row_index]
             raw_value = changed_row["val"].value
@@ -1092,11 +1460,23 @@ class PropertyTab(ft.Column):
             return None, "數值必須是有限數字。"
         if property_code is None:
             return None, "請選擇有效的熱力性質。"
+        unit_code = self._unit_code(property_code)
         try:
-            canonical_value = self.unit_converter.convert_to_si(property_code, value, unit)
+            canonical_value = self.unit_converter.convert_to_si(unit_code, value, unit)
         except ValueError:
             return None, "目前性質不支援所選單位。"
-        if property_code == "P" and canonical_value <= 0:
+        if unit_code == GAUGE_PRESSURE:
+            try:
+                atmospheric_pa = self._read_atmospheric_pa()
+            except ValueError:
+                return None, "錶壓換算需要有效的大氣壓力。"
+            try:
+                absolute_pa = self.unit_converter.gauge_to_absolute_pa(canonical_value, atmospheric_pa)
+            except ValueError:
+                absolute_pa = 0.0
+            if absolute_pa <= 0:
+                return None, "換算後的絕對壓力必須大於 0。"
+        elif property_code == "P" and canonical_value <= 0:
             return None, "絕對壓力必須大於 0。"
         if property_code == "T" and canonical_value <= 0:
             return None, "絕對溫度必須大於 0 K。"
@@ -1116,6 +1496,9 @@ class PropertyTab(ft.Column):
     無。"""
         self._clear_result_presentation_snapshot()
         fluid = self.fluid_tf.value.strip()
+        if self.selected_model is CalculationModel.HUMID_AIR:
+            self._perform_humid_air_calculation()
+            return
 
         # 1. 檢查物質名稱是否有效
         if not self.query_service.is_fluid_valid(fluid):
@@ -1125,6 +1508,7 @@ class PropertyTab(ft.Column):
             return # 停止計算
 
         known_props, display_inputs = [], []
+        gauge_notes: list[str] = []
         has_field_errors = False
 
 
@@ -1140,8 +1524,20 @@ class PropertyTab(ft.Column):
             if error:
                 has_field_errors = True
                 continue
-            known_props.append((prop_code, value, unit))
             display_inputs.append(f"{row['prop'].value}={raw_value} {unit}")
+            if self._unit_code(prop_code) == GAUGE_PRESSURE:
+                # 錶壓只存在於 UI 邊界：送入計算前一律換成絕對壓力 Pa。
+                atmospheric_pa = self._read_atmospheric_pa()
+                absolute_pa = self.unit_converter.gauge_to_absolute_pa(
+                    self.unit_converter.convert_to_si(GAUGE_PRESSURE, value, unit), atmospheric_pa
+                )
+                known_props.append(("P", absolute_pa, "Pa"))
+                gauge_notes.append(
+                    f"壓力換算: {raw_value} {unit} + 大氣 {atmospheric_pa / 1000:.6g} kPa"
+                    f" = {absolute_pa / 1000:.6g} kPa（絕對）"
+                )
+            else:
+                known_props.append((prop_code, value, unit))
 
         if has_field_errors:
             self.result_panel.set_error("請先修正欄位旁的錯誤，再執行計算。")
@@ -1187,22 +1583,18 @@ class PropertyTab(ft.Column):
                 self.update()
                 return
 
-        # --- 新增 ---
-        # 3.5. 根據 UI 切換按鈕，決定輸出單位
-        # 讀取 SegmentedButton 的當前選定值 ("SI" 或 "Imperial")
-        use_imperial = self.output_unit_system == "Imperial"
-        # --- 新增結束 ---
 
-        # 4. 設定計算模式 (CoolProp 實際流體 vs. 理想氣體)
-        is_ideal = self.ideal_gas_cb.value and self.mode_dd.value.startswith("Water")
-        calc_type = " (理想氣體模型)" if is_ideal else ""
-        ref_code = self.ref_state_dd.value.split(" ")[0]
+        # 4. 依目前模型／基準建立 request；計算時只解析一次，結果與顯示使用同一份快照。
+        model = self.selected_model
+        ref_code = self.ref_state_dd.value
         input_summary = [
             "--- 輸入 ---",
-            f"計算模式: {self.mode_dd.value}",
-            f"物質: {fluid}{calc_type}",
-            f"參考狀態: {ref_code}",
+            f"計算模型: {MODEL_LABELS[model]}",
+            f"物質: {fluid}",
+            f"參考狀態（選擇）: {ref_code}",
             f"已知: {', '.join(display_inputs[:2])}",
+            f"壓力類型: {'錶壓力（計算時加大氣壓力）' if self.is_gauge_pressure else '絕對壓力'}",
+            *gauge_notes,
         ]
         if total_mass_kg is not None:
             input_summary.append(f"總質量: {self.mass_tf.value.strip()} {self.mass_unit_dd.value}")
@@ -1213,31 +1605,23 @@ class PropertyTab(ft.Column):
         self.update()
         # 6. 執行核心熱力學計算
         try:
-            # 執行計算，將前兩個輸入性質傳遞給核心計算器
-            resolved_policy = resolve_reference_state_policy(fluid, self.ref_state_dd.value.split(" ")[0])
-            si_results = self.query_service.query(
+            outcome = self.query_service.query_with_policy(
                 PropertyQueryRequest(
                     fluid,
                     tuple(known_props[:2]),
-                    is_ideal,
-                    resolved_policy,
+                    model is CalculationModel.IDEAL_GAS,
+                    ref_code,
+                    model=model.value,
                 )
             )
-            
+            policy = outcome.policy
+            si_results = outcome.values
             self._last_state_point = self._state_point_from_results(
-                si_results, fluid, resolved_policy, is_ideal
+                si_results, fluid, policy.reference_state, policy.is_ideal_gas
             )
-            self._last_si_results = si_results
-            self._last_total_mass_kg = total_mass_kg
-            self._has_calculated_result = True
-            metadata = {
-                "Fluid": fluid,
-                "Engine": "Ideal Gas" if is_ideal else "CoolProp",
-                "Reference": ref_code,
-                "Input units": ", ".join(item.rsplit(" ", 1)[-1] for item in display_inputs[:2]),
-                "Output": "Imperial" if use_imperial else "SI",
-            }
-            self._last_result_metadata = metadata.copy()
+            self._store_success(outcome, total_mass_kg, ", ".join(
+                item.rsplit(" ", 1)[-1] for item in display_inputs[:2]
+            ))
             self._render_cached_result()
 
         except Exception as err:
@@ -1247,3 +1631,101 @@ class PropertyTab(ft.Column):
             self.show_error(error_message)
         finally:
             self.update() # 無論成功或失敗，確保 UI 最終狀態被更新
+    def _store_success(
+        self, outcome: PropertyQueryResult, total_mass_kg: float | None, input_units: str
+    ) -> None:
+        """保存成功查詢的快照；中繼資料顯示實際模型與 concrete 基準，而不是只顯示 Auto。
+
+參數：
+    outcome: 查詢結果與解析快照。
+    total_mass_kg: 廣延性質總質量；未啟用時為 None。
+    input_units: 輸入單位摘要。
+
+回傳：
+    無。"""
+        policy = outcome.policy
+        self._last_policy = policy
+        self._last_si_results = outcome.values
+        self._last_total_mass_kg = total_mass_kg
+        self._has_calculated_result = True
+        metadata = {
+            "Fluid": policy.fluid if policy.canonical_fluid == policy.fluid else f"{policy.fluid}（{policy.canonical_fluid}）",
+            "Engine": policy.model_label,
+            "Reference": policy.reference_label,
+            "Basis": "kJ/kg_dry_air" if policy.model is CalculationModel.HUMID_AIR else "kJ/kg",
+            "Input units": input_units,
+            "Output": "Imperial" if self.output_unit_system == "Imperial" else "SI",
+        }
+        if policy.fallback_reason:
+            metadata["Fallback"] = policy.fallback_reason
+        self._last_result_metadata = metadata
+
+    def _perform_humid_air_calculation(self) -> None:
+        """以濕空氣模型計算：乾球溫度＋一個濕度條件＋海拔；結果為每 kg 乾空氣。
+
+回傳：
+    無。"""
+        errors = False
+        values: dict[str, float] = {}
+        for key, control, code, unit in (
+            ("Tdb", self.humid_dry_bulb_tf, "T", self.humid_dry_bulb_unit.value),
+            ("humidity", self.humidity_value_tf,
+             next(c for k, _, c in HUMIDITY_INPUTS if k == self.humidity_type_dd.value), self.humidity_unit_dd.value),
+        ):
+            control.error_text = None
+            raw = (control.value or "").strip()
+            if not raw:
+                control.error_text = "必填。"
+                errors = True
+                continue
+            try:
+                number = float(raw)
+                if not isfinite(number):
+                    raise ValueError
+                values[key] = self.unit_converter.convert_to_si(code, number, unit)
+            except (TypeError, ValueError):
+                control.error_text = "請輸入有效數值。"
+                errors = True
+        try:
+            altitude = float((self.humid_altitude_tf.value or "0").strip() or "0")
+            if not isfinite(altitude):
+                raise ValueError
+            self.humid_altitude_tf.error_text = None
+        except ValueError:
+            self.humid_altitude_tf.error_text = "請輸入有效海拔（m）。"
+            errors = True
+        if errors:
+            self.result_panel.set_error("濕空氣模型需要乾球溫度與一個濕度條件（RH、濕球溫度或濕度比），請修正欄位。")
+            self.update()
+            return
+        kind = self.humidity_type_dd.value
+        request = HumidAirQueryRequest(
+            dry_bulb_k=values["Tdb"],
+            altitude_m=altitude,
+            relative_humidity=values["humidity"] if kind == "RH" else None,
+            wet_bulb_k=values["humidity"] if kind == "Twb" else None,
+            humidity_ratio=values["humidity"] if kind == "W" else None,
+        )
+        label = next(text for k, text, _ in HUMIDITY_INPUTS if k == kind)
+        self._last_input_summary = "\n".join([
+            "--- 輸入 ---",
+            f"計算模型: {MODEL_LABELS[CalculationModel.HUMID_AIR]}",
+            "物質: Air（濕空氣）",
+            f"乾球溫度: {self.humid_dry_bulb_tf.value} {self.humid_dry_bulb_unit.value}",
+            f"{label}: {self.humidity_value_tf.value} {self.humidity_unit_dd.value}",
+            f"海拔: {altitude:g} m",
+        ])
+        try:
+            outcome = self.query_service.query_humid_air(request)
+            self._last_state_point = AirStatePoint.from_state_mapping(
+                outcome.values, source=StateSource.PROPERTY_QUERY, label="濕空氣狀態查詢"
+            )
+            self._store_success(outcome, None, f"{self.humid_dry_bulb_unit.value}, {self.humidity_unit_dd.value}")
+            self._render_cached_result()
+        except Exception as err:
+            error_message = str(err) if isinstance(err, ValueError) else "無法使用目前條件完成計算。"
+            self._clear_result_presentation_snapshot()
+            self.result_panel.set_error(error_message)
+            self.show_error(error_message)
+        finally:
+            self.update()

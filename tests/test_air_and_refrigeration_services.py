@@ -118,15 +118,17 @@ def test_process_requests_delegate_to_domain(air: AirProcessService) -> None:
 
 
 def test_refrigeration_service_resolves_policy_and_solves() -> None:
-    """未指定 policy 時冷媒使用 ASHRAE、水使用 DEF，並能求解循環與過熱度。
+    """未指定 policy 時冷媒使用 IIR、水使用 DEF；手動指定不支援的基準明確失敗。
 
 回傳：
     無。"""
     service = RefrigerationService(ThermodynamicStateService(CanonicalUnitConverter()))
 
-    assert service.resolve_policy("R32", None) == "ASHRAE"
-    assert service.resolve_policy("R32", "Auto") == "ASHRAE"
-    assert service.resolve_policy("Water", "IIR") == "DEF"
+    assert service.resolve_policy("R32", None) == "IIR"
+    assert service.resolve_policy("R32", "Auto") == "IIR"
+    assert service.resolve_policy("Water", None) == "DEF"
+    with pytest.raises(ValueError, match="IIR"):
+        service.resolve_policy("Water", "IIR")
     assert service.resolve_policy("R32", "nbp") == "NBP"
     with pytest.raises(ValueError):
         service.resolve_policy("R32", "CURRENT")

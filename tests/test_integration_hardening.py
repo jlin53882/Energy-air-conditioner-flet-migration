@@ -699,6 +699,7 @@ def test_refrigeration_cycle_uses_its_own_reference_state(shell) -> None:
     shell.navigate("refrigeration_cycle")
     view = shell.views["refrigeration_cycle"]
     module = view.adapter.modules[0]
+    module.cyc_ref_state.value = "ASHRAE"
     view.perform_calculation(None)
     ashrae = view.adapter.result_text
 
@@ -707,7 +708,11 @@ def test_refrigeration_cycle_uses_its_own_reference_state(shell) -> None:
     iir = view.adapter.result_text
 
     enthalpy_section = "--- 狀態點比焓 ---"
-    assert iir.split(enthalpy_section)[1] != ashrae.split(enthalpy_section)[1]
+    policy_section = "--- 模型與基準 ---"
+    assert iir.split(enthalpy_section)[1].split(policy_section)[0] != (
+        ashrae.split(enthalpy_section)[1].split(policy_section)[0]
+    )
+    assert "參考基準: IIR（手動）" in iir and "參考基準: ASHRAE（手動）" in ashrae
     assert _result_line(iir, "冷房 COP") == _result_line(ashrae, "冷房 COP")
     assert _result_line(iir, "壓縮功 w") == _result_line(ashrae, "壓縮功 w")
 
@@ -721,6 +726,7 @@ def test_condenser_exergy_uses_its_own_reference_state(shell) -> None:
     view = shell.views["condenser"]
     view._handle_tool_change("condenser.exergy")
     module = view.adapter.modules[0]
+    module.cx_ref_state.value = "ASHRAE"
     view.perform_calculation(None)
     ashrae = view.adapter.result_text
 
