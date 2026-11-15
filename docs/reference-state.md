@@ -60,7 +60,7 @@ ResolvedThermoPolicy（不可變快照）→ 計算、結果顯示、圖表、�
 - 只有 P、T 的 `Air` 一律視為乾空氣，不猜濕度。物性頁的「已知條件」列沒有濕度性質，因此 Auto 在物性頁不會自動切到濕空氣（物質為 Air／R729 且模型不是濕空氣時，頁面會顯示提示，但不自動切換）；請在「計算模型」選擇「濕空氣」，輸入乾球溫度＋ RH／濕球溫度／濕度比其中**一個**，總壓由海拔依標準大氣換算。
 - 濕空氣焓（每 kg 乾空氣，含水蒸氣）與 `PropsSI('H', …, 'Air')`（乾空氣工質、DEF 基準）是不同性質，數值相差數百 kJ/kg，不可互比。
 - 本次**沒有**更換濕空氣公式；CoolProp `HAPropsSI` 只作為交叉驗證（25 °C、RH 50 %、海拔 0 m：W、h 差異 < 0.5 %，見測試）。
-- 舊濕空氣模型（`Flet_ui/PsychrometricChart/PsychrometricChart_01_ASHF_model.py`）的中間值（P、Pws、Ws、W、Pw、v、h）不再四捨五入到小數 9 位，回傳完整浮點值；顯示位數只由各畫面的格式化決定。
+- 舊濕空氣模型（`Flet_ui/PsychrometricChart/PsychrometricChart_01_ASHF_model.py`）的中間值（P、Pws、Ws、W、Pw、v、h）不再四捨五入到小數 9 位，回傳完整浮點值；顯示位數只由各畫面的格式化決定。乾球 = 濕球（飽和）時，舊模型算出的 RH 可能有 1e-14 % 等級的浮點誤差（例如 100.00000000000003 %）；`PsychrometricService.calculate_from_tdb_twb` 容許 1e-6 % 並截斷到 0–100 %，不再因此無法計算（master 上原本就有部分飽和輸入會失敗）。
 - 理想氣體不處理飽和或兩相狀態（拒絕乾度輸入），也不得與真實流體的焓、熵比較。
 
 ## 4. 壓力語義

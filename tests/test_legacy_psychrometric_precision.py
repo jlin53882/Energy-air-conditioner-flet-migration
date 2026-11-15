@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+from domain.psychrometrics.service import PsychrometricService
 from Flet_ui.PsychrometricChart import PsychrometricChart_01_ASHF_model as model
+from infrastructure.psychrometrics.legacy_model_adapter import LegacyPsychrometricModelAdapter
 
 
 @pytest.mark.parametrize(
@@ -30,3 +32,27 @@ def test_intermediate_values_are_not_rounded(value, expected: float) -> None:
     result = value()
     assert result == pytest.approx(expected, rel=1e-15, abs=0.0)
     assert result != round(result, 9)
+
+
+@pytest.mark.parametrize("t_db", [-10.0, 0.0, 26.7, 60.0])
+def test_saturation_pressure_is_not_rounded(t_db: float) -> None:
+    """cal_Pws（IAPWS 公式較長，不逐項重寫）同樣回傳完整精度，不是小數 9 位。
+
+回傳：
+    無。"""
+    result = model.cal_Pws(t_db)
+    assert result != round(result, 9)
+
+
+@pytest.mark.parametrize("altitude_m", [0.0, 1000.0])
+def test_saturated_dry_bulb_equals_wet_bulb_gives_rh_100(altitude_m: float) -> None:
+    """乾球 = 濕球（飽和）時 RH 為 100 %；不因 100.00000000000003 這類浮點誤差而無法計算。
+
+回傳：
+    無。"""
+    service = PsychrometricService(LegacyPsychrometricModelAdapter())
+    for i in range(81):
+        t_k = 273.15 + i * 0.5
+        result = service.calculate_from_tdb_twb(t_k, t_k, altitude_m)
+        assert 0.0 <= result["RH"] <= 1.0
+        assert result["RH"] == pytest.approx(1.0, abs=1e-12)
