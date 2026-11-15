@@ -62,6 +62,7 @@ FREQ_COLOR = "#7A5195"
 QE_COLOR = "#2F6FB5"
 QC_COLOR = "#C2410C"
 POWER_COLOR = "#5E6764"
+REHEAT_COLOR = "#D08C1F"
 COP_COLOR = "#2E7D4F"
 
 LoopStarter = Callable[[Callable[[], Awaitable[None]]], None]
@@ -184,6 +185,69 @@ class _LabeledSlider(ft.Column):
         self._callback(value)
 
 
+class _StepSelector(ft.Column):
+    """階梯頻率選擇（30／40／50／60 Hz）與對應的換算說明。"""
+
+    def __init__(self, label: str, steps: tuple[float, ...], value: float, describe: Callable[[float], str],
+                 on_change: Callable[[float], None]) -> None:
+        """建立選擇器。
+
+參數：
+    label: 標題。
+    steps: 可選頻率。
+    value: 預設頻率。
+    describe: 由頻率產生說明文字（例如流量、耗電）。
+    on_change: 選擇改變回呼（參數為 Hz）。
+
+回傳：
+    無。"""
+        self._describe = describe
+        self._callback = on_change
+        self.dropdown = style_dropdown(ft.Dropdown(
+            options=[ft.dropdown.Option(f"{step:g}", f"{step:g} Hz") for step in steps],
+            value=f"{value:g}", on_select=self._on_select, expand=True,
+        ))
+        self.info = ft.Text(describe(value), size=TOKENS.caption, color=TOKENS.text_muted)
+        super().__init__(
+            [ft.Text(label, size=TOKENS.caption, color=TOKENS.text_secondary), ft.Row([self.dropdown]), self.info],
+            spacing=4,
+        )
+
+    @property
+    def value(self) -> float:
+        """目前頻率。
+
+回傳：
+            Hz。"""
+        return float(self.dropdown.value)
+
+    def set_value(self, value: float) -> None:
+        """以程式設定頻率（不觸發回呼）。
+
+參數：
+            value: Hz。
+
+回傳：
+            無。"""
+        self.dropdown.value = f"{value:g}"
+        self.info.value = self._describe(value)
+
+    def _on_select(self, _event: ft.ControlEvent) -> None:
+        """使用者選擇。
+
+參數：
+            _event: 事件。
+
+回傳：
+            無。"""
+        self.info.value = self._describe(self.value)
+        try:
+            self.info.update()
+        except RuntimeError:
+            pass
+        self._callback(self.value)
+
+
 class HeatPumpSimulationView(ft.Column):
     """熱泵動態模擬工作區。"""
 
@@ -237,11 +301,21 @@ class HeatPumpSimulationView(ft.Column):
         self.operation_button = _segmented([("cooling", "冷房"), ("heating", "暖房")], "cooling", self._on_operation)
         self.fan_a = ft.Checkbox(label="送風機 A（3.5 kW）", value=True, on_change=self._on_fans)
         self.fan_b = ft.Checkbox(label="送風機 B（5.3 kW）", value=True, on_change=self._on_fans)
-        self.freq_mode_button = _segmented([("auto", "自動 PI"), ("manual", "手動")], "auto", self._on_freq_mode)
-        self.freq_slider = _LabeledSlider("手動頻率", "Hz", 30, 60, 60, 30, 0, self._on_manual_freq)
-        self.freq_slider.disabled = True
-        self.cold_gpm = _LabeledSlider("冰水泵", "GPM", 6, 20, 12.06, 56, 2, self._on_gpm)
-        self.hot_gpm = _LabeledSlider("熱水泵", "GPM", 6, 20, 12.06, 56, 2, self._on_gpm)
+        params = self.service.params
+        self.freq_mode_button = _segmented([("auto", "自動 PID"), ("manual", "手動")], "auto", self._on_freq_mode)
+        self.freq_step = _StepSelector(
+            "手動頻率（階梯）", params.compressor.frequency_steps_hz, 60.0,
+            lambda hz: f"{hz:g} Hz" + ("（低於原廠 50–60 Hz 工作範圍）" if hz < params.compressor.manufacturer_min_frequency_hz else ""),
+            self._on_manual_freq)
+        self.freq_step.disabled = True
+        self.cold_pump = _StepSelector(
+            "冰水泵頻率", params.cold_pump.frequency_steps_hz, 60.0,
+            lambda hz: f"{params.cold_pump.flow_gpm(hz):.2f} GPM · {params.cold_pump.power_w(hz):.0f} W", self._on_pumps)
+        self.hot_pump = _StepSelector(
+            "熱水泵頻率", params.hot_pump.frequency_steps_hz, 60.0,
+            lambda hz: f"{params.hot_pump.flow_gpm(hz):.2f} GPM · {params.hot_pump.power_w(hz):.0f} W", self._on_pumps)
+        self.reheat_slider = _LabeledSlider("除濕後再熱（占盤管負荷）", "%", 0, params.reheat.max_fraction * 100,
+                                            self._settings.reheat_fraction * 100, 12, 0, self._on_reheat)
         self.room_slider = _LabeledSlider("室溫", "°C", 10, 35, 27, 50, 1, self._on_environment)
         self.outdoor_slider = _LabeledSlider("外氣", "°C", -10, 45, 30, 110, 1, self._on_environment)
         self.error_text = ft.Text("", size=TOKENS.caption, color=TOKENS.error, visible=False)
@@ -255,6 +329,7 @@ class HeatPumpSimulationView(ft.Column):
                 ("cooling", "冷量"), ("heating", "熱量"), ("power", "壓縮機耗電"), ("fan_load", "送風機負荷"),
                 ("total_power", "總耗電（含水泵）"), ("cop", "累計系統 COP"), ("discharge", "排氣溫度"),
                 ("flow", "冷媒流量"), ("pr", "壓縮比"), ("aux", "送風機＋水泵"),
+                ("reheat", "再熱熱量"), ("net_cooling", "淨冷卻量（扣再熱）"),
             )
         }
         self.warning_row = ft.Row(wrap=True, spacing=TOKENS.spacing_xs)
@@ -290,12 +365,14 @@ class HeatPumpSimulationView(ft.Column):
                 ft.Text("運轉方式（兩台送風機統一切換）", size=TOKENS.caption, color=TOKENS.text_secondary),
                 self.operation_button,
                 ft.Row([self.fan_a, self.fan_b], wrap=True),
-                ft.Text("壓縮機頻率（30～60 Hz）", size=TOKENS.caption, color=TOKENS.text_secondary),
+                ft.Text("壓縮機頻率（日立 E505DH-49A2W，變頻器階梯）", size=TOKENS.caption,
+                        color=TOKENS.text_secondary),
                 self.freq_mode_button,
-                self.freq_slider,
+                self.freq_step,
                 ft.Divider(height=8, color=TOKENS.border),
-                self.cold_gpm,
-                self.hot_gpm,
+                self.cold_pump,
+                self.hot_pump,
+                self.reheat_slider,
                 self.room_slider,
                 self.outdoor_slider,
                 self.error_text,
@@ -321,7 +398,8 @@ class HeatPumpSimulationView(ft.Column):
         response_card = EngineeringCard("時間響應", ft.Column([
             self.response_chart,
             ft.Row([self._legend_item(QE_COLOR, "冷量 kW"), self._legend_item(QC_COLOR, "熱量 kW"),
-                    self._legend_item(POWER_COLOR, "總耗電 kW"), self._legend_item(COP_COLOR, "瞬時系統 COP")],
+                    self._legend_item(POWER_COLOR, "總耗電 kW"), self._legend_item(COP_COLOR, "瞬時系統 COP"),
+                    self._legend_item(REHEAT_COLOR, "再熱 kW")],
                    spacing=TOKENS.spacing_md, wrap=True),
         ]), icon=ft.Icons.TIMELINE)
         response_card.col = {"xs": 12, "lg": 6}
@@ -545,7 +623,7 @@ class HeatPumpSimulationView(ft.Column):
     無。"""
         frequency_ratio = record.frequency_hz / 60.0 if record.compressor_on else 0.0
         self._refrigerant_phase += 90.0 * frequency_ratio * real_dt_s
-        gpm = (self._settings.cold_pump_gpm + self._settings.hot_pump_gpm) / 2
+        gpm = (record.cold_pump_gpm + record.hot_pump_gpm) / 2
         self._water_phase += 60.0 * gpm / 12.06 * real_dt_s
         self._rotor_angle = (self._rotor_angle + 2 * math.pi * 1.2 * frequency_ratio * real_dt_s) % (2 * math.pi)
 
@@ -590,10 +668,11 @@ class HeatPumpSimulationView(ft.Column):
     無。"""
         operation = OperationMode(_selected(self.operation_button))
         defaults = default_settings(operation)
+        self.reheat_slider.disabled = operation is OperationMode.HEATING
         self.room_slider.set_value(defaults.room_k - 273.15)
         self.outdoor_slider.set_value(defaults.outdoor_k - 273.15)
         self._apply_settings(replace(self._settings, operation=operation, room_k=defaults.room_k,
-                                     outdoor_k=defaults.outdoor_k))
+                                     outdoor_k=defaults.outdoor_k, reheat_fraction=self.reheat_slider.value / 100.0))
 
     def _on_fans(self, _event: ft.ControlEvent) -> None:
         """送風機台數。
@@ -615,9 +694,9 @@ class HeatPumpSimulationView(ft.Column):
 回傳：
     無。"""
         mode = FrequencyMode(_selected(self.freq_mode_button))
-        self.freq_slider.disabled = mode is FrequencyMode.AUTO
+        self.freq_step.disabled = mode is FrequencyMode.AUTO
         self._apply_settings(replace(self._settings, frequency_mode=mode,
-                                     manual_frequency_hz=self.freq_slider.value))
+                                     manual_frequency_hz=self.freq_step.value))
 
     def _on_manual_freq(self, value: float) -> None:
         """手動頻率。
@@ -629,16 +708,26 @@ class HeatPumpSimulationView(ft.Column):
     無。"""
         self._apply_settings(replace(self._settings, manual_frequency_hz=value))
 
-    def _on_gpm(self, _value: float) -> None:
-        """水泵 GPM。
+    def _on_pumps(self, _value: float) -> None:
+        """水泵頻率（冰水泵、熱水泵各自選擇階梯）。
 
 參數：
     _value: 新值。
 
 回傳：
     無。"""
-        self._apply_settings(replace(self._settings, cold_pump_gpm=self.cold_gpm.value,
-                                     hot_pump_gpm=self.hot_gpm.value))
+        self._apply_settings(replace(self._settings, cold_pump_hz=self.cold_pump.value,
+                                     hot_pump_hz=self.hot_pump.value))
+
+    def _on_reheat(self, value: float) -> None:
+        """除濕後再熱比例（%）。
+
+參數：
+    value: 百分比。
+
+回傳：
+    無。"""
+        self._apply_settings(replace(self._settings, reheat_fraction=value / 100.0))
 
     def _on_environment(self, _value: float) -> None:
         """室溫與外氣。
@@ -715,6 +804,8 @@ class HeatPumpSimulationView(ft.Column):
         k["discharge"].set_value(format_temperature(record.discharge_k), "°C" if on else "")
         k["pr"].set_value(f"{record.pressure_ratio:.2f}" if on else "—")
         k["aux"].set_value(format_power(record.fan_power_w + record.pump_power_w), "kW")
+        k["reheat"].set_value(format_power(record.reheat_w), "kW")
+        k["net_cooling"].set_value(format_power(record.net_cooling_w), "kW")
         k["flow"].set_value(f"{record.mass_flow_kg_s * 1000:.1f}" if on else "—", "g/s" if on else "")
         k["cooling"].set_value(format_power(record.cooling_w), "kW")
         k["heating"].set_value(format_power(record.heating_w), "kW")
@@ -733,6 +824,14 @@ class HeatPumpSimulationView(ft.Column):
             )
             for code in sorted(record.warnings)
         ]
+        if on and record.frequency_hz < self.service.params.compressor.manufacturer_min_frequency_hz:
+            self.warning_row.controls.append(ft.Container(
+                ft.Text(f"壓縮機低於原廠 {self.service.params.compressor.manufacturer_min_frequency_hz:g}–"
+                        f"{self.service.params.compressor.max_frequency_hz:g} Hz 工作範圍",
+                        size=TOKENS.caption, color=TOKENS.text_secondary),
+                bgcolor=TOKENS.surface_variant, border_radius=TOKENS.radius_pill,
+                padding=ft.Padding.symmetric(horizontal=10, vertical=4),
+            ))
         self.trip_button.visible = "tripped" in record.warnings
         self._update_charts()
         self._sync_events()
@@ -786,6 +885,7 @@ class HeatPumpSimulationView(ft.Column):
                 series([r.heating_w / 1000 for r in samples], QC_COLOR),
                 series([r.total_power_w / 1000 for r in samples], POWER_COLOR),
                 series(cops, COP_COLOR),
+                series([r.reheat_w / 1000 for r in samples], REHEAT_COLOR),
             ]
         else:
             self.trend_chart.data_series = []

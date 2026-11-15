@@ -1,6 +1,8 @@
 """多元取熱雙效熱泵動態模擬的 domain 測試（使用實際 CoolProp）。
 
-驗證基準為 ``docs/simulation-model.md`` §4 的原型計算結果。
+壓縮機為日立 E505DH-49A2W（49 cc 渦卷式，額定 12.9 kW／5.13 kW），以外接變頻器在
+30／40／50／60 Hz 階梯運轉；水泵同樣為四段變頻；冷房時熱水桶供除濕後再熱盤管。
+情境數值對照 ``docs/simulation-model.md`` §4。
 """
 
 from __future__ import annotations
@@ -11,17 +13,23 @@ import pytest
 
 from domain.heat_pump import (
     VALVES_OPEN,
+    WARNING_FROST,
+    WARNING_HP_LIMITING,
     WARNING_TRIPPED,
     ControlParameters,
     CycleSettings,
     CycleTable,
     FrequencyMode,
+    FrequencyStepper,
     HeatPumpParameters,
     HeatPumpSimulation,
     OperatingConditions,
     OperatingPointSolver,
     OperationMode,
+    OutdoorHeatExchangerParameters,
+    PidController,
     PlateExchanger,
+    PumpParameters,
     RefrigerantMode,
     SimulationSettings,
     celsius,
@@ -37,6 +45,7 @@ from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units.converter import CanonicalUnitConverter
 
 HOUR = 3600.0
+STEPS = (30.0, 40.0, 50.0, 60.0)
 
 
 @pytest.fixture(scope="module")
@@ -50,15 +59,18 @@ def provider() -> ThermodynamicStateService:
 
 @pytest.fixture(scope="module")
 def table(provider: ThermodynamicStateService) -> CycleTable:
-    """預設設定（SH 5 K、SC 5 K、總效率 0.66）的完整性質表。
+    """預設設定（SH 5 K、SC 5 K、壓縮機總效率 0.5683）的完整性質表。
 
 回傳：
     CycleTable。"""
     return CycleTable.build(provider)
 
 
+_SCENARIOS: dict = {}
+
+
 def _run(table: CycleTable, operation: OperationMode, fans: set[str], hours: float = 3.0, **overrides):
-    """以預設環境執行情境。
+    """以預設環境執行情境（相同參數的情境只計算一次）。
 
 參數：
     table: 性質表。
@@ -69,10 +81,13 @@ def _run(table: CycleTable, operation: OperationMode, fans: set[str], hours: flo
 
 回傳：
     (模擬器, 記錄, 摘要)。"""
-    settings = replace(default_settings(operation), fans=frozenset(fans), **overrides)
-    sim = HeatPumpSimulation(table, settings=settings)
-    records = sim.run(hours * HOUR)
-    return sim, records, summarize(records, sim.events)
+    key = (operation, tuple(sorted(fans)), hours, tuple(sorted(overrides.items(), key=lambda item: item[0])))
+    if key not in _SCENARIOS:
+        settings = replace(default_settings(operation), fans=frozenset(fans), **overrides)
+        sim = HeatPumpSimulation(table, settings=settings)
+        records = sim.run(hours * HOUR)
+        _SCENARIOS[key] = (sim, records, summarize(records, sim.events))
+    return _SCENARIOS[key]
 
 
 # ---- 單元：參數換算與元件模型 ----
@@ -88,14 +103,27 @@ def test_gpm_conversion_matches_spec() -> None:
 
 @pytest.mark.parametrize(
     ("ratio", "expected"),
-    [(1.7, 0.957), (2.0, 0.940), (2.6, 0.907), (3.4, 0.867), (4.1, 0.834), (5.0, 0.793)],
+    [(1.7, 0.9273), (2.0, 0.8986), (2.6, 0.8443), (3.4, 0.7767), (4.1, 0.7208), (5.0, 0.6524)],
 )
 def test_volumetric_efficiency_follows_clearance_model(ratio: float, expected: float) -> None:
-    """餘隙容積模型與規格 §1.8 表一致。
+    """餘隙容積模型（C = 0.1498、k = 1.341）與規格 §1.8 表一致。
 
 回傳：
     無。"""
-    assert volumetric_efficiency(CompressorParameters(), ratio) == pytest.approx(expected, abs=1.5e-3)
+    assert volumetric_efficiency(CompressorParameters(), ratio) == pytest.approx(expected, abs=1e-3)
+
+
+def test_compressor_defaults_describe_hitachi_scroll() -> None:
+    """新壓縮機：日立 E505DH-49A2W、49 cc、階梯 30／40／50／60 Hz。
+
+回傳：
+    無。"""
+    compressor = CompressorParameters()
+    assert compressor.model == "Hitachi E505DH-49A2W"
+    assert compressor.displacement_m3 == pytest.approx(49e-6)
+    assert compressor.frequency_steps_hz == STEPS
+    assert (compressor.min_frequency_hz, compressor.max_frequency_hz) == (30.0, 60.0)
+    assert compressor.rated_cooling_w == 12_900.0 and compressor.rated_power_w == 5_130.0
 
 
 def test_refrigerant_side_resistance_reproduces_design_ua() -> None:
@@ -146,6 +174,116 @@ def test_water_side_coefficient_rejects_non_positive_flow() -> None:
         PlateExchanger(params.condenser, params.geometry, resistance).ua(0.0)
 
 
+def test_outdoor_heat_exchanger_follows_manufacturer_table() -> None:
+    """室外熱交換器（表 2.1.5）：11,348 kcal/hr = 13.2 kW、56.4 CMM、冷媒 57／52 °C、370 kg/hr；
+    設計進風溫度為假設值 35 °C。有效熱導 G = 13.2 kW ÷ (54.5 − 35) K = 0.677 kW/K。
+
+回傳：
+    無。"""
+    outdoor = OutdoorHeatExchangerParameters()
+    assert outdoor.rated_capacity_w == pytest.approx(13_198.0, rel=1e-3)
+    assert outdoor.refrigerant_flow_kg_s == pytest.approx(0.1028, abs=1e-4)
+    assert outdoor.air_capacity_rate_w_k == pytest.approx(1_083.0, rel=1e-2)
+    assert outdoor.conductance_w_k == pytest.approx(677.0, rel=1e-2)
+    assert outdoor.effectiveness == pytest.approx(0.625, abs=2e-3)
+    assert outdoor.ua_w_k == pytest.approx(1_062.0, rel=1e-2)
+    assert HeatPumpParameters().outdoor_ua_w_k == pytest.approx(outdoor.conductance_w_k)
+    assert replace(outdoor, design_air_inlet_c=32.0).conductance_w_k < outdoor.conductance_w_k
+
+
+def test_pump_follows_affinity_laws() -> None:
+    """變頻水泵：流量 ∝ f，耗電 ∝ f³（60 Hz 為 12.06 GPM、0.5 kW）。
+
+回傳：
+    無。"""
+    pump = PumpParameters()
+    assert pump.frequency_steps_hz == STEPS
+    for hz, gpm, watts in ((60.0, 12.06, 500.0), (50.0, 10.05, 289.0), (40.0, 8.04, 148.1), (30.0, 6.03, 62.5)):
+        assert pump.flow_gpm(hz) == pytest.approx(gpm, abs=0.01)
+        assert pump.power_w(hz) == pytest.approx(watts, abs=0.5)
+
+
+# ---- PID 與階梯量化器 ----
+
+
+def test_pid_proportional_action_and_clamping() -> None:
+    """純比例：輸出 = bias + Kp·e，並夾在上下限內。
+
+回傳：
+    無。"""
+    pid = PidController(kp=10.0, ti_s=0.0, td_s=0.0, out_min=30.0, out_max=60.0, bias=30.0)
+    assert pid.update(1.5, 5.0) == pytest.approx(45.0)
+    assert pid.update(-2.0, 5.0) == 30.0
+    assert pid.update(9.0, 5.0) == 60.0
+    assert pid.update(9.0, 5.0, out_max=50.0) == 50.0
+
+
+def test_pid_integral_accumulates_and_does_not_wind_up() -> None:
+    """積分項在輸出未飽和時累積；輸出已頂到上限時不再累積（抗積分飽和）。
+
+回傳：
+    無。"""
+    pid = PidController(kp=10.0, ti_s=100.0, td_s=0.0, out_min=30.0, out_max=60.0, bias=30.0)
+    pid.update(1.0, 10.0)
+    first = pid.integral
+    assert first == pytest.approx(10.0 / 100.0 * 1.0 * 10.0)
+    for _ in range(50):
+        pid.update(5.0, 10.0)
+    saturated = pid.integral
+    for _ in range(50):
+        pid.update(5.0, 10.0)
+    assert pid.integral == pytest.approx(saturated)
+    assert pid.update(5.0, 10.0) == 60.0
+
+
+def test_pid_derivative_damps_a_falling_error() -> None:
+    """誤差正在下降時，微分項讓輸出低於沒有微分的 PI（提早減速）。
+
+回傳：
+    無。"""
+    with_d = PidController(kp=10.0, ti_s=0.0, td_s=30.0, out_min=0.0, out_max=100.0, bias=30.0)
+    without_d = PidController(kp=10.0, ti_s=0.0, td_s=0.0, out_min=0.0, out_max=100.0, bias=30.0)
+    errors = [3.0, 2.9, 2.8, 2.7, 2.6]
+    out_with = [with_d.update(e, 5.0) for e in errors]
+    out_without = [without_d.update(e, 5.0) for e in errors]
+    assert out_with[0] == pytest.approx(out_without[0])
+    assert out_with[-1] < out_without[-1]
+
+
+def test_pid_preset_is_bumpless_and_reset_clears_state() -> None:
+    """preset 讓下一次輸出等於指定值；reset 清除積分與微分狀態；dt 必須為正。
+
+回傳：
+    無。"""
+    pid = PidController(kp=10.0, ti_s=300.0, td_s=30.0, out_min=30.0, out_max=60.0, bias=30.0)
+    pid.preset(45.0, 0.5)
+    assert pid.output(0.5) == pytest.approx(45.0)
+    pid.update(2.0, 5.0)
+    pid.reset()
+    assert pid.integral == 0.0 and pid.output(0.0) == pytest.approx(30.0)
+    with pytest.raises(ValueError):
+        pid.update(1.0, 0.0)
+
+
+def test_stepper_uses_hysteresis_dwell_and_cap() -> None:
+    """階梯量化：過中點加遲滯才升階；變階後至少停留 dwell；高於上限立即降階。
+
+回傳：
+    無。"""
+    stepper = FrequencyStepper(STEPS, hysteresis_hz=2.0, dwell_s=60.0)
+    assert stepper.nearest(44.0) == 40.0 and stepper.nearest(46.0) == 50.0
+    assert stepper.start(58.0, 60.0, now_s=0.0) == 60.0
+    assert stepper.update(33.0, 60.0, now_s=30.0) == 60.0  # 停留時間未到
+    assert stepper.update(33.0, 60.0, now_s=61.0) == 50.0  # 一次只降一階
+    assert stepper.update(44.0, 60.0, now_s=125.0) == 50.0  # 低於中點 45 但未超過遲滯（43）
+    assert stepper.update(42.9, 60.0, now_s=130.0) == 40.0
+    assert stepper.update(60.0, 60.0, now_s=200.0) == 50.0  # 升階一次（40 → 50）
+    assert stepper.update(60.0, 45.0, now_s=201.0) == 40.0  # 上限 45 Hz：立即降到 40
+    assert stepper.cap_step(20.0) == 30.0  # 上限低於最低階時取最低階
+    with pytest.raises(ValueError):
+        FrequencyStepper(())
+
+
 # ---- 性質表與壓縮機 ----
 
 
@@ -156,6 +294,7 @@ def test_cycle_table_interpolation_matches_direct_state_queries(
 
 回傳：
     無。"""
+    efficiency = CompressorParameters().overall_efficiency
     te, tc = celsius(5.3), celsius(41.7)
     props = table.properties(te, tc)
     pe = provider.calculate_state_si("R410A", [("T", te), ("Q", 1.0)], "ASHRAE")["P"]
@@ -163,7 +302,8 @@ def test_cycle_table_interpolation_matches_direct_state_queries(
     suction = provider.calculate_state_si("R410A", [("T", te + 5.0), ("P", pe)], "ASHRAE")
     liquid = provider.calculate_state_si("R410A", [("T", tc - 5.0), ("P", pc)], "ASHRAE")
     h2s = provider.calculate_state_si("R410A", [("P", pc), ("S", suction["S"])], "ASHRAE")["H"]
-    h2 = suction["H"] + (h2s - suction["H"]) / 0.66
+    h2 = suction["H"] + (h2s - suction["H"]) / efficiency
+    assert table.overall_efficiency == pytest.approx(efficiency)
     assert props.evaporating_pressure_pa == pytest.approx(pe, rel=1e-3)
     assert props.condensing_pressure_pa == pytest.approx(pc, rel=1e-3)
     assert props.suction_density_kg_m3 == pytest.approx(suction["D"], rel=1e-3)
@@ -183,10 +323,13 @@ def test_cycle_table_rejects_condensing_not_above_evaporating(table: CycleTable)
 
 
 def test_compressor_reproduces_manufacturer_rating(provider: ThermodynamicStateService) -> None:
-    """額定點 7.2/54.4 °C、SH 11.1 K、SC 8.3 K、60 Hz：冷量 9.70 kW、耗電 3.32 kW（原廠 9.7／3.325）。
+    """額定點 7.2/54.4 °C、SH 11.1 K、SC 8.3 K、60 Hz：冷量 12.9 kW、耗電 5.13 kW（原廠資料表）。
+
+    額定工況為假設（資料表未註明）；本測試確認 C 與總效率是由該點反推。
 
 回傳：
     無。"""
+    compressor = CompressorParameters()
     settings = CycleSettings(superheat_k=11.1, subcooling_k=8.3)
     rated = CycleTable.build(
         provider,
@@ -195,24 +338,26 @@ def test_compressor_reproduces_manufacturer_rating(provider: ThermodynamicStateS
         condensing_range_k=(celsius(53.0), celsius(56.0)),
         step_k=0.2,
     )
-    perf = compressor_performance(rated, CompressorParameters(), celsius(7.2), celsius(54.4), 60.0)
-    assert perf.cooling_w == pytest.approx(9_700.0, rel=1e-2)
-    assert perf.power_w == pytest.approx(3_320.0, rel=1e-2)
+    perf = compressor_performance(rated, compressor, celsius(7.2), celsius(54.4), compressor.rated_frequency_hz)
+    assert perf.cooling_w == pytest.approx(compressor.rated_cooling_w, rel=1e-2)
+    assert perf.power_w == pytest.approx(compressor.rated_power_w, rel=1e-2)
     assert perf.pressure_ratio == pytest.approx(3.40, abs=0.01)
 
 
 def test_compressor_design_point_and_frequency_scaling(table: CycleTable) -> None:
-    """設計點 5/40 °C：冷量 10.66 kW、耗電 2.52 kW、排氣約 71 °C；能力與頻率成正比。
+    """設計點 5/40 °C、60 Hz：冷量 14.7 kW、耗電 4.04 kW、排氣約 76 °C；能力與頻率成正比、COP 不變。
 
 回傳：
     無。"""
     params = CompressorParameters()
     at60 = compressor_performance(table, params, celsius(5.0), celsius(40.0), 60.0)
-    assert at60.cooling_w == pytest.approx(10_660.0, rel=1e-2)
-    assert at60.power_w == pytest.approx(2_520.0, rel=1e-2)
-    assert at60.properties.discharge_temperature_k == pytest.approx(celsius(71.0), abs=0.5)
-    at30 = compressor_performance(table, params, celsius(5.0), celsius(40.0), 30.0)
-    assert at30.cooling_w == pytest.approx(at60.cooling_w / 2.0, rel=1e-9)
+    assert at60.cooling_w == pytest.approx(14_730.0, rel=1e-2)
+    assert at60.power_w == pytest.approx(4_040.0, rel=1e-2)
+    assert at60.properties.discharge_temperature_k == pytest.approx(celsius(76.4), abs=0.5)
+    for hz in (30.0, 40.0, 50.0):
+        at_step = compressor_performance(table, params, celsius(5.0), celsius(40.0), hz)
+        assert at_step.cooling_w == pytest.approx(at60.cooling_w * hz / 60.0, rel=1e-9)
+        assert at_step.cooling_w / at_step.power_w == pytest.approx(at60.cooling_w / at60.power_w)
 
 
 @pytest.mark.parametrize("mode", list(RefrigerantMode))
@@ -227,7 +372,7 @@ def test_operating_point_balances_both_heat_exchangers(table: CycleTable, mode: 
         cold_water_k=celsius(12.0),
         hot_water_k=celsius(38.0),
         outdoor_k=celsius(30.0 if mode is RefrigerantMode.SMART_COOLING else 15.0),
-        frequency_hz=45.0,
+        frequency_hz=40.0,
         evaporator_conductance_w_k=1_290.0,
         condenser_conductance_w_k=2_217.0,
         outdoor_ua_w_k=params.outdoor_ua_w_k,
@@ -246,92 +391,241 @@ def test_operating_point_balances_both_heat_exchangers(table: CycleTable, mode: 
 
 
 def test_evaporating_temperature_is_capped(table: CycleTable) -> None:
-    """冰水很熱時蒸發溫度不超過 15 °C 上限。
+    """冰水很熱、能力不大（30 Hz）時蒸發溫度頂在 15 °C 上限；60 Hz 時壓縮機吸得更多，蒸發溫度落在上限以下。
 
 回傳：
     無。"""
     params = HeatPumpParameters()
-    conditions = OperatingConditions(
-        RefrigerantMode.DUAL, celsius(30.0), celsius(30.0), celsius(30.0), 60.0, 1_290.0, 2_217.0, 551.0
-    )
-    perf = OperatingPointSolver(table, params).solve(conditions)
-    assert perf.evaporating_k == pytest.approx(params.control.max_evaporating_k, abs=1e-6)
+
+    def solve(frequency_hz: float):
+        conditions = OperatingConditions(
+            RefrigerantMode.DUAL, celsius(30.0), celsius(30.0), celsius(30.0), frequency_hz, 1_290.0, 2_217.0, 677.0
+        )
+        return OperatingPointSolver(table, params).solve(conditions)
+
+    assert solve(30.0).evaporating_k == pytest.approx(params.control.max_evaporating_k, abs=1e-6)
+    assert solve(60.0).evaporating_k < params.control.max_evaporating_k - 0.5
 
 
-# ---- 情境（規格 §4.3） ----
+# ---- 情境（規格 §4） ----
 
 
-def test_cooling_with_fan_b_holds_setpoint_by_frequency(table: CycleTable) -> None:
-    """冷房、送風機 B：6.7 min 切智慧冷房，之後連續降頻把冰水穩定在 7 °C，不停機。
+def _frequencies(records) -> set[float]:
+    """運轉中記錄出現過的頻率。
+
+參數：
+    records: 時間步記錄。
+
+回傳：
+    頻率集合。"""
+    return {r.frequency_hz for r in records if r.compressor_on}
+
+
+@pytest.mark.parametrize(
+    ("operation", "fans"),
+    [(OperationMode.COOLING, {"A", "B"}), (OperationMode.COOLING, {"B"}), (OperationMode.HEATING, {"B"})],
+)
+def test_compressor_only_runs_on_frequency_steps(table: CycleTable, operation: OperationMode, fans: set[str]) -> None:
+    """自動控制下，運轉中的頻率只會是 30／40／50／60 Hz，且變階之間至少相隔停留時間。
 
 回傳：
     無。"""
-    sim, records, summary = _run(table, OperationMode.COOLING, {"B"})
-    first = sim.events[0]
-    assert first.code == "smart_cooling"
-    assert first.time_s / 60 == pytest.approx(6.7, abs=0.3)
+    _sim, records, _summary = _run(table, operation, fans)
+    assert _frequencies(records) <= set(STEPS)
+    previous = None
+    last_change = None
+    dwell = ControlParameters().step_dwell_s
+    for record in records:
+        if not record.compressor_on:
+            previous = None
+            continue
+        if previous is not None and record.frequency_hz != previous:
+            # 因高壓限頻而降階可以立即發生；升階與一般降階必須遵守停留時間。
+            if record.frequency_hz > previous and last_change is not None:
+                assert record.time_s - last_change >= dwell - 1e-6
+            last_change = record.time_s
+        previous = record.frequency_hz
+
+
+def test_cooling_with_both_fans_pulls_down_at_high_frequency(table: CycleTable) -> None:
+    """冷房、送風機 A+B：大負荷下壓縮機多在 50～60 Hz，不停機，冰水降到約 7 °C。
+
+回傳：
+    無。"""
+    sim, records, summary = _run(table, OperationMode.COOLING, {"A", "B"})
+    assert sim.events[0].code == "smart_cooling" and sim.events[0].time_s / 60 == pytest.approx(5.0, abs=1.0)
     assert summary.stops == 0
-    assert records[-1].cold_water_k == pytest.approx(celsius(7.0), abs=0.05)
-    assert records[-1].frequency_hz == pytest.approx(33.3, abs=0.5)
-    assert summary.mean_frequency_hz == pytest.approx(39.2, abs=1.0)
-    assert summary.system_cop == pytest.approx(1.66, abs=0.03)
-    assert records[-1].valves_open == VALVES_OPEN[RefrigerantMode.SMART_COOLING]
+    assert summary.mean_frequency_hz > 50.0
+    assert celsius(6.5) < records[-1].cold_water_k < celsius(8.5)
+    assert summary.max_condensing_k < celsius(58.5)
+    assert 1.2 < summary.system_cop < 1.8
+    assert records[0].frequency_hz == 60.0
 
 
-def test_cooling_with_fan_a_cycles_below_minimum_frequency(table: CycleTable) -> None:
-    """冷房、送風機 A：負荷低於 30 Hz 能力，壓縮機啟停；停機期間水泵與送風機仍耗電。
+def test_cooling_with_fan_b_cycles_between_steps(table: CycleTable) -> None:
+    """冷房、送風機 B：負荷低於 30 Hz 能力，頻率在階梯間調整並偶爾停機，仍維持約 7 °C。
 
 回傳：
     無。"""
-    sim, records, summary = _run(table, OperationMode.COOLING, {"A"}, hours=1.5)
-    assert summary.stops >= 2
+    _sim, records, summary = _run(table, OperationMode.COOLING, {"B"})
+    assert 3 <= summary.stops <= 12
+    assert 40.0 < summary.mean_frequency_hz < 58.0
+    assert {40.0, 50.0} <= _frequencies(records)
+    steady = [r for r in records if r.time_s > 2 * HOUR]
+    assert all(celsius(5.0) < r.cold_water_k < celsius(10.5) for r in steady)
+    assert 1.0 < summary.system_cop < 1.6
+
+
+def test_cooling_with_fan_a_stops_and_restarts_with_dwell(table: CycleTable) -> None:
+    """冷房、送風機 A：停機後至少 3 min 才能重啟；停機期間水泵與送風機仍耗電。
+
+回傳：
+    無。"""
+    sim, records, summary = _run(table, OperationMode.COOLING, {"A"})
+    assert summary.stops >= 3
     stop = next(e for e in sim.events if e.code == "stop")
-    assert stop.time_s / 60 == pytest.approx(36.9, abs=1.0)
+    start = next(e for e in sim.events if e.code == "start" and e.time_s > stop.time_s)
+    assert start.time_s - stop.time_s >= 180.0
     off = [r for r in records if not r.compressor_on]
     assert off
-    assert all(r.total_power_w == pytest.approx(0.085e3 + 1_000.0) for r in off)
-    start = next(e for e in sim.events if e.code == "start")
+    assert all(r.total_power_w == pytest.approx(85.0 + 1_000.0) for r in off if r.time_s > 60)
+
+
+def test_heating_with_both_fans_switches_to_outdoor_evaporator(table: CycleTable) -> None:
+    """暖房、送風機 A+B：約 22 min 冰水降到 5 °C，切換智慧暖房（室外吸熱）並維持運轉。
+
+回傳：
+    無。"""
+    sim, records, summary = _run(table, OperationMode.HEATING, {"A", "B"})
+    switch = next(e for e in sim.events if e.code == "smart_heating")
+    assert switch.time_s / 60 == pytest.approx(22.2, abs=2.0)
+    assert summary.stops == 0
+    after = [r for r in records if r.time_s > switch.time_s + 60]
+    assert all(r.mode is RefrigerantMode.SMART_HEATING and r.compressor_on for r in after)
+    assert records[-1].valves_open == VALVES_OPEN[RefrigerantMode.SMART_HEATING]
+    assert celsius(44.0) < records[-1].hot_water_k < celsius(46.0)
+
+
+def test_heating_with_fan_a_stops_at_46_and_restarts_at_42(table: CycleTable) -> None:
+    """暖房、送風機 A：30 Hz 仍過頭時熱水 ≥ 46 °C 停機，≤ 42 °C 且停滿 3 min 重啟。
+
+回傳：
+    無。"""
+    sim, records, summary = _run(table, OperationMode.HEATING, {"A"}, hours=1.5)
+    stop = next(e for e in sim.events if e.code == "stop")
+    start = next(e for e in sim.events if e.code == "start" and e.time_s > stop.time_s)
     assert start.time_s - stop.time_s >= 180.0
+    at_stop = next(r for r in records if r.time_s + r.dt_s == pytest.approx(stop.time_s))
+    at_start = next(r for r in records if r.time_s + r.dt_s == pytest.approx(start.time_s))
+    assert at_stop.hot_water_k >= celsius(46.0) and at_stop.frequency_hz == 30.0
+    assert at_start.hot_water_k <= celsius(42.0)
+    assert summary.stops >= 2
 
 
-def test_cooling_with_both_fans_runs_at_full_frequency(table: CycleTable) -> None:
-    """冷房、送風機 A+B：能力不足，全程 60 Hz，冰水平衡在約 8.5 °C。
+def test_new_compressor_overdrives_the_existing_plate_evaporator(table: CycleTable) -> None:
+    """已知限制：板式蒸發器是依舊壓縮機（9.7 kW）選的，50～60 Hz 時蒸發溫度降到 0 °C 以下，
+    模型以「蒸發溫度 < 0 °C」警示呈現（水側有結冰風險）。
 
 回傳：
     無。"""
     _sim, records, summary = _run(table, OperationMode.COOLING, {"A", "B"})
-    assert summary.stops == 0
-    assert summary.mean_frequency_hz == pytest.approx(60.0)
-    assert records[-1].cold_water_k == pytest.approx(celsius(8.48), abs=0.1)
-    assert summary.system_cop == pytest.approx(1.73, abs=0.03)
-    assert summary.max_condensing_k == pytest.approx(celsius(56.7), abs=0.3)
+    assert WARNING_FROST in summary.warnings
+    low = [r for r in records if r.compressor_on and r.evaporating_k < celsius(0.0)]
+    assert low and all(r.frequency_hz >= 50.0 for r in low)
 
 
-def test_heating_with_fan_b_holds_hot_water_setpoint(table: CycleTable) -> None:
-    """暖房、送風機 B：31 min 切智慧暖房，熱水穩定在 45 °C。
-
-回傳：
-    無。"""
-    sim, records, summary = _run(table, OperationMode.HEATING, {"B"})
-    switch = next(e for e in sim.events if e.code == "smart_heating")
-    assert switch.time_s / 60 == pytest.approx(31.3, abs=1.0)
-    assert summary.stops == 0
-    assert records[-1].hot_water_k == pytest.approx(celsius(45.0), abs=0.05)
-    assert summary.system_cop == pytest.approx(2.31, abs=0.03)
-    assert records[-1].valves_open == VALVES_OPEN[RefrigerantMode.SMART_HEATING]
+# ---- 水泵變頻 ----
 
 
-def test_heating_with_both_fans_switches_to_outdoor_evaporator(table: CycleTable) -> None:
-    """暖房、送風機 A+B：約 25 min 冰水降到 5 °C，切換智慧暖房（室外吸熱）。
+def test_pump_frequency_sets_flow_power_and_evaporator_performance(table: CycleTable) -> None:
+    """泵頻率 30 Hz：6.03 GPM、每台 62.5 W；流量減半使蒸發器溫差變大，蒸發溫度較低。
 
 回傳：
     無。"""
-    sim, records, _summary = _run(table, OperationMode.HEATING, {"A", "B"}, hours=0.75)
-    switch = next(e for e in sim.events if e.code == "smart_heating")
-    assert switch.time_s / 60 == pytest.approx(25.4, abs=1.0)
-    after = [r for r in records if r.time_s > switch.time_s + 60]
-    assert after and all(r.mode is RefrigerantMode.SMART_HEATING and r.compressor_on for r in after)
-    assert all(r.evaporating_k is not None and r.evaporating_k < celsius(10.0) for r in after)
+    base = default_settings(OperationMode.COOLING)
+    full = HeatPumpSimulation(table, settings=base).step()
+    slow = HeatPumpSimulation(table, settings=replace(base, cold_pump_hz=30.0, hot_pump_hz=30.0)).step()
+    assert (full.cold_pump_hz, full.cold_pump_gpm, full.pump_power_w) == (60.0, pytest.approx(12.06), pytest.approx(1_000.0))
+    assert slow.cold_pump_gpm == pytest.approx(6.03) and slow.hot_pump_gpm == pytest.approx(6.03)
+    assert slow.cold_pump_power_w == pytest.approx(62.5) and slow.pump_power_w == pytest.approx(125.0)
+    assert slow.evaporating_k < full.evaporating_k
+    assert slow.condenser_water_out_k - slow.condenser_water_in_k > full.condenser_water_out_k - full.condenser_water_in_k
+
+
+# ---- 除濕後再熱 ----
+
+
+def test_reheat_takes_the_smaller_of_demand_and_coil_capacity(table: CycleTable) -> None:
+    """再熱 = min(再熱比例 × 盤管負荷, UA_rh × (熱水 − 盤管出風溫度))；熱水桶扣除同量熱。
+
+回傳：
+    無。"""
+    params = HeatPumpParameters()
+    settings = replace(default_settings(OperationMode.COOLING), reheat_fraction=0.2)
+    fan_ua = 3_516.0 / 20.0 + 5_274.0 / 20.0
+    ua_rh = params.reheat.ua_ratio_to_fan_coil * fan_ua
+
+    warm = HeatPumpSimulation(table, settings=settings, initial_cold_k=celsius(10.0), initial_hot_k=celsius(40.0))
+    r = warm.step()
+    load = fan_ua * (celsius(27.0) - celsius(10.0))
+    assert r.fan_coil_load_w == pytest.approx(load)
+    assert r.reheat_demand_w == pytest.approx(0.2 * load)
+    capacity = ua_rh * (celsius(40.0) - (celsius(10.0) + params.reheat.coil_air_approach_k))
+    assert capacity > r.reheat_demand_w
+    assert r.reheat_w == pytest.approx(r.reheat_demand_w)
+    assert r.net_cooling_w == pytest.approx(load - r.reheat_w)
+
+    cool = HeatPumpSimulation(table, settings=settings, initial_cold_k=celsius(10.0), initial_hot_k=celsius(20.0))
+    r = cool.step()
+    capacity = ua_rh * (celsius(20.0) - (celsius(10.0) + params.reheat.coil_air_approach_k))
+    assert capacity < r.reheat_demand_w
+    assert r.reheat_w == pytest.approx(capacity)
+
+
+def test_reheat_energy_is_taken_from_the_hot_tank(table: CycleTable) -> None:
+    """同樣條件下，開啟再熱使熱水桶升溫較慢；再熱為 0 或暖房時不再熱。
+
+回傳：
+    無。"""
+    on = default_settings(OperationMode.COOLING)
+    off = replace(on, reheat_fraction=0.0)
+    sim_on = HeatPumpSimulation(table, settings=on, initial_cold_k=celsius(12.0), initial_hot_k=celsius(30.0))
+    sim_off = HeatPumpSimulation(table, settings=off, initial_cold_k=celsius(12.0), initial_hot_k=celsius(30.0))
+    on_records, off_records = sim_on.run(120.0), sim_off.run(120.0)
+    assert sim_on.hot_water_k < sim_off.hot_water_k
+    expected = sum(r.reheat_w * r.dt_s for r in on_records)
+    assert on_records[-1].reheat_energy_j == pytest.approx(expected)
+    assert expected > 0 and all(r.reheat_w == 0.0 for r in off_records)
+    heating = HeatPumpSimulation(table, settings=default_settings(OperationMode.HEATING)).step()
+    assert heating.reheat_w == 0.0 and heating.net_cooling_w == 0.0
+
+
+def test_reheat_extends_dual_mode_before_hot_water_saturates(table: CycleTable) -> None:
+    """冷房 3 小時：再熱讓熱水桶不會長時間停在 40 °C，雙效與智慧冷房交替出現。
+
+回傳：
+    無。"""
+    sim, records, summary = _run(table, OperationMode.COOLING, {"B"})
+    assert summary.reheat_energy_j / 3.6e6 > 1.0
+    modes = [e.code for e in sim.events if e.code in ("dual", "smart_cooling")]
+    assert modes.count("smart_cooling") >= 2 and "dual" in modes
+    assert max(r.hot_water_k for r in records) < celsius(41.0)
+
+
+def test_mode_return_waits_for_minimum_dwell(table: CycleTable) -> None:
+    """智慧冷房切回雙效前，至少要在智慧冷房停留 mode_return_dwell_s（即使熱水已降到回切溫度）。
+
+回傳：
+    無。"""
+    sim = HeatPumpSimulation(table, settings=default_settings(OperationMode.COOLING))
+    sim.run(15 * 60.0)
+    assert sim.mode is RefrigerantMode.SMART_COOLING
+    entered = next(e.time_s for e in reversed(sim.events) if e.code == "smart_cooling")
+    sim.hot_water_k = celsius(30.0)
+    records = sim.run(HeatPumpParameters().control.mode_return_dwell_s + 30.0)
+    first_dual = next(r for r in records if r.mode is RefrigerantMode.DUAL)
+    assert first_dual.time_s - entered >= HeatPumpParameters().control.mode_return_dwell_s - 5.0
+    assert records[0].mode is RefrigerantMode.SMART_COOLING
 
 
 # ---- 控制行為 ----
@@ -350,16 +644,14 @@ def test_manual_frequency_is_respected_and_stops_at_setpoint(table: CycleTable) 
         frequency_mode=FrequencyMode.MANUAL,
         manual_frequency_hz=40.0,
     )
-    running = [r for r in records if r.compressor_on]
+    running = [r for r in records if r.compressor_on and r.mode is not RefrigerantMode.SMART_COOLING]
     assert running and all(r.frequency_hz == pytest.approx(40.0) for r in running)
     assert records[0].compressor_power_w < compressor_performance(
-        table, CompressorParameters(), records[0].evaporating_k, records[0].condensing_k, 60.0
+        sim.table, CompressorParameters(), records[0].evaporating_k, records[0].condensing_k, 60.0
     ).power_w
-    stop_index = next(i for i, e in enumerate(sim.events) if e.code == "stop")
-    stop_time = sim.events[stop_index].time_s
+    stop_time = next(e.time_s for e in sim.events if e.code == "stop")
     at_stop = min(records, key=lambda r: abs(r.time_s - stop_time + 5.0))
-    assert at_stop.cold_water_k <= celsius(7.0)
-    assert at_stop.cold_water_k > celsius(6.8)
+    assert celsius(6.8) < at_stop.cold_water_k <= celsius(7.0)
 
 
 def test_safety_trip_latches_until_reset(table: CycleTable) -> None:
@@ -410,14 +702,17 @@ def test_switching_operation_returns_to_dual_mode(table: CycleTable) -> None:
 
 
 def test_energy_accounts_for_compressor_fans_and_pumps(table: CycleTable) -> None:
-    """累計耗電 = Σ(壓縮機 + 開啟送風機 + 2 台水泵) × dt。
+    """累計耗電 = Σ(壓縮機 + 開啟送風機 + 兩台水泵) × dt；水泵耗電隨頻率。
 
 回傳：
     無。"""
-    sim = HeatPumpSimulation(table, settings=replace(default_settings(OperationMode.COOLING), fans=frozenset({"B"})))
+    settings = replace(default_settings(OperationMode.COOLING), fans=frozenset({"B"}), cold_pump_hz=50.0, hot_pump_hz=40.0)
+    sim = HeatPumpSimulation(table, settings=settings)
     records = sim.run(300.0, dt_s=5.0)
-    expected = sum(r.compressor_power_w + 125.0 + 1_000.0 for r in records) * 5.0
+    pumps = PumpParameters().power_w(50.0) + PumpParameters().power_w(40.0)
+    expected = sum(r.compressor_power_w + 125.0 + pumps for r in records) * 5.0
     assert records[-1].energy_used_j == pytest.approx(expected)
+    assert records[-1].pump_power_w == pytest.approx(pumps)
     assert records[-1].system_cop == pytest.approx(records[-1].fan_coil_energy_j / expected)
 
 
@@ -425,14 +720,16 @@ def test_energy_accounts_for_compressor_fans_and_pumps(table: CycleTable) -> Non
     "settings",
     [
         SimulationSettings(fans=frozenset({"C"})),
-        SimulationSettings(cold_pump_gpm=0.0),
-        SimulationSettings(hot_pump_gpm=-1.0),
-        SimulationSettings(manual_frequency_hz=25.0),
-        SimulationSettings(manual_frequency_hz=61.0),
+        SimulationSettings(cold_pump_hz=35.0),
+        SimulationSettings(hot_pump_hz=0.0),
+        SimulationSettings(manual_frequency_hz=35.0),
+        SimulationSettings(manual_frequency_hz=70.0),
+        SimulationSettings(reheat_fraction=-0.1),
+        SimulationSettings(reheat_fraction=0.9),
     ],
 )
 def test_invalid_settings_are_rejected(table: CycleTable, settings: SimulationSettings) -> None:
-    """未知送風機、非正 GPM、超出 30～60 Hz 的手動頻率都明確失敗。
+    """未知送風機、不在階梯上的泵／壓縮機頻率、超出範圍的再熱比例都明確失敗。
 
 回傳：
     無。"""
@@ -457,38 +754,21 @@ def test_invalid_time_step_and_mismatched_table_are_rejected(table: CycleTable) 
 
 
 def test_frequency_changes_apply_on_the_next_step(table: CycleTable) -> None:
-    """手動頻率與手動→自動切換在下一步立即生效；切回自動時為無擾切換。
+    """手動頻率與手動→自動切換在下一步立即生效；切回自動時頻率不跳動。
 
 回傳：
     無。"""
     settings = replace(default_settings(OperationMode.COOLING), frequency_mode=FrequencyMode.MANUAL, manual_frequency_hz=40.0)
     sim = HeatPumpSimulation(table, settings=settings)
     assert sim.step().frequency_hz == pytest.approx(40.0)
-    sim.set_manual_frequency(35.0)
-    assert sim.step().frequency_hz == pytest.approx(35.0)
+    sim.set_manual_frequency(30.0)
+    assert sim.step().frequency_hz == pytest.approx(30.0)
     sim.update_settings(replace(sim.settings, frequency_mode=FrequencyMode.AUTO))
-    assert sim.step().frequency_hz == pytest.approx(35.0, abs=0.5)
-
-
-def test_heating_with_fan_a_cycles_with_auto_stop_and_restart(table: CycleTable) -> None:
-    """暖房、送風機 A：30 Hz 仍過頭時熱水 ≥ 46 °C 停機，≤ 42 °C 且停滿 3 min 重啟。
-
-回傳：
-    無。"""
-    sim, records, summary = _run(table, OperationMode.HEATING, {"A"}, hours=1.0)
-    stop = next(e for e in sim.events if e.code == "stop")
-    assert stop.time_s / 60 == pytest.approx(17.8, abs=1.0)
-    start = next(e for e in sim.events if e.code == "start")
-    assert start.time_s - stop.time_s >= 180.0
-    at_stop = next(r for r in records if r.time_s + r.dt_s == pytest.approx(stop.time_s))
-    at_start = next(r for r in records if r.time_s + r.dt_s == pytest.approx(start.time_s))
-    assert at_stop.hot_water_k >= celsius(46.0)
-    assert at_start.hot_water_k <= celsius(42.0)
-    assert summary.stops >= 2
+    assert sim.step().frequency_hz == pytest.approx(30.0)
 
 
 def test_switch_to_outdoor_condenser_preempts_high_pressure_trip(table: CycleTable) -> None:
-    """外氣 36 °C 時切換智慧冷房會讓冷凝溫度跳升；切換前預先限頻，不應安全停機。
+    """外氣 36 °C 時切換智慧冷房會讓冷凝溫度跳升；切換前預先限頻到階梯，不應安全停機。
 
 回傳：
     無。"""
@@ -500,10 +780,13 @@ def test_switch_to_outdoor_condenser_preempts_high_pressure_trip(table: CycleTab
     assert "trip" not in codes
     running = [r for r in records if r.compressor_on]
     assert max(r.condensing_k for r in running) < celsius(60.0)
+    preempt = next(e for e in sim.events if e.code == "hp_preempt")
+    assert preempt.time_s == pytest.approx(next(e.time_s for e in sim.events if e.code == "smart_cooling"))
+    assert any(WARNING_HP_LIMITING in r.warnings for r in records) or _frequencies(records) <= set(STEPS)
 
 
 def test_pump_and_fan_changes_mid_run_take_effect(table: CycleTable) -> None:
-    """執行中改 GPM 或送風機：下一步的換熱與送風機負荷跟著改變。
+    """執行中改泵頻率或送風機：下一步的換熱與送風機負荷跟著改變。
 
 回傳：
     無。"""
@@ -514,9 +797,10 @@ def test_pump_and_fan_changes_mid_run_take_effect(table: CycleTable) -> None:
     both = sim.step()
     assert base.fan_coil_load_w > 0
     assert both.fan_coil_load_w > base.fan_coil_load_w * 2.0
-    sim.update_settings(replace(sim.settings, cold_pump_gpm=20.0))
-    faster = sim.step()
-    assert faster.evaporating_k > both.evaporating_k
+    sim.update_settings(replace(sim.settings, cold_pump_hz=30.0))
+    slower = sim.step()
+    assert slower.cold_pump_gpm == pytest.approx(6.03)
+    assert slower.evaporating_k < both.evaporating_k
 
 
 def test_summary_handles_uneven_last_step(table: CycleTable) -> None:

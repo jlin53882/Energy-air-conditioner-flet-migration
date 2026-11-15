@@ -12,6 +12,7 @@ from .components import (
     volumetric_efficiency,
     water_side_coefficient,
 )
+from .control import FrequencyStepper, PidController
 from .cycle_table import CycleProperties, CycleTable
 from .parameters import (
     CompressorParameters,
@@ -19,7 +20,10 @@ from .parameters import (
     CycleSettings,
     FanCoilUnit,
     HeatPumpParameters,
+    OutdoorHeatExchangerParameters,
     PlateHeatExchangerParameters,
+    PumpParameters,
+    ReheatParameters,
     TankParameters,
     celsius,
     gpm_to_kg_s,
@@ -54,13 +58,18 @@ __all__ = [
     "CycleTable",
     "FanCoilUnit",
     "FrequencyMode",
+    "FrequencyStepper",
     "HeatPumpParameters",
     "HeatPumpSimulation",
     "OperatingConditions",
     "OperatingPointSolver",
     "OperationMode",
+    "OutdoorHeatExchangerParameters",
+    "PidController",
     "PlateExchanger",
     "PlateHeatExchangerParameters",
+    "PumpParameters",
+    "ReheatParameters",
     "RefrigerantMode",
     "SimulationEvent",
     "SimulationSettings",

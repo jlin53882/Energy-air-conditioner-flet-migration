@@ -195,7 +195,7 @@ def test_view_loads_plays_and_ticks(service: HeatPumpSimulationService) -> None:
 
 
 def test_view_settings_reach_simulation(service: HeatPumpSimulationService) -> None:
-    """控制項變更套用到模擬：暖房、送風機、手動頻率、GPM。
+    """控制項變更套用到模擬：暖房、送風機、手動頻率階梯、泵頻率、再熱比例。
 
 回傳：
     無。"""
@@ -211,13 +211,25 @@ def test_view_settings_reach_simulation(service: HeatPumpSimulationService) -> N
     assert view.sim.settings.fans == frozenset({"B"})
     view.freq_mode_button.selected = ["manual"]
     view._on_freq_mode(None)
-    assert not view.freq_slider.disabled
-    view._on_manual_freq(42.0)
+    assert not view.freq_step.disabled
+    view.freq_step.set_value(40.0)
+    view._on_manual_freq(40.0)
     view.tick()
-    assert view.latest.frequency_hz == pytest.approx(42.0)
-    view.cold_gpm.set_value(15.0)
-    view._on_gpm(15.0)
-    assert view.sim.settings.cold_pump_gpm == pytest.approx(15.0)
+    assert view.latest.frequency_hz == pytest.approx(40.0)
+    assert "低於原廠" in view.freq_step.info.value
+    view.cold_pump.set_value(30.0)
+    view._on_pumps(30.0)
+    assert view.sim.settings.cold_pump_hz == 30.0 and view.sim.settings.hot_pump_hz == 60.0
+    assert view.cold_pump.info.value == "6.03 GPM · 62 W"
+    view.tick()
+    assert view.latest.cold_pump_gpm == pytest.approx(6.03)
+    assert view.reheat_slider.disabled  # 暖房不使用再熱
+    view.operation_button.selected = ["cooling"]
+    view._on_operation(None)
+    assert not view.reheat_slider.disabled
+    view.reheat_slider.set_value(40.0)
+    view._on_reheat(40.0)
+    assert view.sim.settings.reheat_fraction == pytest.approx(0.4)
 
 
 def test_view_shows_events_and_reset(service: HeatPumpSimulationService) -> None:
@@ -245,9 +257,11 @@ def test_view_reports_invalid_settings(service: HeatPumpSimulationService) -> No
     無。"""
     view, _started = _view(service)
     view._on_play(None)
-    view._apply_settings(replace(view._settings, manual_frequency_hz=70.0))
+    view._apply_settings(replace(view._settings, manual_frequency_hz=35.0))
     assert view.error_text.visible
-    assert view.sim.settings.manual_frequency_hz != 70.0
+    assert view.sim.settings.manual_frequency_hz != 35.0
+    view._apply_settings(replace(view._settings, cold_pump_hz=45.0))
+    assert view.error_text.visible and view.sim.settings.cold_pump_hz == 60.0
 
 
 def test_refrigerant_color_scale_runs_blue_to_red() -> None:
@@ -298,3 +312,40 @@ def test_ts_cycle_follows_saturation_lines(service: HeatPumpSimulationService) -
     assert path.points[2][0] > path.points[3][0]
     bare = hp.ts_cycle(record)
     assert len(bare.points) == 5
+
+
+def test_reheat_coil_is_drawn_and_warning_labels(service: HeatPumpSimulationService) -> None:
+    """再熱時示意圖標示盤管負荷並啟用熱水迴路；停用時為未使用；結霜警示改為「結霜／結冰」。
+
+回傳：
+    無。"""
+    sim = service.new_session(replace(default_settings(OperationMode.COOLING), reheat_fraction=0.3))
+    sim.run(600.0)
+    record = sim.step()
+    assert record.reheat_w > 0
+    state = hp.schematic_state(record)
+    assert state.reheat_w == pytest.approx(record.reheat_w)
+    idle = hp.schematic_state(replace(record, reheat_w=0.0))
+    assert idle.reheat_w == 0.0
+    assert hp.REHEAT_SUPPLY.points[0][0] < hp.REHEAT_RETURN.points[0][0]  # 供水在左、回水在右
+    assert hp.REHEAT_COIL.x + hp.REHEAT_COIL.width < hp.FAN_LOOP_HOT.points[0][0]  # 不壓到暖房水管
+    assert "結冰" in hp.WARNING_LABELS["frost"]
+
+
+def test_schematic_canvas_draws_new_elements(service: HeatPumpSimulationService) -> None:
+    """畫布包含再熱盤管標籤與泵浦頻率標籤。
+
+回傳：
+    無。"""
+    from Flet_ui.ui.components.heat_pump_schematic import HeatPumpSchematic
+
+    sim = service.new_session(replace(default_settings(OperationMode.COOLING), cold_pump_hz=40.0))
+    sim.run(600.0)
+    record = sim.step()
+    schematic = HeatPumpSchematic()
+    schematic.render(record, 0.0, 0.0, 0.0, celsius(30.0))
+    texts = [shape.value for shape in schematic.canvas.shapes if hasattr(shape, "value") and shape.value]
+    assert any("再熱盤管" in text for text in texts)
+    assert any(text.startswith("40 Hz") for text in texts)
+    assert "E505DH-49A2W" in texts
+    assert hp.REHEAT_COIL.key == "reheat_coil"

@@ -44,6 +44,9 @@ from ..heat_pump_presentation import (
     OUTDOOR,
     OUTDOOR_FAN_CENTER,
     REFRIGERANT_PIPES,
+    REHEAT_COIL,
+    REHEAT_RETURN,
+    REHEAT_SUPPLY,
     VALVE_LABEL_OFFSETS,
     VALVE_ORIENTATION,
     VALVE_POSITIONS,
@@ -317,7 +320,7 @@ def _tank(box: Box, color: str, temperature_k: float | None) -> list[cv.Shape]:
     shapes.append(cv.Path(wave, paint=_stroke(_alpha("#FFFFFF", 0.55), 2)))
     if temperature_k is not None:
         shapes.append(_label(x + w / 2, y + h / 2, f"{format_temperature(temperature_k)} °C", 22, "#FFFFFF", True))
-    shapes.append(_label(x + w / 2, y - 22, box.label, 12, TOKENS.text_primary, True))
+    shapes.append(_label(x + w / 2, y + h - 18, box.label, 11, "#FFFFFF", True))
     return shapes
 
 
@@ -386,8 +389,9 @@ def _compressor(running: bool, angle: float, frequency_hz: float | None, power_w
     ]
     shapes += _rotor((cx, cy + 4), 16, angle if running else 0.0, "#9FD3CF" if running else "#6B7471", 3, 3)
     shapes.append(cv.Circle(cx, cy + 4, 4, paint=_fill("#D9DEDB")))
-    shapes.append(_label(b.x - 52, b.y + 18, "壓縮機", 12, TOKENS.text_primary, True))
-    shapes.append(_label(b.x - 52, b.y + 34, "INV", 10, TOKENS.text_muted, True))
+    shapes.append(_label(b.x - 52, b.y + 14, "壓縮機", 12, TOKENS.text_primary, True))
+    shapes.append(_label(b.x - 52, b.y + 29, "E505DH-49A2W", 9, TOKENS.text_muted, True))
+    shapes.append(_label(b.x - 52, b.y + 42, "VFD 30–60 Hz", 9, TOKENS.text_muted, True))
     text = f"{frequency_hz:.1f} Hz · {power_w / 1000:.2f} kW" if running and frequency_hz and power_w is not None else "停機"
     shapes.append(_label(cx, b.y + b.height + 18, text, 11, TOKENS.primary if running else TOKENS.text_muted, True))
     return shapes
@@ -427,6 +431,38 @@ def _outdoor_unit(role: str | None, accent: str | None, angle: float, outdoor_k:
     if outdoor_k is not None:
         text += f" · 外氣 {format_temperature(outdoor_k)} °C"
     shapes.append(_label(b.x + b.width / 2, b.y + b.height + 13, text, 11, TOKENS.text_primary, True))
+    return shapes
+
+
+def _reheat_coil(active: bool, color: str, reheat_w: float) -> list[cv.Shape]:
+    """除濕後再熱盤管（蛇形管與鰭片；運轉時依熱水色發光）。
+
+參數：
+    active: 是否正在再熱。
+    color: 熱水顏色。
+    reheat_w: 再熱熱量。
+
+回傳：
+    shapes。"""
+    b = REHEAT_COIL
+    line = color if active else IDLE_LINE_COLOR
+    shapes: list[cv.Shape] = [
+        cv.Rect(b.x, b.y, b.width, b.height, border_radius=6,
+                paint=_gradient((b.x, b.y), (b.x, b.y + b.height), ["#FFFFFF", "#ECECE6"])),
+        cv.Rect(b.x, b.y, b.width, b.height, border_radius=6, paint=_stroke(line if active else "#C3C3BA", 1.4)),
+    ]
+    for i in range(1, 8):
+        fx = b.x + b.width * i / 8
+        shapes.append(cv.Line(fx, b.y + 5, fx, b.y + b.height - 5, paint=_stroke("#D4D4CB", 1)))
+    zig = [(b.x + 8, b.y + 12)]
+    for row in range(3):
+        y = b.y + 12 + row * 11
+        x_end = b.x + b.width - 8 if row % 2 == 0 else b.x + 8
+        zig += [(x_end, y), (x_end, y + 11)] if row < 2 else [(x_end, y)]
+    shapes.append(_polyline(zig, _stroke(_alpha(line, 0.25), 7) if active else _stroke(line, 1)))
+    shapes.append(_polyline(zig, _stroke(line, 2.6 if active else 1.4)))
+    text = f"再熱盤管 {reheat_w / 1000:.2f} kW" if active else "再熱盤管（未用）"
+    shapes.append(_label(b.x + b.width / 2, b.y - 10, text, 10, TOKENS.text_primary if active else TOKENS.text_muted, True))
     return shapes
 
 
@@ -641,6 +677,8 @@ class HeatPumpSchematic(ft.Container):
             (FAN_LOOP_COLD, cold, fans_on and fan_tank == "cold_tank"),
             (FAN_LOOP_HOT, hot, fans_on and fan_tank == "hot_tank"),
         ]
+        reheating = started and state.reheat_w > 0
+        pipes += [(REHEAT_SUPPLY, hot, reheating), (REHEAT_RETURN, hot, reheating)]
         for pipe, color, active in pipes:
             if active:
                 shapes.append(_polyline(pipe.points, _stroke(_mix(color, "#000000", 0.25), 7)))
@@ -653,6 +691,8 @@ class HeatPumpSchematic(ft.Container):
         shapes += _pump(HOT_PUMP, hot, angle if started else 0.0)
         shapes += _pump(FAN_PUMP, fan_color if fans_on else IDLE_LINE_COLOR, angle if fans_on else 0.0)
         if record is not None:
+            for x, hz, gpm in ((210, record.cold_pump_hz, record.cold_pump_gpm), (790, record.hot_pump_hz, record.hot_pump_gpm)):
+                shapes.append(_label(x, 400, f"{hz:.0f} Hz · {gpm:.1f} GPM", 9, TOKENS.text_secondary, True))
             room = "冷房" if fan_tank == "cold_tank" else "暖房"
             shapes.append(_label(380, 14, f"送風機水路（{room}，冰水泵）", 10, TOKENS.text_muted))
             for water_in, water_out, x in ((record.evaporator_water_in_k, record.evaporator_water_out_k, 210),
@@ -738,6 +778,8 @@ class HeatPumpSchematic(ft.Container):
         shapes += _compressor(running, angle, record.frequency_hz if record else None,
                               record.compressor_power_w if record else None)
         shapes += _expansion_valve()
+        shapes += _reheat_coil(state is not None and state.reheat_w > 0, state.hot_color if state else "#D9B9A3",
+                               state.reheat_w if state else 0.0)
         fan_tank_active = state is not None
         share = {}
         if record is not None and record.fans:

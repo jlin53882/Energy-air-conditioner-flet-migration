@@ -3,9 +3,11 @@
 每個時間步：
 1. 依目前模式與頻率求解運轉點（Te、Tc、能力、耗電）。
 2. 以顯式 Euler 更新冰水桶與熱水桶溫度。
-3. 依水溫切換冷媒模式（電磁閥），再更新壓縮機頻率與啟停。
+3. 依水溫切換冷媒模式（電磁閥），再更新壓縮機頻率（PID＋階梯量化）與啟停。
 
-模擬器是可變物件：UI 可在步與步之間調整運轉方式、送風機、頻率模式、GPM 與環境溫度。
+壓縮機與兩台水泵都由變頻器在固定階梯（預設 30／40／50／60 Hz）運轉；冷房時熱水桶另供
+除濕後再熱盤管。模擬器是可變物件：UI 可在步與步之間調整運轉方式、送風機、頻率模式、
+泵浦頻率、再熱比例與環境溫度。
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from .components import (
     RefrigerantMode,
     refrigerant_side_resistance,
 )
+from .control import FrequencyStepper, PidController
 from .cycle_table import CycleTable
 from .parameters import WATER_CP_J_KG_K, HeatPumpParameters, celsius, gpm_to_kg_s
 
@@ -57,8 +60,9 @@ class SimulationSettings:
     fans: frozenset[str] = frozenset({"A", "B"})
     frequency_mode: FrequencyMode = FrequencyMode.AUTO
     manual_frequency_hz: float = 60.0
-    cold_pump_gpm: float = 12.06
-    hot_pump_gpm: float = 12.06
+    cold_pump_hz: float = 60.0
+    hot_pump_hz: float = 60.0
+    reheat_fraction: float = 0.2
     room_k: float = celsius(27.0)
     outdoor_k: float = celsius(30.0)
 
@@ -132,6 +136,25 @@ class StepRecord:
     condenser_water_in_k: float | None = None
     condenser_water_out_k: float | None = None
     outdoor_heat_w: float = 0.0
+    cold_pump_hz: float = 0.0
+    hot_pump_hz: float = 0.0
+    cold_pump_gpm: float = 0.0
+    hot_pump_gpm: float = 0.0
+    cold_pump_power_w: float = 0.0
+    hot_pump_power_w: float = 0.0
+    reheat_demand_w: float = 0.0
+    reheat_w: float = 0.0
+    reheat_energy_j: float = 0.0
+
+    @property
+    def net_cooling_w(self) -> float:
+        """送到室內的淨冷卻量（盤管冷卻 − 再熱）；暖房時為 0。
+
+回傳：
+            W。"""
+        if self.operation is not OperationMode.COOLING:
+            return 0.0
+        return max(0.0, self.fan_coil_load_w - self.reheat_w)
 
     @property
     def total_power_w(self) -> float:
@@ -159,7 +182,6 @@ class _ControllerState:
     compressor_on: bool = True
     frequency_hz: float = 60.0
     frequency_limit_hz: float = 60.0
-    integral_hz: float = 0.0
     off_since_s: float | None = None
     tripped: bool = False
 
@@ -205,11 +227,21 @@ class HeatPumpSimulation:
         self.cold_water_k = initial_cold_k
         self.hot_water_k = initial_hot_k
         self.mode = RefrigerantMode.DUAL
-        self._ctrl = _ControllerState(frequency_hz=self.params.compressor.max_frequency_hz,
-                                      frequency_limit_hz=self.params.compressor.max_frequency_hz)
+        comp = self.params.compressor
+        control = self.params.control
+        self._ctrl = _ControllerState(frequency_hz=comp.max_frequency_hz, frequency_limit_hz=comp.max_frequency_hz)
+        self._pid = PidController(
+            kp=control.kp_hz_per_k, ti_s=control.integral_time_s, td_s=control.derivative_time_s,
+            out_min=comp.min_frequency_hz, out_max=comp.max_frequency_hz, bias=comp.min_frequency_hz,
+            filter_ratio=control.derivative_filter_ratio,
+        )
+        self._stepper = FrequencyStepper(comp.frequency_steps_hz, control.step_hysteresis_hz, control.step_dwell_s,
+                                         current_hz=comp.max_frequency_hz)
+        self._mode_since_s = 0.0
         self._guess: tuple[float, float] | None = None
         self._energy_j = 0.0
         self._fan_coil_energy_j = 0.0
+        self._reheat_energy_j = 0.0
         self.events: list[SimulationEvent] = []
         self.update_settings(settings)
 
@@ -252,12 +284,16 @@ class HeatPumpSimulation:
         known = {fan.name for fan in self.params.fan_coils}
         if not settings.fans <= known:
             raise ValueError(f"未知的送風機：{sorted(settings.fans - known)}")
-        if settings.cold_pump_gpm <= 0 or settings.hot_pump_gpm <= 0:
-            raise ValueError("水泵 GPM 必須大於 0。")
-        if not compressor.min_frequency_hz <= settings.manual_frequency_hz <= compressor.max_frequency_hz:
-            raise ValueError(
-                f"手動頻率必須介於 {compressor.min_frequency_hz:g}～{compressor.max_frequency_hz:g} Hz。"
-            )
+        if settings.manual_frequency_hz not in compressor.frequency_steps_hz:
+            raise ValueError(f"手動頻率必須是階梯 {self._format_steps(compressor.frequency_steps_hz)} Hz 之一。")
+        for value, pump, label in (
+            (settings.cold_pump_hz, self.params.cold_pump, "冰水泵"),
+            (settings.hot_pump_hz, self.params.hot_pump, "熱水泵"),
+        ):
+            if value not in pump.frequency_steps_hz:
+                raise ValueError(f"{label}頻率必須是階梯 {self._format_steps(pump.frequency_steps_hz)} Hz 之一。")
+        if not 0.0 <= settings.reheat_fraction <= self.params.reheat.max_fraction:
+            raise ValueError(f"再熱比例必須介於 0～{self.params.reheat.max_fraction:g}。")
         for value, (low, high), label in (
             (settings.outdoor_k, OUTDOOR_RANGE_K, "外氣溫度"),
             (settings.room_k, ROOM_RANGE_K, "室溫"),
@@ -269,16 +305,26 @@ class HeatPumpSimulation:
         ctrl = self._ctrl
         if previous.operation is not settings.operation:
             self.mode = RefrigerantMode.DUAL
-            ctrl.integral_hz = 0.0
+            self._mode_since_s = self.time_s
+            self._pid.reset()
             self._event("operation", f"運轉方式切換為{'冷房' if settings.operation is OperationMode.COOLING else '暖房'}")
             self._guess = None
         elif previous.frequency_mode is FrequencyMode.MANUAL and settings.frequency_mode is FrequencyMode.AUTO:
-            # 無擾切換：讓 PI 輸出從目前頻率開始。
-            ctrl.integral_hz = (
-                ctrl.frequency_hz - compressor.min_frequency_hz - self.params.control.kp_hz_per_k * self._control_error()
-            )
-        if ctrl.compressor_on and not ctrl.tripped:
-            ctrl.frequency_hz = self._target_frequency(self._control_error())
+            # 無擾切換：讓 PID 輸出從目前頻率開始。
+            self._pid.preset(ctrl.frequency_hz, self._control_error())
+        if ctrl.compressor_on and not ctrl.tripped and settings.frequency_mode is FrequencyMode.MANUAL:
+            ctrl.frequency_hz = self._stepper.start(settings.manual_frequency_hz, ctrl.frequency_limit_hz, self.time_s)
+
+    @staticmethod
+    def _format_steps(steps: tuple[float, ...]) -> str:
+        """階梯顯示文字。
+
+參數：
+            steps: 階梯。
+
+回傳：
+            例如「30／40／50／60」。"""
+        return "／".join(f"{step:g}" for step in steps)
 
     def set_manual_frequency(self, frequency_hz: float) -> None:
         """切換為手動頻率。
@@ -312,6 +358,20 @@ class HeatPumpSimulation:
     無。"""
         self.events.append(SimulationEvent(self.time_s, code, message))
 
+    def _cold_flow_kg_s(self) -> float:
+        """冰水泵目前流量。
+
+回傳：
+            kg/s。"""
+        return gpm_to_kg_s(self.params.cold_pump.flow_gpm(self._settings.cold_pump_hz))
+
+    def _hot_flow_kg_s(self) -> float:
+        """熱水泵目前流量。
+
+回傳：
+            kg/s。"""
+        return gpm_to_kg_s(self.params.hot_pump.flow_gpm(self._settings.hot_pump_hz))
+
     def _conditions(self, frequency_hz: float) -> OperatingConditions:
         """組合求解條件。
 
@@ -327,8 +387,8 @@ class HeatPumpSimulation:
             hot_water_k=self.hot_water_k,
             outdoor_k=s.outdoor_k,
             frequency_hz=frequency_hz,
-            evaporator_conductance_w_k=self._evaporator.conductance(gpm_to_kg_s(s.cold_pump_gpm)),
-            condenser_conductance_w_k=self._condenser.conductance(gpm_to_kg_s(s.hot_pump_gpm)),
+            evaporator_conductance_w_k=self._evaporator.conductance(self._cold_flow_kg_s()),
+            condenser_conductance_w_k=self._condenser.conductance(self._hot_flow_kg_s()),
             outdoor_ua_w_k=self.params.outdoor_ua_w_k,
         )
 
@@ -378,7 +438,15 @@ class HeatPumpSimulation:
             fan_load = max(0.0, fan_ua * (s.room_k - self.cold_water_k))
         else:
             fan_load = max(0.0, fan_ua * (self.hot_water_k - s.room_k))
-        pump_power = p.pump_power_w * p.pump_count
+        cold_pump_power = p.cold_pump.power_w(s.cold_pump_hz)
+        hot_pump_power = p.hot_pump.power_w(s.hot_pump_hz)
+        pump_power = cold_pump_power + hot_pump_power
+        reheat_demand = reheat = 0.0
+        if cooling and fan_ua > 0 and fan_load > 0:
+            reheat_demand = s.reheat_fraction * fan_load
+            coil_air_k = self.cold_water_k + p.reheat.coil_air_approach_k
+            capacity = p.reheat.ua_ratio_to_fan_coil * fan_ua * max(0.0, self.hot_water_k - coil_air_k)
+            reheat = min(reheat_demand, capacity)
 
         q_evap_water = perf.cooling_w if perf is not None and self.mode is not RefrigerantMode.SMART_HEATING else 0.0
         q_cond_water = perf.heating_w if perf is not None and self.mode is not RefrigerantMode.SMART_COOLING else 0.0
@@ -386,8 +454,8 @@ class HeatPumpSimulation:
         evap_in = cond_in = evap_out = cond_out = None
         outdoor_heat = 0.0
         if perf is not None:
-            cold_rate = gpm_to_kg_s(s.cold_pump_gpm) * WATER_CP_J_KG_K
-            hot_rate = gpm_to_kg_s(s.hot_pump_gpm) * WATER_CP_J_KG_K
+            cold_rate = self._cold_flow_kg_s() * WATER_CP_J_KG_K
+            hot_rate = self._hot_flow_kg_s() * WATER_CP_J_KG_K
             if self.mode is not RefrigerantMode.SMART_HEATING:
                 evap_in = self.cold_water_k
                 evap_out = evap_in - perf.cooling_w / cold_rate
@@ -401,12 +469,13 @@ class HeatPumpSimulation:
         cold_loss = p.cold_tank.loss_ua_w_k * (s.room_k - self.cold_water_k)
         hot_loss = p.hot_tank.loss_ua_w_k * (s.room_k - self.hot_water_k)
         cold_net = (fan_load if cooling else 0.0) - q_evap_water + cold_loss
-        hot_net = q_cond_water - (0.0 if cooling else fan_load) + hot_loss
+        hot_net = q_cond_water - (0.0 if cooling else fan_load) - reheat + hot_loss
         self.cold_water_k += cold_net / p.cold_tank.heat_capacity_j_k * dt_s
         self.hot_water_k += hot_net / p.hot_tank.heat_capacity_j_k * dt_s
         compressor_power = perf.power_w if perf is not None else 0.0
         self._energy_j += (compressor_power + fan_power + pump_power) * dt_s
         self._fan_coil_energy_j += fan_load * dt_s
+        self._reheat_energy_j += reheat * dt_s
 
         record = StepRecord(
             time_s=self.time_s,
@@ -452,6 +521,15 @@ class HeatPumpSimulation:
             condenser_water_in_k=cond_in,
             condenser_water_out_k=cond_out,
             outdoor_heat_w=outdoor_heat,
+            cold_pump_hz=s.cold_pump_hz,
+            hot_pump_hz=s.hot_pump_hz,
+            cold_pump_gpm=p.cold_pump.flow_gpm(s.cold_pump_hz),
+            hot_pump_gpm=p.hot_pump.flow_gpm(s.hot_pump_hz),
+            cold_pump_power_w=cold_pump_power,
+            hot_pump_power_w=hot_pump_power,
+            reheat_demand_w=reheat_demand,
+            reheat_w=reheat,
+            reheat_energy_j=self._reheat_energy_j,
         )
 
         self.time_s += dt_s
@@ -464,54 +542,68 @@ class HeatPumpSimulation:
             record = replace(record, warnings=record.warnings | {WARNING_HP_LIMITING})
         return record
 
+    def _switch_mode(self, mode: RefrigerantMode, code: str, message: str) -> None:
+        """切換冷媒模式並記錄事件。
+
+參數：
+    mode: 新模式。
+    code: 事件代碼。
+    message: 說明。
+
+回傳：
+    無。"""
+        self.mode = mode
+        self._mode_since_s = self.time_s
+        self._event(code, message)
+
     def _update_mode(self) -> None:
-        """依水溫切換冷媒模式（§2.2 第 2、4 項）。
+        """依水溫切換冷媒模式（§2.2 第 2、4 項）。回切需在智慧模式停留至少 ``mode_return_dwell_s``。
 
 回傳：
     無。"""
         c = self.params.control
         cooling = self._settings.operation is OperationMode.COOLING
+        settled = self.time_s - self._mode_since_s >= c.mode_return_dwell_s
         if cooling:
             if self.mode is RefrigerantMode.DUAL and self.hot_water_k >= c.cooling_hot_switch_k:
-                self.mode = RefrigerantMode.SMART_COOLING
-                self._event("smart_cooling", "熱水達上限：關 SV8、開 SV9，切換智慧冷房")
+                self._switch_mode(RefrigerantMode.SMART_COOLING, "smart_cooling",
+                                  "熱水達上限：關 SV8、開 SV9，切換智慧冷房")
                 self._preempt_high_pressure()
-            elif self.mode is RefrigerantMode.SMART_COOLING and self.hot_water_k <= c.cooling_hot_return_k:
-                self.mode = RefrigerantMode.DUAL
-                self._event("dual", "熱水回落：關 SV9、開 SV8，回到雙效")
+            elif self.mode is RefrigerantMode.SMART_COOLING and self.hot_water_k <= c.cooling_hot_return_k and settled:
+                self._switch_mode(RefrigerantMode.DUAL, "dual", "熱水回落：關 SV9、開 SV8，回到雙效")
             elif self.mode is RefrigerantMode.SMART_HEATING:
                 self.mode = RefrigerantMode.DUAL
         else:
             if self.mode is RefrigerantMode.DUAL and self.cold_water_k <= c.heating_cold_switch_k:
-                self.mode = RefrigerantMode.SMART_HEATING
-                self._event("smart_heating", "冰水達下限：關 SV10、開 SV11，切換智慧暖房")
-            elif self.mode is RefrigerantMode.SMART_HEATING and self.cold_water_k >= c.heating_cold_return_k:
-                self.mode = RefrigerantMode.DUAL
-                self._event("dual", "冰水回升：關 SV11、開 SV10，回到雙效")
+                self._switch_mode(RefrigerantMode.SMART_HEATING, "smart_heating",
+                                  "冰水達下限：關 SV10、開 SV11，切換智慧暖房")
+            elif self.mode is RefrigerantMode.SMART_HEATING and self.cold_water_k >= c.heating_cold_return_k and settled:
+                self._switch_mode(RefrigerantMode.DUAL, "dual", "冰水回升：關 SV11、開 SV10，回到雙效")
             elif self.mode is RefrigerantMode.SMART_COOLING:
                 self.mode = RefrigerantMode.DUAL
 
     def _preempt_high_pressure(self) -> None:
         """切換到室外冷凝時預先限頻：冷凝溫度會在一步內跳升，事後限頻來不及（§2.3）。
 
-以新模式預測冷凝溫度，每次降 2 Hz，直到低於限頻起點或到最低頻率。
+以新模式預測冷凝溫度，由目前階梯逐階往下找第一個冷凝溫度低於限頻起點的階梯（都不行則取最低階）。
 
 回傳：
     無。"""
         ctrl = self._ctrl
-        comp = self.params.compressor
         if not ctrl.compressor_on or ctrl.tripped:
             return
-        frequency = ctrl.frequency_hz
-        while True:
-            perf = self._solver.solve(self._conditions(frequency), None)
-            if perf.condensing_k < self.params.control.hp_limit_start_k or frequency <= comp.min_frequency_hz:
+        steps = [step for step in sorted(self.params.compressor.frequency_steps_hz, reverse=True)
+                 if step <= ctrl.frequency_hz + 1e-9]
+        chosen = steps[-1]
+        for step in steps:
+            perf = self._solver.solve(self._conditions(step), None)
+            if perf.condensing_k < self.params.control.hp_limit_start_k:
+                chosen = step
                 break
-            frequency = max(comp.min_frequency_hz, frequency - 2.0)
-        if frequency < ctrl.frequency_hz:
-            ctrl.frequency_limit_hz = min(ctrl.frequency_limit_hz, frequency)
-            ctrl.frequency_hz = frequency
-            self._event("hp_preempt", f"切換室外冷凝前預先限頻至 {frequency:.0f} Hz")
+        if chosen < ctrl.frequency_hz:
+            ctrl.frequency_limit_hz = min(ctrl.frequency_limit_hz, chosen)
+            ctrl.frequency_hz = self._stepper.start(chosen, chosen, self.time_s)
+            self._event("hp_preempt", f"切換室外冷凝前預先限頻至 {chosen:.0f} Hz")
         self._guess = None
 
     def _update_compressor(self, perf: CompressorPerformance | None, dt_s: float) -> bool:
@@ -541,9 +633,11 @@ class HeatPumpSimulation:
             waited = ctrl.off_since_s is None or self.time_s - ctrl.off_since_s >= c.min_off_time_s
             if restart and waited:
                 ctrl.compressor_on = True
-                ctrl.integral_hz = 0.0
+                self._pid.reset()
                 ctrl.off_since_s = None
-                ctrl.frequency_hz = self._target_frequency(error)
+                request = (s.manual_frequency_hz if s.frequency_mode is FrequencyMode.MANUAL
+                           else max(comp.min_frequency_hz, min(comp.max_frequency_hz, self._pid.output(error))))
+                ctrl.frequency_hz = self._stepper.start(request, ctrl.frequency_limit_hz, self.time_s)
                 self._event("start", "壓縮機重新啟動")
             return False
 
@@ -559,18 +653,15 @@ class HeatPumpSimulation:
         limit = ctrl.frequency_limit_hz
 
         if s.frequency_mode is FrequencyMode.AUTO:
-            unclamped = comp.min_frequency_hz + c.kp_hz_per_k * error + ctrl.integral_hz
-            if comp.min_frequency_hz < unclamped < limit:
-                ctrl.integral_hz += c.kp_hz_per_k / c.integral_time_s * error * dt_s
-            ctrl.integral_hz = max(-2 * comp.max_frequency_hz, min(2 * comp.max_frequency_hz, ctrl.integral_hz))
-            ctrl.frequency_hz = self._target_frequency(error)
+            request = self._pid.update(error, dt_s, out_max=limit)
+            ctrl.frequency_hz = self._stepper.update(request, limit, self.time_s)
             at_minimum = ctrl.frequency_hz <= comp.min_frequency_hz + 1e-9
             margin = c.auto_stop_margin_k
             stop = at_minimum and (
                 controlled <= c.cooling_setpoint_k - margin if cooling else controlled >= c.heating_setpoint_k + margin
             )
         else:
-            ctrl.frequency_hz = min(s.manual_frequency_hz, limit)
+            ctrl.frequency_hz = self._stepper.start(s.manual_frequency_hz, limit, self.time_s)
             stop = controlled <= c.cooling_setpoint_k if cooling else controlled >= c.heating_setpoint_k
         if stop:
             ctrl.compressor_on = False
@@ -579,7 +670,7 @@ class HeatPumpSimulation:
         return limiting
 
     def _control_error(self) -> float:
-        """PI 控制誤差：冷房為冰水 − 目標，暖房為目標 − 熱水（正值表示需要更多能力）。
+        """PID 控制誤差：冷房為冰水 − 目標，暖房為目標 − 熱水（正值表示需要更多能力）。
 
 回傳：
     K。"""
@@ -587,22 +678,6 @@ class HeatPumpSimulation:
         if self._settings.operation is OperationMode.COOLING:
             return self.cold_water_k - c.cooling_setpoint_k
         return c.heating_setpoint_k - self.hot_water_k
-
-    def _target_frequency(self, error: float) -> float:
-        """PI 輸出（夾在最低頻率與限頻上限之間）。
-
-參數：
-    error: 控制誤差（K）。
-
-回傳：
-    Hz。"""
-        comp = self.params.compressor
-        c = self.params.control
-        s = self._settings
-        if s.frequency_mode is FrequencyMode.MANUAL:
-            return min(s.manual_frequency_hz, self._ctrl.frequency_limit_hz)
-        raw = comp.min_frequency_hz + c.kp_hz_per_k * error + self._ctrl.integral_hz
-        return max(comp.min_frequency_hz, min(self._ctrl.frequency_limit_hz, raw))
 
     def run(self, duration_s: float, dt_s: float = 5.0) -> list[StepRecord]:
         """連續推進。
@@ -634,6 +709,7 @@ class SimulationSummary:
     max_condensing_k: float | None
     min_evaporating_k: float | None
     warnings: frozenset[str] = field(default_factory=frozenset)
+    reheat_energy_j: float = 0.0
 
 
 def summarize(records: list[StepRecord], events: list[SimulationEvent]) -> SimulationSummary:
@@ -671,4 +747,5 @@ def summarize(records: list[StepRecord], events: list[SimulationEvent]) -> Simul
         max_condensing_k=max(condensing) if condensing else None,
         min_evaporating_k=min(evaporating) if evaporating else None,
         warnings=warnings,
+        reheat_energy_j=sum(r.reheat_w * r.dt_s for r in records),
     )

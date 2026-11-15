@@ -123,6 +123,10 @@ HOT_RETURN = Pipe("hot_return", ((750, 320), (830, 320)))
 FAN_HEADER = Pipe("fan_header", ((60, 28), (940, 28)))
 FAN_DROPS = Pipe("fan_drops", ((260, 28), (260, 45)))
 FAN_DROP_B = Pipe("fan_drop_b", ((740, 28), (740, 45)))
+# 除濕後再熱盤管：熱水桶 → 盤管 → 熱水桶（冷房時使用）
+REHEAT_COIL = Box("reheat_coil", "再熱盤管", 850, 150, 80, 46)
+REHEAT_SUPPLY = Pipe("reheat_supply", ((875, 288), (875, 196)))
+REHEAT_RETURN = Pipe("reheat_return", ((905, 196), (905, 288)))
 FAN_LOOP_COLD = Pipe("fan_loop_cold", ((60, 282), (60, 28)))
 FAN_LOOP_HOT = Pipe("fan_loop_hot", ((940, 282), (940, 28)))
 
@@ -248,6 +252,7 @@ class SchematicState:
     cold_color: str
     hot_color: str
     callouts: tuple[Callout, ...]
+    reheat_w: float = 0.0
 
 
 def _pipe_temperature(record: StepRecord, state: LineState) -> float | None:
@@ -341,6 +346,7 @@ def schematic_state(record: StepRecord) -> SchematicState:
         cold_color=water_color(record.cold_water_k),
         hot_color=water_color(record.hot_water_k),
         callouts=callouts(record),
+        reheat_w=record.reheat_w,
     )
 
 
@@ -458,7 +464,7 @@ MODE_LABELS: dict[RefrigerantMode, str] = {
 WARNING_LABELS: dict[str, str] = {
     "high_pressure": "高壓接近上限",
     "hp_limiting": "高壓限頻中",
-    "frost": "結霜風險",
+    "frost": "蒸發溫度 < 0 °C（結霜／結冰風險）",
     "tripped": "安全停機（需復歸）",
 }
 

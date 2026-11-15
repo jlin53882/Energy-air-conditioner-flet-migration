@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from domain.refrigeration.states import ThermodynamicStateProvider, query_state
 
-from .parameters import CycleSettings, celsius
+from .parameters import CompressorParameters, CycleSettings, celsius
 
 
 @dataclass(frozen=True)
@@ -138,7 +138,7 @@ class CycleTable:
         cls,
         provider: ThermodynamicStateProvider,
         settings: CycleSettings | None = None,
-        overall_efficiency: float = 0.66,
+        overall_efficiency: float = CompressorParameters().overall_efficiency,
         evaporating_range_k: tuple[float, float] = (celsius(-30.0), celsius(20.0)),
         condensing_range_k: tuple[float, float] = (celsius(10.0), celsius(70.0)),
         step_k: float = 1.0,
