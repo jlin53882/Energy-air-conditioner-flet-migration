@@ -285,14 +285,17 @@ async def prop_calculate_and_finish(update: Update, context: ContextTypes.DEFAUL
     try:
         # 準備傳遞給後端計算函式的參數
         known_props = [(ud['prop1_code'], ud['value1'], ud['unit1']), (ud['prop2_code'], ud['value2'], ud['unit2'])]
-        # 呼叫後端進行計算
-        si_results = calculator.calculate_properties(fluid=ud['fluid'], known_props=known_props)
+        # 呼叫後端進行計算：以 Auto 解析模型與基準（與 Flet 相同），計算與顯示共用同一份快照
+        si_results, policy = calculator.calculate_properties_auto(ud['fluid'], known_props)
         # 判斷使用者是否輸入了英制單位，以決定輸出格式
         use_imperial = any(p[2] in calculator.imperial_units.values() for p in known_props)
         # 將計算結果格式化為易於閱讀的字串
         formatted_results = calculator.format_specific_properties(si_results, use_imperial)
         # 組合最終的成功訊息
-        final_message = f"✅ <b>計算完成</b>\n\n--- 輸入 ---\n{input_summary}\n\n{formatted_results}"
+        policy_lines = calculator.format_policy_lines(policy)
+        final_message = (
+            f"✅ <b>計算完成</b>\n\n--- 輸入 ---\n{input_summary}\n\n{formatted_results}\n\n{policy_lines}"
+        )
     except (ValueError, RuntimeError) as e:
         # 如果計算過程中發生錯誤 (例如，輸入的狀態無效)，則捕獲異常
         final_message = f"❌ <b>計算失敗</b>\n\n--- 輸入 ---\n{input_summary}\n\n<b>錯誤</b>: <code>{e}</code>"

@@ -132,6 +132,8 @@ class ThermoDiagramModule(BaseAnalysisModule):
             value="Auto",
             expand=True,
         ))
+        # 初始值採工作區預設；使用者選過後，之後套用的設定不再改動它。
+        self.reference_state_default.register(self.ref_state_dd)
 
         # --- 壓力軸單位選項 ---
         self.pressure_unit_dd = style_dropdown(ft.Dropdown(

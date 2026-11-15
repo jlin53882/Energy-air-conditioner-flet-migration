@@ -43,6 +43,7 @@ def _inputs(**overrides) -> VaporCompressionInputs:
         subcooling_k=5.0,
         isentropic_efficiency=0.8,
         refrigeration_capacity_w=10_000.0,
+        reference_state="ASHRAE",
     )
     values.update(overrides)
     return VaporCompressionInputs(**values)
@@ -145,8 +146,8 @@ def test_superheat_and_subcooling_regions(provider: ThermodynamicStateService) -
 
 回傳：
     無。"""
-    suction = evaluate_superheat_subcooling(provider, "R134a", 200_600.0, 268.15)
-    liquid = evaluate_superheat_subcooling(provider, "R134a", 1_016_600.0, 308.15)
+    suction = evaluate_superheat_subcooling(provider, "R134a", 200_600.0, 268.15, "DEF")
+    liquid = evaluate_superheat_subcooling(provider, "R134a", 1_016_600.0, 308.15, "DEF")
 
     assert suction.region == REGION_SUPERHEATED
     assert suction.superheat_k == pytest.approx(5.0, abs=0.1)
@@ -161,9 +162,9 @@ def test_zeotropic_blend_reports_glide_and_two_phase(provider: ThermodynamicStat
 
 回傳：
     無。"""
-    result = evaluate_superheat_subcooling(provider, "R407C", 500_000.0, 273.15)
+    result = evaluate_superheat_subcooling(provider, "R407C", 500_000.0, 273.15, "DEF")
     middle = (result.dew_point_k + result.bubble_point_k) / 2.0
-    two_phase = evaluate_superheat_subcooling(provider, "R407C", 500_000.0, middle)
+    two_phase = evaluate_superheat_subcooling(provider, "R407C", 500_000.0, middle, "DEF")
 
     assert result.temperature_glide_k > 3.0
     assert two_phase.region == REGION_TWO_PHASE
@@ -176,4 +177,4 @@ def test_superheat_check_rejects_supercritical_pressure(provider: ThermodynamicS
 回傳：
     無。"""
     with pytest.raises(ValueError, match="無法計算"):
-        evaluate_superheat_subcooling(provider, "R134a", 5_000_000.0, 400.0)
+        evaluate_superheat_subcooling(provider, "R134a", 5_000_000.0, 400.0, "DEF")

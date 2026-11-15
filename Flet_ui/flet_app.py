@@ -7,6 +7,8 @@
 # ``ThermoDiagramView.activate_route()``（AppShell 的 generic route
 # activation 協定）自行處理。
 
+import logging
+
 import flet as ft
 
 from .ui.app_shell import AppShell
@@ -51,8 +53,24 @@ from application.batch import BatchService
 from application.air_processes import AirProcessService
 from application.property_queries import PropertyQueryService
 from application.refrigeration import RefrigerationService
+from application.settings import AUTO_REFERENCE_STATE, SettingsService
 from application.state_library import StateLibraryService
 from infrastructure.storage import JsonDocumentStore, workspace_directory
+
+
+def _load_default_reference_state(service: SettingsService) -> str:
+    """讀取工作區設定中的預設 Reference State；設定檔無效或無法讀取時改用 ``Auto``。
+
+參數：
+    service: 工作區設定服務。
+
+回傳：
+    ``Auto`` 或 policy code。"""
+    try:
+        return service.load().default_reference_state
+    except (OSError, ValueError):
+        logging.getLogger(__name__).warning("工作區設定無法讀取，預設 Reference State 改用 Auto。", exc_info=True)
+        return AUTO_REFERENCE_STATE
 
 
 def main(page: ft.Page) -> None:
@@ -162,12 +180,19 @@ def main(page: ft.Page) -> None:
     )
     diagram_view = ThermoDiagramView(diagram_module)
 
-    # 使用者保存的狀態點（家目錄下的工作區資料夾）；可保存狀態點的畫面共用同一個服務。
-    state_library = StateLibraryService(JsonDocumentStore(workspace_directory()))
+    # 使用者保存的狀態點與工作區設定（家目錄下的工作區資料夾）；可保存狀態點的畫面共用同一個服務。
+    workspace_store = JsonDocumentStore(workspace_directory())
+    state_library = StateLibraryService(workspace_store)
     for view in (property_view, condenser_view, cycle_view, saturation_view, superheat_view,
                  psychrometrics_view, air_load_view):
         view.attach_state_library(state_library)
     state_library_view = StateLibraryView(state_library, unit_converter)
+
+    # 設定的預設 Reference State 只作為各頁選單的初始值；各頁仍各自調整，不設定 process-global 基準。
+    default_reference_state = _load_default_reference_state(SettingsService(workspace_store))
+    for target in (property_view, condenser_module, cycle_module, saturation_module, superheat_module,
+                   diagram_module):
+        target.apply_default_reference_state(default_reference_state)
 
     analysis_views = {
         "compressor": compressor_view,

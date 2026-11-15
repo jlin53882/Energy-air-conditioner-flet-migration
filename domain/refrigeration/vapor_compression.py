@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from domain.state_points import StateSource, ThermoStatePoint, enthalpy_difference
 from domain.thermodynamics.reference_state import ReferenceStatePolicy, normalize_reference_state_policy
@@ -31,7 +31,8 @@ class VaporCompressionInputs:
     subcooling_k: float = 0.0
     isentropic_efficiency: float = 1.0
     refrigeration_capacity_w: float | None = None
-    reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.ASHRAE
+    # 必填且只能以關鍵字指定：基準由呼叫端（application 層 resolver）解析後傳入，domain 不自行假設。
+    reference_state: ReferenceStatePolicy | str = field(kw_only=True)
 
 
 @dataclass(frozen=True)

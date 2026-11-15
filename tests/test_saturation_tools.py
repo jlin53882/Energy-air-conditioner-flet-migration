@@ -95,7 +95,7 @@ def test_saturation_at_known_temperature_reports_zeotropic_pressure_difference(p
 回傳：
     無。"""
     temperature = 278.15
-    result = saturation_properties(provider, "R407C", temperature_k=temperature)
+    result = saturation_properties(provider, "R407C", temperature_k=temperature, reference_state="ASHRAE")
 
     assert result.known == KNOWN_TEMPERATURE
     assert result.liquid.temperature_k == pytest.approx(temperature)
@@ -111,7 +111,7 @@ def test_known_temperature_blend_does_not_report_latent_heat(provider) -> None:
 
 回傳：
     無。"""
-    result = saturation_properties(provider, "R407C", temperature_k=278.15)
+    result = saturation_properties(provider, "R407C", temperature_k=278.15, reference_state="ASHRAE")
 
     assert result.liquid.pressure_pa != pytest.approx(result.vapor.pressure_pa, rel=1e-3)
     assert result.latent_heat_j_kg is None
@@ -123,7 +123,7 @@ def test_known_pressure_blend_reports_same_pressure_latent_heat(provider) -> Non
 回傳：
     無。"""
     pressure = 600_000.0
-    result = saturation_properties(provider, "R407C", pressure_pa=pressure)
+    result = saturation_properties(provider, "R407C", pressure_pa=pressure, reference_state="ASHRAE")
 
     assert result.liquid.pressure_pa == pytest.approx(result.vapor.pressure_pa)
     assert result.temperature_glide_k > 4.0
@@ -138,7 +138,7 @@ def test_pure_refrigerant_has_no_glide(provider) -> None:
 
 回傳：
     無。"""
-    result = saturation_properties(provider, "R32", pressure_pa=1_000_000.0)
+    result = saturation_properties(provider, "R32", pressure_pa=1_000_000.0, reference_state="ASHRAE")
 
     assert result.temperature_glide_k == pytest.approx(0.0, abs=1e-6)
 
@@ -178,7 +178,7 @@ def test_saturation_rejects_invalid_known_values(provider, kwargs, message) -> N
 回傳：
     無。"""
     with pytest.raises(ValueError, match=message):
-        saturation_properties(provider, "R32", **kwargs)
+        saturation_properties(provider, "R32", **kwargs, reference_state="ASHRAE")
 
 
 def test_saturation_rejects_blank_fluid_and_supercritical_input(provider) -> None:
@@ -187,9 +187,9 @@ def test_saturation_rejects_blank_fluid_and_supercritical_input(provider) -> Non
 回傳：
     無。"""
     with pytest.raises(ValueError, match="冷媒名稱"):
-        saturation_properties(provider, "  ", pressure_pa=1e6)
+        saturation_properties(provider, "  ", pressure_pa=1e6, reference_state="ASHRAE")
     with pytest.raises(ValueError):
-        saturation_properties(provider, "R744", temperature_k=320.0)
+        saturation_properties(provider, "R744", temperature_k=320.0, reference_state="ASHRAE")
 
 
 def test_saturation_state_points_round_trip_through_documents(provider) -> None:
@@ -197,7 +197,7 @@ def test_saturation_state_points_round_trip_through_documents(provider) -> None:
 
 回傳：
     無。"""
-    result = saturation_properties(provider, "R32", temperature_k=283.15)
+    result = saturation_properties(provider, "R32", temperature_k=283.15, reference_state="ASHRAE")
 
     for point in (result.liquid, result.vapor):
         assert ThermoStatePoint.from_dict(point.to_dict()) == point
@@ -237,7 +237,7 @@ def test_two_phase_measurement_has_no_measured_state(provider) -> None:
     bubble = _coolprop("T", "P", pressure, "Q", 0, "R407C")
     dew = _coolprop("T", "P", pressure, "Q", 1, "R407C")
 
-    result = evaluate_superheat_subcooling(provider, "R407C", pressure, (bubble + dew) / 2)
+    result = evaluate_superheat_subcooling(provider, "R407C", pressure, (bubble + dew) / 2, "DEF")
 
     assert result.region == REGION_TWO_PHASE
     assert result.measured_state is None
@@ -574,7 +574,7 @@ def test_state_query_error_is_a_value_error(provider) -> None:
 回傳：
     無。"""
     with pytest.raises(StateQueryError):
-        saturation_properties(provider, "R744", temperature_k=320.0)
+        saturation_properties(provider, "R744", temperature_k=320.0, reference_state="ASHRAE")
     assert issubclass(StateQueryError, ValueError)
 
 
@@ -860,9 +860,9 @@ def test_every_common_refrigerant_is_computable(provider) -> None:
 回傳：
     無。"""
     for fluid in COMMON_REFRIGERANTS:
-        by_temperature = saturation_properties(provider, fluid, temperature_k=273.15)
+        by_temperature = saturation_properties(provider, fluid, temperature_k=273.15, reference_state="ASHRAE")
         assert by_temperature.latent_heat_j_kg is None, fluid
-        by_pressure = saturation_properties(provider, fluid, pressure_pa=by_temperature.vapor.pressure_pa)
+        by_pressure = saturation_properties(provider, fluid, pressure_pa=by_temperature.vapor.pressure_pa, reference_state="ASHRAE")
         assert by_pressure.latent_heat_j_kg > 0, fluid
 
 
