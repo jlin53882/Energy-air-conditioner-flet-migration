@@ -41,10 +41,12 @@ ResolvedThermoPolicy（不可變快照）→ 計算、結果顯示、圖表、�
 
 ### 優先序
 
-目前實作的優先序：**頁面上使用者明確選擇 > 模型／工作流程的 Auto 規則**。
+目前實作的優先序：**頁面上使用者明確選擇 > 工作區預設值 > 模型／工作流程的 Auto 規則**。
 
 - 各頁面擁有自己的選單，不跟隨其他頁面（既有契約）。
-- `WorkspaceSettings.default_reference_state` 已可保存，但**目前尚未套用到任何頁面**（既有狀況，本次未變更；見待討論事項）。
+- `WorkspaceSettings.default_reference_state`（工作區 `settings.json`）只決定各頁選單的**初始值**：Flet 啟動時由組合根讀取，套用到物性、飽和性質、過熱度／過冷度、冷凍循環、冷凝器 Exergy 與熱力圖頁（`Flet_ui/ui/reference_state_default.py`）。使用者在頁面上選過的值不會被設定覆寫；套用時不呼叫 process-global `set_reference_state()`，實際基準仍在每次 request 由 resolver 解析。設定檔讀不到或無效時改用 Auto。
+- 工作區預設是**偏好，不是手動指定**：使用者沒在頁面上選過時，request 以 `reference=Auto` 加 `preferred_reference=<預設>` 解析。流體支援就採用，結果標示「（工作區預設）」；不支援（例如預設 IIR 時的 Water、Air、氮氣）就退回 Auto 規則，並在備援說明寫明原因，不會無法計算。使用者自行選的基準才是手動指定，不支援時照樣明確報錯。
+- 物性頁在理想氣體／濕空氣模型下選單固定 Auto；切回真實流體時，使用者選過的基準照原樣還原，沒選過則恢復成工作區預設值。目前 Flet 沒有編輯設定的畫面；壓縮機頁沒有基準選單，批次計算一律用 Auto。
 - 尚未實作「資料來源 Profile」（例如 Siemens R717、ASHRAE 2025 SI）；若日後加入，Profile 只能選擇基準，不得覆寫 EOS 或加入常數焓修正，且須與計算模型／reference state 分開保存。
 
 ## 3. 三種「空氣」
@@ -55,7 +57,7 @@ ResolvedThermoPolicy（不可變快照）→ 計算、結果顯示、圖表、�
 | 理想氣體 | `P = ρRT`、常數 cp；`h = cp·T`（0 K 外插 h = 0） | 不適用（狀態點記為 `IDEAL_GAS`） | kJ/kg；**不提供比熵**（不以 0 代替） |
 | 濕空氣 | 既有 `PsychrometricService`（ASHRAE 公式 `h = 1.006 t + W(2501 + 1.86 t)`） | 不適用；焓零點為 0 °C 乾空氣與 0 °C 液態水 | 每 kg 乾空氣（kJ/kg_dry_air） |
 
-- 只有 P、T 的 `Air` 一律視為乾空氣，不猜濕度。物性頁的「已知條件」列沒有濕度性質，因此 Auto 在物性頁不會自動切到濕空氣；請在「計算模型」選擇「濕空氣」，輸入乾球溫度＋ RH／濕球溫度／濕度比其中**一個**，總壓由海拔依標準大氣換算。
+- 只有 P、T 的 `Air` 一律視為乾空氣，不猜濕度。物性頁的「已知條件」列沒有濕度性質，因此 Auto 在物性頁不會自動切到濕空氣（物質為 Air／R729 且模型不是濕空氣時，頁面會顯示提示，但不自動切換）；請在「計算模型」選擇「濕空氣」，輸入乾球溫度＋ RH／濕球溫度／濕度比其中**一個**，總壓由海拔依標準大氣換算。
 - 濕空氣焓（每 kg 乾空氣，含水蒸氣）與 `PropsSI('H', …, 'Air')`（乾空氣工質、DEF 基準）是不同性質，數值相差數百 kJ/kg，不可互比。
 - 本次**沒有**更換濕空氣公式；CoolProp `HAPropsSI` 只作為交叉驗證（25 °C、RH 50 %、海拔 0 m：W、h 差異 < 0.5 %，見測試）。
 - 理想氣體不處理飽和或兩相狀態（拒絕乾度輸入），也不得與真實流體的焓、熵比較。
@@ -95,4 +97,5 @@ ResolvedThermoPolicy（不可變快照）→ 計算、結果顯示、圖表、�
 | 理想氣體結果 | 共用 domain 服務不再包含 `S`（舊為 0）；乾度輸入明確拒絕 | Flet 文字輸出顯示「不提供（理想氣體模型）」。 |
 | `PropertyQueryRequest` | 新增選填 `model`；新增 `HumidAirQueryRequest`、`PropertyQueryService.query_with_policy()`／`query_humid_air()` | `query()` 介面不變；`reference_state` 預設仍為 `DEF`。 |
 | 物性頁 UI | 「計算模式（CoolProp／Water）」＋「理想氣體」勾選 → 「計算模型」選單；基準選單加入 Auto 並以 `DEF` 取代 `Default` | 依 UI 控制項名稱撰寫的外部腳本需更新。 |
-| Telegram | **不在本次範圍**：`Telegram_bot/` 未修改，物性查詢仍固定使用 `DEF`、不導入 Auto，舊比容（V）路徑的理想氣體仍回傳 `S = 0`。 | 連帶影響：Telegram 非 V 輸入的查詢本來就委派共用 domain 服務，因此理想氣體結果不再列出熵（原為 0）；其他數值不變。 |
+| Telegram | 後續 PR 導入 Auto：物性查詢以同一個 resolver 解析（`ThermoCalculator.calculate_properties_auto()`），結果附「模型與基準」分組。冷媒由 `DEF` 改為 **IIR**；Water、乾空氣維持 `DEF`。舊比容（V）路徑同樣使用解析後的基準，V 的換算語義（相容邊界）不變。 | 冷媒的焓、熵絕對值改變，與 Flet 同一查詢一致；P、T、ρ 等不變。Telegram 不提供理想氣體選項；`ThermoCalculator.calculate_properties()` 直接呼叫時的預設仍是 `DEF`。 |
+| `domain/refrigeration` 函式 | 後續 PR：`saturation_properties`、`evaluate_superheat_subcooling`、`analyze_condenser_exergy`、`VaporCompressionInputs` 的 `reference_state` **改為必填**（原預設為 ASHRAE 或 DEF） | 省略基準直接 `TypeError`，不再靜默套用與 Auto 不同的基準。application 層本來就一律傳入解析後的基準，因此 UI 結果不變；只影響直接呼叫 domain 的程式（目前只有測試）。 |

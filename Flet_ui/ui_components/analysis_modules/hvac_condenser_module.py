@@ -312,7 +312,7 @@ class CondenserModule(BaseAnalysisModule):
             boundary_k, boundary_label = self.read_si("cx_t_b"), "指定等效傳熱邊界溫度"
         self.last_policy = None
         fluid = self.read_text("cx_fluid")
-        policy = self.refrigeration.resolve(fluid, self.cx_ref_state.value)
+        policy = self.resolve_reference_policy(fluid, self.cx_ref_state)
         result = self.refrigeration.analyze_condenser_exergy(CondenserExergyRequest(
             fluid=fluid,
             pressure_pa=self.read_absolute_pressure_pa("cx_p", "cx_atm"),

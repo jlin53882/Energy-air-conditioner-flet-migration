@@ -111,3 +111,27 @@ def test_ph_chart_uses_the_solver_policy_not_auto(monkeypatch) -> None:
     module.calculate_cycle(False)
 
     assert received == ["NBP"]
+
+
+def test_domain_refrigeration_requires_explicit_reference_state() -> None:
+    """domain 冷凍函式不再有預設基準：省略 reference_state 會直接失敗，不會靜默套用 ASHRAE／DEF。
+
+回傳：
+    無。"""
+    from domain.refrigeration import (
+        analyze_condenser_exergy,
+        evaluate_superheat_subcooling,
+        saturation_properties,
+    )
+
+    provider = _state_service()
+    with pytest.raises(TypeError, match="reference_state"):
+        VaporCompressionInputs("R134a", 263.15, 313.15)
+    with pytest.raises(TypeError, match="reference_state"):
+        saturation_properties(provider, "R134a", pressure_pa=1e6)
+    with pytest.raises(TypeError, match="reference_state"):
+        evaluate_superheat_subcooling(provider, "R134a", 1e6, 320.0)
+    with pytest.raises(TypeError, match="reference_state"):
+        analyze_condenser_exergy(
+            provider, "R134a", 1e6, 333.15, 308.15, 0.05, 298.15, boundary_temperature_k=308.15
+        )

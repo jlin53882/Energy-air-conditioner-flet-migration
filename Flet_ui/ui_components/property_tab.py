@@ -22,7 +22,9 @@ from .analysis_modules.result_formatting import ResultFormatter
 from application.models import HumidAirQueryRequest, PropertyQueryRequest
 from application.property_queries import PropertyQueryResult, PropertyQueryService
 from domain.state_points import AirStatePoint, StateSource, ThermoStatePoint
+from domain.thermodynamics.reference_state import canonical_fluid_name
 from domain.thermodynamics.thermo_policy import (
+    AIR,
     AUTO,
     MODEL_LABELS,
     REFERENCE_STATE_DESCRIPTIONS,
@@ -36,6 +38,7 @@ from ..ui.components.engineering_card import EngineeringCard
 from ..ui.components.quantity_input import QuantityInput
 from ..ui.components.result_panel import ResultPanel
 from ..ui.components.state_save_menu import StateSaveMenu
+from ..ui.reference_state_default import ReferenceStateDefault
 from ..ui.theme import (
     TOKENS,
     card_shadow,
@@ -151,6 +154,11 @@ class PropertyTab(ft.Column):
         # 切到濕空氣模型時暫存原本的物質名稱，切回其他模型時還原（不靜默覆寫使用者輸入）。
         self._fluid_before_humid_air: str | None = None
         self.mode_notice = ft.Text("", size=TOKENS.caption, color=TOKENS.warning, visible=False)
+        # 物質為 Air（含 R729 等別名）但模型不是濕空氣時的提示；Auto 不推測濕度，不自動切換模型。
+        self.air_humidity_hint = ft.Text(
+            f"若要含濕度計算，請把計算模型切到「{MODEL_LABELS[CalculationModel.HUMID_AIR]}」。",
+            size=TOKENS.caption, color=TOKENS.text_secondary, visible=False,
+        )
 
         # --- 參考基準區塊 (Reference State Block) ---
         self.ref_state_descriptions = {
@@ -164,6 +172,11 @@ class PropertyTab(ft.Column):
             on_select=self.on_ref_state_change,
             expand=True,
         )
+        # 初始值採工作區預設（見 apply_default_reference_state）；使用者選過後不再被設定改動。
+        self._reference_default = ReferenceStateDefault()
+        self._reference_default.register(self.ref_state_dd, track_selection=False)
+        # 切到不適用基準的模型前，使用者自行選的基準；切回時還原。
+        self._reference_before_disable: str | None = None
         self.reference_state_helper = ft.Text(
             self.ref_state_descriptions[AUTO],
             size=TOKENS.caption,
@@ -403,6 +416,7 @@ class PropertyTab(ft.Column):
                     ], spacing=TOKENS.spacing_md, run_spacing=TOKENS.spacing_md,
                         vertical_alignment=ft.CrossAxisAlignment.START),
                     self.mode_notice,
+                    self.air_humidity_hint,
                     ft.Row(
                         [ft.Icon(ft.Icons.RULE, size=14, color=TOKENS.text_muted), self.policy_preview],
                         spacing=6,
@@ -1031,13 +1045,16 @@ class PropertyTab(ft.Column):
 回傳：
     解析結果；無法解析時為 None。"""
         model = self.selected_model
+        self._refresh_air_humidity_hint(model)
+        reference, preferred = self._reference_default.request_reference(self.ref_state_dd)
         try:
             policy = resolve_thermo_policy(
                 self.fluid_tf.value or "",
                 model=model,
-                reference=self.ref_state_dd.value,
+                reference=reference,
                 workflow=Workflow.PROPERTY_QUERY,
                 humidity_specified=model is CalculationModel.HUMID_AIR,
+                preferred_reference=preferred,
             )
         except ThermoPolicyError as exc:
             self.policy_preview.value = f"無法解析：{exc}"
@@ -1049,6 +1066,19 @@ class PropertyTab(ft.Column):
         self.policy_preview.value = preview
         self.policy_preview.color = TOKENS.warning if policy.fallback_reason else TOKENS.text_secondary
         return policy
+
+    def _refresh_air_humidity_hint(self, model: CalculationModel) -> None:
+        """物質為 Air（CoolProp canonical，含 ``R729`` 等別名）且模型不是濕空氣時顯示提示。
+
+只提示、不自動切換模型：Auto 不會推測使用者是否要含濕度計算。
+
+參數：
+    model: 目前選擇的計算模型。
+
+回傳：
+    無。"""
+        is_air = canonical_fluid_name(self.fluid_tf.value or "") == AIR
+        self.air_humidity_hint.visible = is_air and model is not CalculationModel.HUMID_AIR
 
     def on_fluid_change(self, e: ft.ControlEvent) -> None:
         """驗證流體名稱、更新模型／基準預覽，並使先前計算結果失效。
@@ -1088,7 +1118,8 @@ class PropertyTab(ft.Column):
         """依模型調整欄位可用性；不靜默覆寫使用者輸入的物質。
 
         只有濕空氣模型會把物質設為 ``Air``（並明確提示、暫存原輸入）；切回其他模型時還原。
-        理想氣體與濕空氣沒有 CoolProp reference state，參考基準固定為 Auto 並停用。
+        理想氣體與濕空氣沒有 CoolProp reference state，參考基準固定為 Auto 並停用；切回適用的模型時，
+        使用者選過的基準照原樣還原，沒選過則恢復工作區預設值。
 
         :param e: Flet 事件物件 (可選)
         """
@@ -1113,7 +1144,16 @@ class PropertyTab(ft.Column):
         self.mode_notice.visible = bool(notice)
         reference_applicable = model in (CalculationModel.AUTO, CalculationModel.REAL_FLUID)
         if not reference_applicable:
+            if not self.ref_state_dd.disabled:
+                self._reference_before_disable = self.ref_state_dd.value
             self.ref_state_dd.value = AUTO
+        elif self.ref_state_dd.disabled:
+            # 由不適用的模型切回：還原使用者選過的基準；沒選過時恢復工作區預設值。
+            if self._reference_default.is_user_choice(self.ref_state_dd):
+                self.ref_state_dd.value = self._reference_before_disable or AUTO
+            else:
+                self._reference_default.reset(self.ref_state_dd)
+            self._reference_before_disable = None
         self.ref_state_dd.disabled = not reference_applicable
         self.reference_state_helper.value = (
             self.ref_state_descriptions.get(self.ref_state_dd.value, "")
@@ -1148,9 +1188,29 @@ class PropertyTab(ft.Column):
 
 回傳：
     無。"""
+        self._reference_default.mark_user_choice(self.ref_state_dd)
         self._mark_calculated_result_stale()
         ref_code = self.ref_state_dd.value
         self.reference_state_helper.value = self.ref_state_descriptions.get(ref_code, "")
+        self._refresh_policy_preview()
+        if self.parent:
+            self.update()
+
+    def apply_default_reference_state(self, choice: object) -> None:
+        """套用工作區設定的預設參考基準；使用者已自行選過時不改動。
+
+不呼叫 process-global 的 ``set_reference_state()``。目前模型不適用參考基準（理想氣體、濕空氣）
+時選單維持 Auto，切回適用模型時才採用預設值。
+
+參數：
+    choice: 設定值（``Auto`` 或 policy code）；無效時改用 ``Auto``。
+
+回傳：
+    無。"""
+        if not self._reference_default.apply(choice):
+            return
+        self._mark_calculated_result_stale()
+        self.reference_state_helper.value = self.ref_state_descriptions.get(self.ref_state_dd.value, "")
         self._refresh_policy_preview()
         if self.parent:
             self.update()
@@ -1587,11 +1647,12 @@ class PropertyTab(ft.Column):
         # 4. 依目前模型／基準建立 request；計算時只解析一次，結果與顯示使用同一份快照。
         model = self.selected_model
         ref_code = self.ref_state_dd.value
+        reference, preferred = self._reference_default.request_reference(self.ref_state_dd)
         input_summary = [
             "--- 輸入 ---",
             f"計算模型: {MODEL_LABELS[model]}",
             f"物質: {fluid}",
-            f"參考狀態（選擇）: {ref_code}",
+            f"參考狀態（選擇）: {ref_code}{'（工作區預設）' if preferred else ''}",
             f"已知: {', '.join(display_inputs[:2])}",
             f"壓力類型: {'錶壓力（計算時加大氣壓力）' if self.is_gauge_pressure else '絕對壓力'}",
             *gauge_notes,
@@ -1610,8 +1671,9 @@ class PropertyTab(ft.Column):
                     fluid,
                     tuple(known_props[:2]),
                     model is CalculationModel.IDEAL_GAS,
-                    ref_code,
+                    reference,
                     model=model.value,
+                    preferred_reference=preferred,
                 )
             )
             policy = outcome.policy

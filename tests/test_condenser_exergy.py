@@ -48,6 +48,7 @@ def _analyze(provider, boundary_k: float, **overrides):
         outlet_temperature_k=OUTLET_K,
         mass_flow_kg_s=MASS_FLOW,
         dead_state_temperature_k=T0,
+        reference_state="DEF",
     )
     values.update(overrides)
     return analyze_condenser_exergy(provider, boundary_temperature_k=boundary_k, **values)

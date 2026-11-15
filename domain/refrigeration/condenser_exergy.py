@@ -167,7 +167,7 @@ def analyze_condenser_exergy(
     dead_state_temperature_k: float,
     *,
     boundary_temperature_k: float,
-    reference_state: ReferenceStatePolicy | str = ReferenceStatePolicy.DEFAULT,
+    reference_state: ReferenceStatePolicy | str,
 ) -> CondenserExergyResult:
     """以冷凝壓力與進出口溫度查詢狀態，計算冷凝器的㶲平衡（忽略冷凝器壓降）。
 

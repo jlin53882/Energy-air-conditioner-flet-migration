@@ -100,7 +100,7 @@ Flet 與 Telegram 負責 label、display unit、string 以及 message/control re
 
 ## 9. Refrigeration cycle contract
 
-`domain/refrigeration/` 透過 `ThermodynamicStateProvider` 協定（由 `ThermodynamicStateService.calculate_state_si` 實作）取得 canonical SI 狀態，不直接呼叫 CoolProp，也不自行修改 reference state。
+`domain/refrigeration/` 透過 `ThermodynamicStateProvider` 協定（由 `ThermodynamicStateService.calculate_state_si` 實作）取得 canonical SI 狀態，不直接呼叫 CoolProp，也不自行修改 reference state。對外函式（`saturation_properties`、`evaluate_superheat_subcooling`、`analyze_condenser_exergy`、`VaporCompressionInputs`）的 `reference_state` 為必填、沒有預設值：基準由呼叫端（application 層的 `thermo_policy` resolver）解析後傳入，domain 不自行假設 ASHRAE 或 DEF。
 
 - `solve_vapor_compression_cycle`：單級蒸氣壓縮循環。蒸發壓力取蒸發溫度的露點（Q = 1），冷凝壓力取冷凝溫度的泡點（Q = 0）；壓縮以等熵效率修正，節流為等焓。只有提供冷凍能力時才回傳質量流率、功率與吸入體積流量，不推估未提供的系統量。結果的 `reference_state` 是求解時實際使用的 policy code；reference-state policy 只在 application（`RefrigerationService`）解析一次，繪製同一循環的圖表必須使用這個值，不得再以 `Auto` 重新解析。
 - `saturation_properties`：已知絕對壓力或飽和溫度（恰好一個，且為正值），回傳 `SaturationPropertiesResult`：飽和液體（泡點，Q = 0，`key="liquid"`）與飽和蒸氣（露點，Q = 1，`key="vapor"`）兩個 `ThermoStatePoint`（`source=saturation`）。已知壓力時兩者同壓、溫度差為溫度滑移；已知溫度時兩者同溫、`pressure_difference_pa` 為泡點與露點壓力差；純冷媒兩者皆約為 0。蒸發潛熱 `latent_heat_j_kg`：

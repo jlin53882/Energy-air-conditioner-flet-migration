@@ -437,7 +437,7 @@ def test_all_cycle_enthalpy_differences_go_through_basis_guard(provider, monkeyp
         return original(first, second)
 
     monkeypatch.setattr(vapor_compression, "enthalpy_difference", recording)
-    solve_vapor_compression_cycle(provider, VaporCompressionInputs("R32", 278.15, 318.15, 5.0, 5.0, 0.7))
+    solve_vapor_compression_cycle(provider, VaporCompressionInputs("R32", 278.15, 318.15, 5.0, 5.0, 0.7, reference_state="ASHRAE"))
 
     assert sorted(pairs) == [("1", "3"), ("2", "1"), ("2", "3")]
 
@@ -447,7 +447,7 @@ def test_cycles_with_different_reference_states_cannot_be_mixed(provider) -> Non
 
 回傳：
     無。"""
-    inputs = VaporCompressionInputs("R32", 278.15, 318.15, 5.0, 5.0, 0.7)
+    inputs = VaporCompressionInputs("R32", 278.15, 318.15, 5.0, 5.0, 0.7, reference_state="ASHRAE")
     ashrae = solve_vapor_compression_cycle(provider, inputs)
     iir = solve_vapor_compression_cycle(provider, replace(inputs, reference_state="IIR"))
 
