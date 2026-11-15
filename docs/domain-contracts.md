@@ -188,3 +188,8 @@ Invalid request shape、known property 不足、invalid fluid/policy 與 unknown
 - 安全停機（冷凝溫度或排氣溫度超過上限）會保持到呼叫 `reset_trip()`。
 - `StepRecord` 另提供 T-s 圖用的四點熵（`suction_entropy_j_kg_k` 等，節流後熵由飽和液／蒸氣以乾度內插）、吸氣與液管溫度，以及板式換熱器進出水溫（進水為本步開始時的桶溫，出水 = 進水 ∓ Q ÷ (ṁ·cp)；該換熱器不在流路中時為 None）與室外換熱量 `outdoor_heat_w`。
 - 系統 COP 為送風機送出（或取走）的熱量除以壓縮機、開啟送風機與水泵的總耗電。
+- 壓縮機頻率：日立 E505DH-49A2W（49 cc 渦卷式）由外接變頻器在固定階梯 `frequency_steps_hz`（預設 30／40／50／60 Hz）運轉。自動控制為 `PidController`（Kp、Ti、Td，微分低通、條件式積分抗飽和）輸出連續頻率，再由 `FrequencyStepper` 換成階梯（遲滯 2 Hz、變階最短停留 60 s、一次一階；高壓限頻上限低於目前階梯時立即降階）。手動頻率必須是階梯之一，否則以 `ValueError` 拒絕；手動→自動為無擾切換。
+- 水泵：冰水泵與熱水泵各自選擇階梯頻率（`cold_pump_hz`／`hot_pump_hz`，預設 60 Hz），流量與耗電依相似定律（流量 ∝ f、耗電 ∝ f³）；泵浦全程運轉，耗電計入總耗電。
+- 除濕後再熱：冷房時 `reheat_fraction`（0–0.6）× 送風機冷卻盤管負荷為再熱需求，受盤管能力（熱水與盤管出風溫差）限制；再熱量由熱水桶扣除，不改變盤管負荷。`StepRecord` 記錄 `reheat_demand_w`、`reheat_w`、`reheat_energy_j` 與 `net_cooling_w`。
+- 模式回切：智慧冷房／智慧暖房切回雙效前，需在智慧模式停留至少 `mode_return_dwell_s`（預設 300 s）；切入智慧模式不受限。
+- 室外換熱器以原廠資料（報告表 2.1.5）的有效熱導 G = Q ÷ (T_冷媒平均 − T_設計進風) 計算；設計進風溫度（35 °C）為假設值。
