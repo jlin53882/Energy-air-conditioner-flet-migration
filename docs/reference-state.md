@@ -44,7 +44,9 @@ ResolvedThermoPolicy（不可變快照）→ 計算、結果顯示、圖表、�
 目前實作的優先序：**頁面上使用者明確選擇 > 工作區預設值 > 模型／工作流程的 Auto 規則**。
 
 - 各頁面擁有自己的選單，不跟隨其他頁面（既有契約）。
-- `WorkspaceSettings.default_reference_state`（工作區 `settings.json`）只決定各頁選單的**初始值**：Flet 啟動時由組合根讀取，套用到物性、飽和性質、過熱度／過冷度、冷凍循環、冷凝器 Exergy 與熱力圖頁（`Flet_ui/ui/reference_state_default.py`）。使用者在頁面上選過的值不會被設定覆寫；套用時不呼叫 process-global `set_reference_state()`，實際基準仍在每次 request 由 resolver 解析。設定檔讀不到或無效時改用 Auto。物性頁在理想氣體／濕空氣模型下選單固定 Auto，切回真實流體時若使用者沒自行選過，恢復成工作區預設值。目前 Flet 沒有編輯設定的畫面；壓縮機頁沒有基準選單，批次計算一律用 Auto。
+- `WorkspaceSettings.default_reference_state`（工作區 `settings.json`）只決定各頁選單的**初始值**：Flet 啟動時由組合根讀取，套用到物性、飽和性質、過熱度／過冷度、冷凍循環、冷凝器 Exergy 與熱力圖頁（`Flet_ui/ui/reference_state_default.py`）。使用者在頁面上選過的值不會被設定覆寫；套用時不呼叫 process-global `set_reference_state()`，實際基準仍在每次 request 由 resolver 解析。設定檔讀不到或無效時改用 Auto。
+- 工作區預設是**偏好，不是手動指定**：使用者沒在頁面上選過時，request 以 `reference=Auto` 加 `preferred_reference=<預設>` 解析。流體支援就採用，結果標示「（工作區預設）」；不支援（例如預設 IIR 時的 Water、Air、氮氣）就退回 Auto 規則，並在備援說明寫明原因，不會無法計算。使用者自行選的基準才是手動指定，不支援時照樣明確報錯。
+- 物性頁在理想氣體／濕空氣模型下選單固定 Auto；切回真實流體時，使用者選過的基準照原樣還原，沒選過則恢復成工作區預設值。目前 Flet 沒有編輯設定的畫面；壓縮機頁沒有基準選單，批次計算一律用 Auto。
 - 尚未實作「資料來源 Profile」（例如 Siemens R717、ASHRAE 2025 SI）；若日後加入，Profile 只能選擇基準，不得覆寫 EOS 或加入常數焓修正，且須與計算模型／reference state 分開保存。
 
 ## 3. 三種「空氣」

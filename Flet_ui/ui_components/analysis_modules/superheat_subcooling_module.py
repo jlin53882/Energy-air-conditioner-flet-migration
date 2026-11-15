@@ -146,7 +146,7 @@ class SuperheatSubcoolingModule(BaseAnalysisModule):
         pressure = self.read_absolute_pressure_pa("sh_p", "sh_atm")
         self.last_policy = None
         fluid = self.read_text("sh_fluid")
-        policy = self.refrigeration.resolve(fluid, self.sh_ref_state.value)
+        policy = self.resolve_reference_policy(fluid, self.sh_ref_state)
         result = self.refrigeration.check_superheat(SuperheatCheckRequest(
             fluid=fluid,
             pressure_pa=pressure,

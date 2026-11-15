@@ -10,7 +10,8 @@ from ..theme import TOKENS
 __all__ = ["PropertyGroup", "PropertyRow", "PropertyTable"]
 
 # 沒有單位且超過此字數的值視為說明文字（例如決策原因、基準說明），改為上下排列並自動換行；
-# 數值列維持左右排列、數值靠右對齊。
+# 數值列維持左右排列、數值靠右對齊。由文字結果解析的列，開頭若是數字（例如「0 °C 飽和液體
+# h = 200 kJ/kg…」）會被拆成數值與很長的「單位」；真正的單位不會這麼長，同樣視為說明文字。
 LONG_TEXT_MIN_CHARS = 24
 
 
@@ -22,7 +23,20 @@ def is_long_text(row: PropertyRow) -> bool:
 
 回傳：
     bool。"""
-    return not row.unit and len(row.value) > LONG_TEXT_MIN_CHARS
+    if row.unit:
+        return len(row.unit) > LONG_TEXT_MIN_CHARS
+    return len(row.value) > LONG_TEXT_MIN_CHARS
+
+
+def display_text(row: PropertyRow) -> str:
+    """長說明文字列顯示的完整內容（數值與單位合併，不改寫原文）。
+
+參數：
+    row: 列內容。
+
+回傳：
+    str。"""
+    return f"{row.value} {row.unit}" if row.unit else row.value
 
 
 class PropertyTable(ft.Column):
@@ -73,7 +87,7 @@ class PropertyTable(ft.Column):
             content: ft.Control = ft.Column(
                 [
                     ft.Text(row.label, size=TOKENS.body, color=TOKENS.text_primary),
-                    ft.Text(row.value, size=TOKENS.body, color=TOKENS.text_secondary, selectable=True),
+                    ft.Text(display_text(row), size=TOKENS.body, color=TOKENS.text_secondary, selectable=True),
                 ],
                 spacing=4,
                 horizontal_alignment=ft.CrossAxisAlignment.STRETCH,

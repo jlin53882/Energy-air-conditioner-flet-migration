@@ -109,7 +109,7 @@ class RefrigerationCycleModule(BaseAnalysisModule):
         self.last_result = None
         self.last_policy = None
         fluid = self.read_text("cyc_fluid")
-        policy = self.refrigeration.resolve(fluid, self.cyc_ref_state.value)
+        policy = self.resolve_reference_policy(fluid, self.cyc_ref_state)
         result = self.refrigeration.solve_cycle(RefrigerationCycleRequest(
             fluid=fluid,
             evaporating_temperature_k=self.read_si("cyc_te"),

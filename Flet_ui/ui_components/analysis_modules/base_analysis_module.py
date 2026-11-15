@@ -554,6 +554,22 @@ class BaseAnalysisModule:
                                 color=TOKENS.text_primary)
         return ft.Column([label_control, dropdown], spacing=6), dropdown
 
+    def resolve_reference_policy(self, fluid: str, dropdown: ft.Dropdown):
+        """以本頁的 Reference State 選單解析冷凍工作流的模型與基準快照。
+
+使用者沒選過的工作區預設只當成偏好（見
+:meth:`~Flet_ui.ui.reference_state_default.ReferenceStateDefault.request_reference`），
+流體不支援時退回 Auto 規則。需要子類別提供 ``self.refrigeration``。
+
+參數：
+    fluid: 流體名稱。
+    dropdown: 已登記的 Reference State 選單。
+
+回傳：
+    ResolvedThermoPolicy。"""
+        requested, preferred = self.reference_state_default.request_reference(dropdown)
+        return self.refrigeration.resolve(fluid, requested, preferred=preferred)
+
     def apply_default_reference_state(self, choice: object) -> None:
         """套用工作區設定的預設 Reference State 到本頁使用者尚未改過的選單。
 

@@ -5,6 +5,10 @@
 :class:`ReferenceStateDefault` 只改動使用者尚未自行選過的選單。使用者在頁面上的選擇一律優先，
 之後再套用新的設定也不會覆寫；套用時不呼叫 process-global 的 ``set_reference_state()``，
 實際計算仍由各頁在每次 request 以 ``resolve_thermo_policy`` 解析。
+
+工作區預設不等於使用者手動指定：計算時以 :meth:`ReferenceStateDefault.request_reference`
+取得 (要求基準, 偏好基準)，未經使用者選過的預設值只當成偏好；流體不支援（例如 Water、Air
+不支援 IIR）時退回 Auto 規則，而不是無法計算。
 """
 
 from __future__ import annotations
@@ -126,6 +130,23 @@ class ReferenceStateDefault:
 回傳：
     bool。"""
         return self._entry(dropdown).user_chosen
+
+    def request_reference(self, dropdown: ft.Dropdown) -> tuple[str, str | None]:
+        """回傳計算 request 用的 (要求基準, 工作區預設偏好)。
+
+只有「選單值仍是工作區預設套用的值、且使用者沒選過」時，預設值才只是偏好：要求基準為
+``Auto``，由 resolver 判斷流體是否支援。使用者選過或被程式改成其他值時視為手動指定。
+
+參數：
+    dropdown: 已登記的選單。
+
+回傳：
+    ``(reference, preferred_reference)``；沒有偏好時 preferred 為 None。"""
+        tracked = self._entry(dropdown)
+        value = dropdown.value or AUTO
+        if tracked.user_chosen or value == AUTO or value != tracked.applied:
+            return value, None
+        return AUTO, value
 
     def reset(self, dropdown: ft.Dropdown) -> None:
         """把選單設回目前預設值（例如模型由不適用切回適用時）。
