@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+# 舊模型 RH（百分比）的浮點誤差容差。
+RH_PERCENT_TOLERANCE = 1e-6
+
 
 class PsychrometricModel(Protocol):
     """由注入的舊版 psychrometric adapter 實作的 Protocol。"""
@@ -81,9 +84,11 @@ class PsychrometricService:
             )
         )
         dew_point_c = self._model.cal_Tdp_from_Pw(vapor_pressure_kpa)
-        if not 0.0 <= rh <= 100.0:
+        # 舊模型的 RH 由浮點運算求得，乾球 = 濕球（飽和）時可能算出 100.00000000000003 這類值；
+        # 容許 1e-6 % 的誤差並截斷到 0–100，與 calculate_from_tdb_w 的飽和容差做法一致。
+        if not -RH_PERCENT_TOLERANCE <= rh <= 100.0 + RH_PERCENT_TOLERANCE:
             raise ValueError("Legacy model RH must be between 0.0 and 100.0 percent")
-        rh_fraction = rh / 100.0
+        rh_fraction = min(max(rh, 0.0), 100.0) / 100.0
         return self._build_result(
             altitude_m=altitude_m,
             pressure=pressure_kpa * 1000.0,

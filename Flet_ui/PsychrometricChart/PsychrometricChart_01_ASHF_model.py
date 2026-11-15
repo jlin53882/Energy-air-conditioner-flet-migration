@@ -1,4 +1,4 @@
-round_number=9 #round=四捨五入到小數點第x位
+# 中間值不做四捨五入：顯示位數由各畫面的格式化決定，避免四捨五入誤差進入後續計算。
 def cal_p(z):#海拔高度壓力(P)
     """
     cal_p:計算壓力P，單位(kPa)
@@ -10,8 +10,7 @@ def cal_p(z):#海拔高度壓力(P)
     """
     
     p=101.325*((1-2.25577*10**(-5)*z)**(5.2559))
-    p_round=round(p,round_number)
-    return p_round
+    return p
 
 def cal_Pws(T_db):#飽和水蒸氣分壓(Pws)
     """
@@ -41,8 +40,7 @@ def cal_Pws(T_db):#飽和水蒸氣分壓(Pws)
     c= n6*theta**2+n7*theta+n8
 
     Pws= 1000*(2*c/(-1*b+(b**2-4*a*c)**0.5))**4
-    Pws_round=round(Pws,round_number)
-    return Pws_round
+    return Pws
 
 def cal_Ws(P1,P2):#飽和濕空氣之濕度比(Ws)
     """
@@ -58,8 +56,7 @@ def cal_Ws(P1,P2):#飽和濕空氣之濕度比(Ws)
 
     """
     Ws=(0.621945*P2)/(P1-P2)
-    Ws_round=round(Ws,round_number)
-    return Ws_round
+    return Ws
 
 def cal_W(Wss,T_db,T_wb):#濕度比(W)
     """
@@ -74,8 +71,7 @@ def cal_W(Wss,T_db,T_wb):#濕度比(W)
     """
 
     W=(((2501-2.326*T_wb)*Wss-1.006*(T_db-T_wb))/((2501+(1.86*T_db))-(4.186*T_wb)))
-    W_round=round(W,round_number)
-    return W_round
+    return W
 
 def cal_RH(P1,P2):#相對溼度(RH)
     '''
@@ -100,8 +96,7 @@ def cal_Pw(P1,W):#水蒸氣分壓(Pw)
     說明:藉由輸入兩種壓力(P1、P2)計算水蒸氣分壓
     '''
     Pw=(P1*W)/(0.621945+W)
-    Pw_round=round(Pw,round_number)
-    return Pw_round
+    return Pw
 
 def cal_v(T_db,P1,P2):#比容(v)
     '''
@@ -116,8 +111,7 @@ def cal_v(T_db,P1,P2):#比容(v)
     R=8314.742
     T=T_db+273.15
     v=(R*T/(28.966*(P1-P2)))/1000
-    v_round=round(v,round_number)
-    return v_round
+    return v
 
 def cal_h(T_db,W):#焓(h)
     """
@@ -129,8 +123,7 @@ def cal_h(T_db,W):#焓(h)
     說明:藉由輸入乾求溫度與濕求溫度計算求得焓值
     """
     h=1.006*T_db+W*(2501+1.86*T_db)
-    h_round=round(h,round_number)
-    return h_round
+    return h
 
 def Calculation_process_m_Tdb_Twb(m,T_db,T_wb):#空氣線圖計算過程 給高度 乾球溫度 濕球溫度
     P=cal_p(m)#計算海拔高度壓力
@@ -235,8 +228,7 @@ def cal_Pws_Rh(RH,Pws_db):
     
     """
     Pw=RH/100*Pws_db
-    Pw_round=round(Pw,round_number)
-    return Pw_round
+    return Pw
 
 
 def cal_Tdp_from_Pw(Pw):

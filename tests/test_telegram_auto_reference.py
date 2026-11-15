@@ -99,3 +99,14 @@ def test_policy_lines_show_model_reference_and_escape_html(calculator) -> None:
     fallback = dataclasses.replace(policy, fallback_reason="<b>不支援</b>")
     escaped = calculator.format_policy_lines(fallback)
     assert "備援說明: &lt;b&gt;不支援&lt;/b&gt;" in escaped
+
+
+def test_calculate_properties_requires_reference_state(calculator) -> None:
+    """直接呼叫 calculate_properties 必須指定基準，不再靜默使用 DEF。
+
+回傳：
+    無。"""
+    with pytest.raises(TypeError, match="reference_state"):
+        calculator.calculate_properties("R134a", KNOWN)
+    with pytest.raises(TypeError):
+        calculator.calculate_properties("R134a", KNOWN, False, "DEF")  # 只能以關鍵字指定
