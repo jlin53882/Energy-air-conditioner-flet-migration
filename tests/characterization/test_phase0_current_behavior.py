@@ -108,7 +108,7 @@ def test_current_ideal_gas_results_match_between_engines(
     known_props = [("P", 101.325, "kPa"), ("T", 25.0, "°C")]
     flet_result = flet_thermo.calculate_properties("Air", known_props, is_ideal_gas=True)
     telegram_result = telegram_thermo.calculate_properties(
-        "Air", known_props, is_ideal_gas=True
+        "Air", known_props, is_ideal_gas=True, reference_state="DEF"
     )
 
     for prop_code in ("P", "T", "D", "H", "U", "V"):
