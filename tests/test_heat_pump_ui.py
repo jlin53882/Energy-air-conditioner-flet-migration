@@ -220,9 +220,9 @@ def test_view_settings_reach_simulation(service: HeatPumpSimulationService) -> N
     view.cold_pump.set_value(30.0)
     view._on_pumps(30.0)
     assert view.sim.settings.cold_pump_hz == 30.0 and view.sim.settings.hot_pump_hz == 60.0
-    assert view.cold_pump.info.value == "6.03 GPM · 62 W"
+    assert view.cold_pump.info.value == "4.76 GPM · 167 W"
     view.tick()
-    assert view.latest.cold_pump_gpm == pytest.approx(6.03)
+    assert view.latest.cold_pump_gpm == pytest.approx(4.76, abs=0.01)
     assert view.reheat_slider.disabled  # 暖房不使用再熱
     view.operation_button.selected = ["cooling"]
     view._on_operation(None)

@@ -26,7 +26,7 @@ from .components import (
 )
 from .control import FrequencyStepper, PidController
 from .cycle_table import CycleTable
-from .parameters import WATER_CP_J_KG_K, HeatPumpParameters, celsius, gpm_to_kg_s
+from .parameters import WATER_CP_J_KG_K, HeatPumpParameters, celsius, gpm_to_kg_s, interpolate_table
 
 
 class OperationMode(str, Enum):
@@ -435,7 +435,9 @@ class HeatPumpSimulation:
         fan_ua = sum(fan.ua_w_k for fan in active_fans)
         fan_power = sum(fan.fan_power_w for fan in active_fans)
         if cooling:
-            fan_load = max(0.0, fan_ua * (s.room_k - self.cold_water_k))
+            # 冰水泵頻率低於 40 Hz 時送風機能力下降（實測，§1.5）。
+            capacity_ratio = interpolate_table(p.fan_coil_capacity_ratio_by_cold_pump_hz, s.cold_pump_hz)
+            fan_load = max(0.0, fan_ua * (s.room_k - self.cold_water_k)) * capacity_ratio
         else:
             fan_load = max(0.0, fan_ua * (self.hot_water_k - s.room_k))
         cold_pump_power = p.cold_pump.power_w(s.cold_pump_hz)

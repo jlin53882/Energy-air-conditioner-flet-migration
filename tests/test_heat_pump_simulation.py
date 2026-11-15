@@ -40,7 +40,13 @@ from domain.heat_pump import (
     summarize,
     volumetric_efficiency,
 )
-from domain.heat_pump.parameters import CompressorParameters, PlateGeometry, RefrigerantSideCalibration
+from domain.heat_pump.parameters import (
+    CompressorParameters,
+    PlateGeometry,
+    RefrigerantSideCalibration,
+    interpolate_power_law,
+    interpolate_table,
+)
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units.converter import CanonicalUnitConverter
 
@@ -191,16 +197,51 @@ def test_outdoor_heat_exchanger_follows_manufacturer_table() -> None:
     assert replace(outdoor, design_air_inlet_c=32.0).conductance_w_k < outdoor.conductance_w_k
 
 
-def test_pump_follows_affinity_laws() -> None:
-    """變頻水泵：流量 ∝ f，耗電 ∝ f³（60 Hz 為 12.06 GPM、0.5 kW）。
+def test_pump_curves_follow_measured_data() -> None:
+    """水泵曲線採實測（報告表 8.1.1 與電功率計算）：冰水泵 60 Hz 為 0.62 kg/s（9.83 GPM）、392 W；
+    40／50／60 Hz 耗電 241.4／320.7／391.9 W；30 Hz 以冪次外插約 167 W。熱水泵無實測，額定流量沿用設計
+    12.06 GPM，曲線形狀與耗電同冰水泵。
 
 回傳：
     無。"""
-    pump = PumpParameters()
-    assert pump.frequency_steps_hz == STEPS
+    params = HeatPumpParameters()
+    cold, hot = params.cold_pump, params.hot_pump
+    assert cold.frequency_steps_hz == STEPS and hot.frequency_steps_hz == STEPS
+    for hz, cold_gpm, hot_gpm, watts in (
+        (60.0, 9.83, 12.06, 391.9), (50.0, 8.88, 10.89, 320.7), (40.0, 6.82, 8.36, 241.4), (30.0, 4.76, 5.84, 167.4)
+    ):
+        assert cold.flow_gpm(hz) == pytest.approx(cold_gpm, abs=0.01)
+        assert hot.flow_gpm(hz) == pytest.approx(hot_gpm, abs=0.01)
+        assert cold.power_w(hz) == pytest.approx(watts, abs=0.5) == pytest.approx(hot.power_w(hz), abs=0.5)
+    assert gpm_to_kg_s(cold.flow_gpm(30.0)) == pytest.approx(0.30, abs=2e-3)
+    # 實測耗電隨頻率遠比立方律平緩（指數約 1.1–1.3）。
+    assert cold.power_w(40.0) / cold.power_w(60.0) == pytest.approx(0.616, abs=1e-3)
+    assert cold.power_w(40.0) > 0.296 * cold.power_w(60.0)
+
+
+def test_pump_without_curves_falls_back_to_affinity_laws() -> None:
+    """沒有流量／耗電曲線時，退回相似定律：流量 ∝ f、耗電 ∝ f³。
+
+回傳：
+    無。"""
+    pump = PumpParameters(rated_flow_gpm=12.06, rated_power_w=500.0, flow_ratio_by_hz=(), power_w_by_hz=())
     for hz, gpm, watts in ((60.0, 12.06, 500.0), (50.0, 10.05, 289.0), (40.0, 8.04, 148.1), (30.0, 6.03, 62.5)):
         assert pump.flow_gpm(hz) == pytest.approx(gpm, abs=0.01)
         assert pump.power_w(hz) == pytest.approx(watts, abs=0.5)
+
+
+def test_interpolation_helpers() -> None:
+    """分段線性內插夾端點；冪次內插通過資料點並可外插。
+
+回傳：
+    無。"""
+    table = ((20.0, 1.0), (40.0, 3.0), (60.0, 4.0))
+    assert interpolate_table(table, 10.0) == 1.0 and interpolate_table(table, 70.0) == 4.0
+    assert interpolate_table(table, 30.0) == pytest.approx(2.0)
+    power = ((40.0, 100.0), (50.0, 200.0), (60.0, 400.0))
+    assert interpolate_power_law(power, 50.0) == pytest.approx(200.0)
+    assert interpolate_power_law(power, 30.0) == pytest.approx(100.0 * 0.75 ** 3.106, rel=1e-3)
+    assert interpolate_power_law(power, 70.0) > 400.0
 
 
 # ---- PID 與階梯量化器 ----
@@ -488,7 +529,8 @@ def test_cooling_with_fan_a_stops_and_restarts_with_dwell(table: CycleTable) -> 
     assert start.time_s - stop.time_s >= 180.0
     off = [r for r in records if not r.compressor_on]
     assert off
-    assert all(r.total_power_w == pytest.approx(85.0 + 1_000.0) for r in off if r.time_s > 60)
+    pumps = 2 * PumpParameters().power_w(60.0)
+    assert all(r.total_power_w == pytest.approx(85.0 + pumps) for r in off if r.time_s > 60)
 
 
 def test_heating_with_both_fans_switches_to_outdoor_evaporator(table: CycleTable) -> None:
@@ -538,18 +580,41 @@ def test_new_compressor_overdrives_the_existing_plate_evaporator(table: CycleTab
 
 
 def test_pump_frequency_sets_flow_power_and_evaporator_performance(table: CycleTable) -> None:
-    """泵頻率 30 Hz：6.03 GPM、每台 62.5 W；流量減半使蒸發器溫差變大，蒸發溫度較低。
+    """泵頻率 30 Hz：冰水泵 4.76 GPM、熱水泵 5.84 GPM、每台 167 W；流量減少使蒸發器溫差變大，蒸發溫度較低。
 
 回傳：
     無。"""
     base = default_settings(OperationMode.COOLING)
     full = HeatPumpSimulation(table, settings=base).step()
     slow = HeatPumpSimulation(table, settings=replace(base, cold_pump_hz=30.0, hot_pump_hz=30.0)).step()
-    assert (full.cold_pump_hz, full.cold_pump_gpm, full.pump_power_w) == (60.0, pytest.approx(12.06), pytest.approx(1_000.0))
-    assert slow.cold_pump_gpm == pytest.approx(6.03) and slow.hot_pump_gpm == pytest.approx(6.03)
-    assert slow.cold_pump_power_w == pytest.approx(62.5) and slow.pump_power_w == pytest.approx(125.0)
+    assert (full.cold_pump_hz, full.cold_pump_gpm, full.hot_pump_gpm) == (
+        60.0, pytest.approx(9.83, abs=0.01), pytest.approx(12.06, abs=0.01))
+    assert full.pump_power_w == pytest.approx(2 * 391.9, abs=0.5)
+    assert slow.cold_pump_gpm == pytest.approx(4.76, abs=0.01) and slow.hot_pump_gpm == pytest.approx(5.84, abs=0.01)
+    assert slow.cold_pump_power_w == pytest.approx(167.4, abs=0.5) and slow.pump_power_w == pytest.approx(334.8, abs=1.0)
     assert slow.evaporating_k < full.evaporating_k
     assert slow.condenser_water_out_k - slow.condenser_water_in_k > full.condenser_water_out_k - full.condenser_water_in_k
+
+
+def test_fan_coil_capacity_falls_only_at_low_cold_pump_frequency(table: CycleTable) -> None:
+    """實測：冰水泵 ≥ 50 Hz 送風機能力不變，40 Hz 約 95 %，30 Hz 約 88 %；暖房不套用（無實測）。
+
+回傳：
+    無。"""
+    base = default_settings(OperationMode.COOLING)
+
+    def load(hz: float) -> float:
+        sim = HeatPumpSimulation(table, settings=replace(base, cold_pump_hz=hz), initial_cold_k=celsius(12.0))
+        return sim.step().fan_coil_load_w
+
+    reference = load(60.0)
+    assert load(50.0) == pytest.approx(reference)
+    assert load(40.0) == pytest.approx(0.954 * reference, rel=1e-6)
+    assert load(30.0) == pytest.approx(0.884 * reference, rel=1e-6)
+    heating = default_settings(OperationMode.HEATING)
+    hot = HeatPumpSimulation(table, settings=heating, initial_hot_k=celsius(40.0)).step().fan_coil_load_w
+    slow = HeatPumpSimulation(table, settings=replace(heating, cold_pump_hz=30.0), initial_hot_k=celsius(40.0)).step()
+    assert slow.fan_coil_load_w == pytest.approx(hot)
 
 
 # ---- 除濕後再熱 ----
@@ -799,7 +864,7 @@ def test_pump_and_fan_changes_mid_run_take_effect(table: CycleTable) -> None:
     assert both.fan_coil_load_w > base.fan_coil_load_w * 2.0
     sim.update_settings(replace(sim.settings, cold_pump_hz=30.0))
     slower = sim.step()
-    assert slower.cold_pump_gpm == pytest.approx(6.03)
+    assert slower.cold_pump_gpm == pytest.approx(4.76, abs=0.01)
     assert slower.evaporating_k < both.evaporating_k
 
 
@@ -860,10 +925,12 @@ def test_record_reports_plate_water_temperatures_and_outdoor_heat(table: CycleTa
     無。"""
     sim = HeatPumpSimulation(table)
     record = sim.step()
-    flow = gpm_to_kg_s(12.06) * 4186.0
+    cold_flow = gpm_to_kg_s(record.cold_pump_gpm) * 4186.0
+    hot_flow = gpm_to_kg_s(record.hot_pump_gpm) * 4186.0
+    assert cold_flow == pytest.approx(0.62 * 4186.0, rel=1e-3) and hot_flow == pytest.approx(0.761 * 4186.0, rel=1e-3)
     assert record.evaporator_water_in_k == pytest.approx(celsius(30.0))
-    assert record.evaporator_water_out_k == pytest.approx(celsius(30.0) - record.cooling_w / flow)
-    assert record.condenser_water_out_k == pytest.approx(celsius(30.0) + record.heating_w / flow)
+    assert record.evaporator_water_out_k == pytest.approx(celsius(30.0) - record.cooling_w / cold_flow)
+    assert record.condenser_water_out_k == pytest.approx(celsius(30.0) + record.heating_w / hot_flow)
     assert record.outdoor_heat_w == 0.0
     assert record.suction_temperature_k == pytest.approx(record.evaporating_k + 5.0)
     sim.run(15 * 60.0)

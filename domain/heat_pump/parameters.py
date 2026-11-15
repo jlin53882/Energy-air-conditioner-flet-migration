@@ -73,14 +73,76 @@ class CompressorParameters:
         return max(self.frequency_steps_hz)
 
 
+def interpolate_table(table: tuple[tuple[float, float], ...], x: float) -> float:
+    """分段線性內插（超出範圍時夾在端點）。
+
+參數：
+    table: 依 x 遞增的 (x, y)。
+    x: 查詢值。
+
+回傳：
+    y。"""
+    if x <= table[0][0]:
+        return table[0][1]
+    for (x0, y0), (x1, y1) in zip(table, table[1:]):
+        if x <= x1:
+            return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+    return table[-1][1]
+
+
+def interpolate_power_law(table: tuple[tuple[float, float], ...], x: float) -> float:
+    """對數座標內插；低於最小點時沿最近兩點的冪次外插，高於最大點時沿最後兩點外插。
+
+參數：
+    table: 依 x 遞增的 (x, y)，x、y 皆須為正。
+    x: 查詢值。
+
+回傳：
+    y。"""
+    import math
+
+    if x <= table[0][0]:
+        (x0, y0), (x1, y1) = table[0], table[1]
+    elif x >= table[-1][0]:
+        (x0, y0), (x1, y1) = table[-2], table[-1]
+    else:
+        x0, y0, x1, y1 = next((a, b, c, d) for (a, b), (c, d) in zip(table, table[1:]) if x <= c)
+    exponent = math.log(y1 / y0) / math.log(x1 / x0)
+    return y0 * (x / x0) ** exponent
+
+
+# 實測：冰水泵在不同變頻頻率下的流量（報告表 8.1.1，冰水流量 kg/s）與耗電（√3·V·I，W）。
+MEASURED_PUMP_FLOW_KG_S: tuple[tuple[float, float], ...] = (
+    (20.0, 0.19), (30.0, 0.30), (40.0, 0.43), (50.0, 0.56), (60.0, 0.62),
+)
+MEASURED_PUMP_POWER_W: tuple[tuple[float, float], ...] = ((40.0, 241.4), (50.0, 320.7), (60.0, 391.9))
+_RATED_FLOW_KG_S = MEASURED_PUMP_FLOW_KG_S[-1][1]
+MEASURED_PUMP_FLOW_RATIO: tuple[tuple[float, float], ...] = tuple(
+    (hz, kg_s / _RATED_FLOW_KG_S) for hz, kg_s in MEASURED_PUMP_FLOW_KG_S
+)
+
+# 實測：送風機空氣側冷量（0.22 kg/s × 進出口焓差）相對 60 Hz 的比例，四種進風條件平均，上限 1。
+MEASURED_FAN_COIL_CAPACITY_RATIO: tuple[tuple[float, float], ...] = (
+    (20.0, 0.787), (30.0, 0.884), (40.0, 0.954), (50.0, 1.0), (60.0, 1.0),
+)
+
+
 @dataclass(frozen=True)
 class PumpParameters:
-    """定頻水泵加變頻器：流量 ∝ f、耗電 ∝ f³（相似定律；§1.6）。"""
+    """定頻水泵加變頻器（§1.6）。
+
+    - 流量：``flow_ratio_by_hz``（相對 60 Hz 的比例，預設為冰水泵實測）× 額定流量；
+      沒有曲線時流量 ∝ f。
+    - 耗電：``power_w_by_hz``（預設為實測 √3·V·I；40–60 Hz 實測，低於 40 Hz 以冪次外插）；
+      沒有曲線時耗電 ∝ f³（相似定律）。實測值未乘功率因數（視在功率），實際有效功率可能較低。
+    """
 
     rated_flow_gpm: float = 12.06
     rated_frequency_hz: float = 60.0
-    rated_power_w: float = 500.0
+    rated_power_w: float = 391.9
     frequency_steps_hz: tuple[float, ...] = (30.0, 40.0, 50.0, 60.0)
+    flow_ratio_by_hz: tuple[tuple[float, float], ...] = MEASURED_PUMP_FLOW_RATIO
+    power_w_by_hz: tuple[tuple[float, float], ...] = MEASURED_PUMP_POWER_W
 
     def flow_gpm(self, frequency_hz: float) -> float:
         """某頻率下的流量。
@@ -90,6 +152,8 @@ class PumpParameters:
 
 回傳：
             US GPM。"""
+        if self.flow_ratio_by_hz:
+            return self.rated_flow_gpm * interpolate_table(self.flow_ratio_by_hz, frequency_hz)
         return self.rated_flow_gpm * frequency_hz / self.rated_frequency_hz
 
     def power_w(self, frequency_hz: float) -> float:
@@ -100,6 +164,8 @@ class PumpParameters:
 
 回傳：
             W。"""
+        if self.power_w_by_hz:
+            return interpolate_power_law(self.power_w_by_hz, frequency_hz)
         return self.rated_power_w * (frequency_hz / self.rated_frequency_hz) ** 3
 
 
@@ -348,8 +414,12 @@ class HeatPumpParameters:
     fan_coils: tuple[FanCoilUnit, ...] = DEFAULT_FAN_COILS
     cold_tank: TankParameters = field(default_factory=TankParameters)
     hot_tank: TankParameters = field(default_factory=TankParameters)
-    cold_pump: PumpParameters = field(default_factory=PumpParameters)
+    # 冰水泵：額定流量 = 實測 0.62 kg/s；熱水泵無實測，沿用報告設計 12.06 GPM 與同一條泵浦曲線形狀。
+    cold_pump: PumpParameters = field(
+        default_factory=lambda: PumpParameters(rated_flow_gpm=MEASURED_PUMP_FLOW_KG_S[-1][1] / gpm_to_kg_s(1.0))
+    )
     hot_pump: PumpParameters = field(default_factory=PumpParameters)
+    fan_coil_capacity_ratio_by_cold_pump_hz: tuple[tuple[float, float], ...] = MEASURED_FAN_COIL_CAPACITY_RATIO
     reheat: ReheatParameters = field(default_factory=ReheatParameters)
     control: ControlParameters = field(default_factory=ControlParameters)
 
