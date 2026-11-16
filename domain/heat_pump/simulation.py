@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
@@ -43,6 +44,13 @@ class FrequencyMode(str, Enum):
     MANUAL = "manual"
 
 
+class PumpMode(str, Enum):
+    """水泵頻率控制方式。"""
+
+    MANUAL = "manual"
+    AUTO = "auto"
+
+
 OUTDOOR_RANGE_K = (celsius(-10.0), celsius(45.0))
 ROOM_RANGE_K = (celsius(10.0), celsius(35.0))
 
@@ -64,6 +72,7 @@ class SimulationSettings:
     manual_frequency_hz: float = 60.0
     cold_pump_hz: float = 60.0
     hot_pump_hz: float = 60.0
+    pump_mode: PumpMode = PumpMode.MANUAL
     reheat_fraction: float = 0.2
     room_k: float = celsius(27.0)
     outdoor_k: float = celsius(30.0)
@@ -189,6 +198,10 @@ class _ControllerState:
     freeze_stopped: bool = False
     off_since_s: float | None = None
     tripped: bool = False
+    cold_pump_hz: float = 60.0
+    hot_pump_hz: float = 60.0
+    cold_pump_changed_s: float = -1e9
+    hot_pump_changed_s: float = -1e9
 
 
 class HeatPumpSimulation:
@@ -369,14 +382,79 @@ class HeatPumpSimulation:
 
 回傳：
             kg/s。"""
-        return gpm_to_kg_s(self.params.cold_pump.flow_gpm(self._settings.cold_pump_hz))
+        return gpm_to_kg_s(self.params.cold_pump.flow_gpm(self._pump_hz()[0]))
 
     def _hot_flow_kg_s(self) -> float:
         """熱水泵目前流量。
 
 回傳：
             kg/s。"""
-        return gpm_to_kg_s(self.params.hot_pump.flow_gpm(self._settings.hot_pump_hz))
+        return gpm_to_kg_s(self.params.hot_pump.flow_gpm(self._pump_hz()[1]))
+
+    def _pump_hz(self) -> tuple[float, float]:
+        """目前實際的（冰水泵, 熱水泵）頻率：手動取設定值，自動取控制器狀態（§2.4）。
+
+回傳：
+            (Hz, Hz)。"""
+        ctrl = self._ctrl
+        if self._settings.pump_mode is PumpMode.MANUAL:
+            ctrl.cold_pump_hz = self._settings.cold_pump_hz
+            ctrl.hot_pump_hz = self._settings.hot_pump_hz
+        return ctrl.cold_pump_hz, ctrl.hot_pump_hz
+
+    def _next_pump_hz(self, steps: tuple[float, ...], flow_gpm: Callable[[float], float], current: float,
+                      delta_t_k: float, target_k: float, changed_s: float) -> float:
+        """水側溫差控制：溫差高於目標＋遲滯時升一階；降一階後預測溫差仍不超過目標時降一階。
+
+參數：
+    steps: 可用階梯（升冪）。
+    flow_gpm: 頻率到流量的函式。
+    current: 目前頻率。
+    delta_t_k: 目前板式換熱器水側溫差（無熱交換為 0）。
+    target_k: 目標溫差。
+    changed_s: 上次變階的時間。
+
+回傳：
+    下一步頻率（Hz）。"""
+        c = self.params.control
+        if self.time_s - changed_s < c.pump_step_dwell_s:
+            return current
+        steps = tuple(sorted(steps))
+        index = steps.index(current) if current in steps else len(steps) - 1
+        if delta_t_k > target_k + c.pump_hysteresis_k and index < len(steps) - 1:
+            return steps[index + 1]
+        if index > 0:
+            lower = steps[index - 1]
+            if delta_t_k * flow_gpm(current) / flow_gpm(lower) <= target_k:
+                return lower
+        return current
+
+    def _update_pumps(self, perf: CompressorPerformance | None) -> None:
+        """自動模式下依板式換熱器水側溫差更新水泵頻率（下一步生效）。
+
+參數：
+    perf: 本步運轉點（停機或該換熱器不在流路時溫差視為 0，水泵逐階降到最低）。
+
+回傳：
+    無。"""
+        if self._settings.pump_mode is not PumpMode.AUTO:
+            return
+        c = self.params.control
+        ctrl = self._ctrl
+        cold_dt = hot_dt = 0.0
+        if perf is not None:
+            if self.mode is not RefrigerantMode.SMART_HEATING:
+                cold_dt = perf.cooling_w / (self._cold_flow_kg_s() * WATER_CP_J_KG_K)
+            if self.mode is not RefrigerantMode.SMART_COOLING:
+                hot_dt = perf.heating_w / (self._hot_flow_kg_s() * WATER_CP_J_KG_K)
+        cold = self._next_pump_hz(self.params.cold_pump.frequency_steps_hz, self.params.cold_pump.flow_gpm,
+                                  ctrl.cold_pump_hz, cold_dt, c.pump_cold_delta_t_k, ctrl.cold_pump_changed_s)
+        hot = self._next_pump_hz(self.params.hot_pump.frequency_steps_hz, self.params.hot_pump.flow_gpm,
+                                 ctrl.hot_pump_hz, hot_dt, c.pump_hot_delta_t_k, ctrl.hot_pump_changed_s)
+        if cold != ctrl.cold_pump_hz:
+            ctrl.cold_pump_hz, ctrl.cold_pump_changed_s = cold, self.time_s
+        if hot != ctrl.hot_pump_hz:
+            ctrl.hot_pump_hz, ctrl.hot_pump_changed_s = hot, self.time_s
 
     def _conditions(self, frequency_hz: float) -> OperatingConditions:
         """組合求解條件。
@@ -446,8 +524,9 @@ class HeatPumpSimulation:
             fan_load = max(0.0, fan_ua * (s.room_k - self.cold_water_k))
         else:
             fan_load = max(0.0, fan_ua * (self.hot_water_k - s.room_k))
-        cold_pump_power = p.cold_pump.power_w(s.cold_pump_hz)
-        hot_pump_power = p.hot_pump.power_w(s.hot_pump_hz)
+        cold_pump_hz, hot_pump_hz = self._pump_hz()
+        cold_pump_power = p.cold_pump.power_w(cold_pump_hz)
+        hot_pump_power = p.hot_pump.power_w(hot_pump_hz)
         pump_power = cold_pump_power + hot_pump_power
         reheat_demand = reheat = 0.0
         if cooling and fan_ua > 0 and fan_load > 0:
@@ -529,10 +608,10 @@ class HeatPumpSimulation:
             condenser_water_in_k=cond_in,
             condenser_water_out_k=cond_out,
             outdoor_heat_w=outdoor_heat,
-            cold_pump_hz=s.cold_pump_hz,
-            hot_pump_hz=s.hot_pump_hz,
-            cold_pump_gpm=p.cold_pump.flow_gpm(s.cold_pump_hz),
-            hot_pump_gpm=p.hot_pump.flow_gpm(s.hot_pump_hz),
+            cold_pump_hz=cold_pump_hz,
+            hot_pump_hz=hot_pump_hz,
+            cold_pump_gpm=p.cold_pump.flow_gpm(cold_pump_hz),
+            hot_pump_gpm=p.hot_pump.flow_gpm(hot_pump_hz),
             cold_pump_power_w=cold_pump_power,
             hot_pump_power_w=hot_pump_power,
             reheat_demand_w=reheat_demand,
@@ -545,6 +624,7 @@ class HeatPumpSimulation:
             ctrl.off_since_s = self.time_s
             self._event("trip", "高壓或排氣溫度過高，安全停機（需手動復歸）")
         self._update_mode()
+        self._update_pumps(perf)
         extra_warnings = self._update_compressor(perf, dt_s)
         if extra_warnings:
             record = replace(record, warnings=record.warnings | extra_warnings)

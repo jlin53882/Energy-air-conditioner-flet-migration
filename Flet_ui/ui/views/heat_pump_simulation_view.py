@@ -23,6 +23,7 @@ from domain.heat_pump import (
     FrequencyMode,
     HeatPumpSimulation,
     OperationMode,
+    PumpMode,
     SimulationEvent,
     StepRecord,
     celsius,
@@ -308,6 +309,8 @@ class HeatPumpSimulationView(ft.Column):
             lambda hz: f"{hz:g} Hz" + ("（低於原廠 50–60 Hz 工作範圍）" if hz < params.compressor.manufacturer_min_frequency_hz else ""),
             self._on_manual_freq)
         self.freq_step.disabled = True
+        self.pump_mode_button = _segmented([("manual", "手動"), ("auto", "自動（水側溫差）")], "manual",
+                                           self._on_pump_mode)
         self.cold_pump = _StepSelector(
             "冰水泵頻率", params.cold_pump.frequency_steps_hz, 60.0,
             lambda hz: f"{params.cold_pump.flow_gpm(hz):.2f} GPM · {params.cold_pump.power_w(hz):.0f} W", self._on_pumps)
@@ -370,6 +373,8 @@ class HeatPumpSimulationView(ft.Column):
                 self.freq_mode_button,
                 self.freq_step,
                 ft.Divider(height=8, color=TOKENS.border),
+                ft.Text("水泵頻率（變頻器階梯）", size=TOKENS.caption, color=TOKENS.text_secondary),
+                self.pump_mode_button,
                 self.cold_pump,
                 self.hot_pump,
                 self.reheat_slider,
@@ -608,6 +613,9 @@ class HeatPumpSimulationView(ft.Column):
         if self.records[0].time_s < cutoff:
             self.records = [r for r in self.records if r.time_s >= cutoff]
         self.latest = self.records[-1]
+        if self._settings.pump_mode is PumpMode.AUTO:  # 自動時顯示控制器目前選的階梯
+            self.cold_pump.set_value(self.latest.cold_pump_hz)
+            self.hot_pump.set_value(self.latest.hot_pump_hz)
         self._advance_animation(self.latest, real_dt_s)
         self._show_record(self.latest)
         self._safe_update()
@@ -707,6 +715,19 @@ class HeatPumpSimulationView(ft.Column):
 回傳：
     無。"""
         self._apply_settings(replace(self._settings, manual_frequency_hz=value))
+
+    def _on_pump_mode(self, _event: ft.ControlEvent) -> None:
+        """水泵手動／自動（自動：依板式換熱器水側溫差逐階調整，§2.4）。
+
+參數：
+    _event: 事件。
+
+回傳：
+    無。"""
+        mode = PumpMode(_selected(self.pump_mode_button))
+        self.cold_pump.disabled = self.hot_pump.disabled = mode is PumpMode.AUTO
+        self._apply_settings(replace(self._settings, pump_mode=mode, cold_pump_hz=self.cold_pump.value,
+                                     hot_pump_hz=self.hot_pump.value))
 
     def _on_pumps(self, _value: float) -> None:
         """水泵頻率（冰水泵、熱水泵各自選擇階梯）。

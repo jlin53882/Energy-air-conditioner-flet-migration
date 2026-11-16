@@ -7,7 +7,7 @@ from dataclasses import replace
 import pytest
 
 from application.heat_pump_simulation import HeatPumpSimulationService
-from domain.heat_pump import OperationMode, RefrigerantMode, celsius, default_settings
+from domain.heat_pump import OperationMode, PumpMode, RefrigerantMode, celsius, default_settings
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units.converter import CanonicalUnitConverter
 from Flet_ui.ui import heat_pump_presentation as hp
@@ -223,6 +223,12 @@ def test_view_settings_reach_simulation(service: HeatPumpSimulationService) -> N
     assert view.cold_pump.info.value == "4.76 GPM · 167 W"
     view.tick()
     assert view.latest.cold_pump_gpm == pytest.approx(4.76, abs=0.01)
+    view.pump_mode_button.selected = ["auto"]
+    view._on_pump_mode(None)
+    assert view.sim.settings.pump_mode is PumpMode.AUTO and view.cold_pump.disabled and view.hot_pump.disabled
+    view.pump_mode_button.selected = ["manual"]
+    view._on_pump_mode(None)
+    assert view.sim.settings.pump_mode is PumpMode.MANUAL and not view.cold_pump.disabled
     assert view.reheat_slider.disabled  # 暖房不使用再熱
     view.operation_button.selected = ["cooling"]
     view._on_operation(None)

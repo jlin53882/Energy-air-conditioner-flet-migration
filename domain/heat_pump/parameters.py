@@ -385,6 +385,12 @@ class ControlParameters:
     freeze_limit_up_hz_per_s: float = 0.04
     freeze_stop_delay_s: float = 60.0
 
+    # 水泵自動頻率：板式換熱器水側溫差目標（假設值）、遲滯與變階最短停留。
+    pump_cold_delta_t_k: float = 3.5
+    pump_hot_delta_t_k: float = 5.0
+    pump_hysteresis_k: float = 0.5
+    pump_step_dwell_s: float = 60.0
+
     trip_condensing_k: float = celsius(60.0)
     trip_discharge_k: float = celsius(110.0)
     warn_high_pressure_k: float = celsius(58.0)

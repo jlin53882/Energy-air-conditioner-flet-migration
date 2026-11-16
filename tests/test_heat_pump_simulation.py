@@ -30,6 +30,7 @@ from domain.heat_pump import (
     OutdoorHeatExchangerParameters,
     PidController,
     PlateExchanger,
+    PumpMode,
     PumpParameters,
     RefrigerantMode,
     SimulationSettings,
@@ -577,6 +578,46 @@ def test_heating_with_fan_a_stops_at_46_and_restarts_at_42(table: CycleTable) ->
     assert at_stop.hot_water_k >= celsius(46.0) and at_stop.frequency_hz == 30.0
     assert at_start.hot_water_k <= celsius(42.0)
     assert summary.stops >= 2
+
+
+def test_pump_auto_mode_saves_pump_power_and_keeps_chilled_water(table: CycleTable) -> None:
+    """水泵自動（水側溫差控制）：熱水泵降到低階、冰水泵多半維持 50–60 Hz；
+    水泵耗電明顯減少、系統 COP 較手動 60 Hz 高，冷房冰水仍在約 7.5–8.5 °C。
+
+回傳：
+    無。"""
+    _, manual, manual_summary = _run(table, OperationMode.COOLING, {"A", "B"})
+    _, auto, auto_summary = _run(table, OperationMode.COOLING, {"A", "B"}, pump_mode=PumpMode.AUTO)
+    assert sum(r.pump_power_w * r.dt_s for r in auto) < 0.8 * sum(r.pump_power_w * r.dt_s for r in manual)
+    assert auto_summary.system_cop > manual_summary.system_cop
+    steady = [r for r in auto if r.time_s > 2 * HOUR]
+    assert all(celsius(7.0) < r.cold_water_k < celsius(8.8) for r in steady)
+    assert min(r.cold_pump_hz for r in steady) >= 50.0
+    assert sum(r.hot_pump_hz <= 40.0 for r in steady) / len(steady) > 0.8
+
+
+def test_pump_auto_mode_steps_one_at_a_time_with_dwell(table: CycleTable) -> None:
+    """水泵自動：一次只變一階，且兩次變階相隔至少 pump_step_dwell_s；手動模式不受控制器影響。
+
+回傳：
+    無。"""
+    _, records, _ = _run(table, OperationMode.HEATING, {"A", "B"}, pump_mode=PumpMode.AUTO)
+    dwell = HeatPumpParameters().control.pump_step_dwell_s
+    steps = PumpParameters().frequency_steps_hz
+    for name in ("cold_pump_hz", "hot_pump_hz"):
+        last_change = None
+        previous = getattr(records[0], name)
+        for record in records[1:]:
+            value = getattr(record, name)
+            if value != previous:
+                assert abs(steps.index(value) - steps.index(previous)) == 1
+                if last_change is not None:
+                    assert record.time_s - last_change >= dwell - 1e-6
+                last_change = record.time_s
+            previous = value
+    assert min(r.cold_pump_hz for r in records) == 30.0  # 暖房水側溫差小，冰水泵降到最低階
+    _, manual, _ = _run(table, OperationMode.COOLING, {"A", "B"}, hours=0.5, cold_pump_hz=40.0)
+    assert {r.cold_pump_hz for r in manual} == {40.0}
 
 
 def test_freeze_protection_limits_frequency_when_leaving_water_below_four_degrees(table: CycleTable) -> None:
