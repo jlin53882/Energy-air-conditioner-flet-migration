@@ -361,7 +361,7 @@ class ControlParameters:
     cooling_setpoint_k: float = celsius(7.0)
     heating_setpoint_k: float = celsius(45.0)
     auto_stop_margin_k: float = 1.0
-    cooling_restart_k: float = celsius(10.0)
+    cooling_restart_k: float = celsius(8.0)
     heating_restart_k: float = celsius(42.0)
     min_off_time_s: float = 180.0
 

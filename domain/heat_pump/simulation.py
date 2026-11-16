@@ -790,9 +790,9 @@ class HeatPumpSimulation:
             ctrl.frequency_hz = self._stepper.update(request, limit, self.time_s)
             at_minimum = ctrl.frequency_hz <= comp.min_frequency_hz + 1e-9
             margin = c.auto_stop_margin_k
-            stop = at_minimum and (
-                controlled <= c.cooling_setpoint_k - margin if cooling else controlled >= c.heating_setpoint_k + margin
-            )
+            # 冷房：冰水降到設定值（7 °C）即停機（使用者決定）；暖房：最低頻率且熱水超過設定值 + 裕度才停。
+            stop = (controlled <= c.cooling_setpoint_k if cooling
+                    else at_minimum and controlled >= c.heating_setpoint_k + margin)
         else:
             ctrl.frequency_hz = self._stepper.start(s.manual_frequency_hz, limit, self.time_s)
             stop = controlled <= c.cooling_setpoint_k if cooling else controlled >= c.heating_setpoint_k
