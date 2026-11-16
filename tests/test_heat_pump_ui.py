@@ -11,6 +11,7 @@ from domain.heat_pump import OperationMode, PumpMode, RefrigerantMode, celsius, 
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units.converter import CanonicalUnitConverter
 from Flet_ui.ui import heat_pump_presentation as hp
+from Flet_ui.ui.components import heat_pump_schematic as schematic
 from Flet_ui.ui.navigation import ROUTE_BY_KEY
 from Flet_ui.ui.views.heat_pump_simulation_view import HeatPumpSimulationView
 
@@ -94,6 +95,22 @@ def test_active_pipes_cover_a_closed_refrigerant_loop() -> None:
         states = sorted(by_key[key].refrigerant_state.value for key in keys)
         assert states.count("discharge") == 2, mode
         assert {"liquid", "two_phase", "suction"} <= set(states), mode
+
+
+def test_schematic_uses_solid_fill_instead_of_gradient_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """預設以平均色單色填色取代漸層（部分桌面客戶端遇到漸層會中斷整張畫布繪製）；
+    設 USE_GRADIENT 才使用漸層，且示意圖所有畫筆都不含漸層。
+
+回傳：
+    無。"""
+    paint = schematic._gradient((0, 0), (10, 0), ["#000000", "#FFFFFF"])
+    assert paint.gradient is None and paint.color == "#808080"
+    view = schematic.HeatPumpSchematic()
+    view.render(None, 0.0, 0.0, 0.0)
+    assert view.canvas.shapes
+    assert all(getattr(getattr(shape, "paint", None), "gradient", None) is None for shape in view.canvas.shapes)
+    monkeypatch.setattr(schematic, "USE_GRADIENT", True)
+    assert schematic._gradient((0, 0), (10, 0), ["#000000", "#FFFFFF"]).gradient is not None
 
 
 def test_water_color_gradient() -> None:

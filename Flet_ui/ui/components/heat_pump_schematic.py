@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import flet as ft
 import flet.canvas as cv
@@ -118,8 +119,26 @@ def _fill(color: str) -> ft.Paint:
     return ft.Paint(color=color, style=ft.PaintingStyle.FILL)
 
 
+# 部分桌面版 Flet 客戶端（例如經遠端桌面／軟體繪圖的 Windows）遇到漸層畫筆會中斷整張畫布的繪製，
+# 後面的元件（水桶水面、換熱器、壓縮機、數值框…）全部不出現。預設改用平均色的單色填色，
+# 需要漸層質感時設環境變數 HEAT_PUMP_GRADIENT=1。
+USE_GRADIENT = os.environ.get("HEAT_PUMP_GRADIENT") == "1"
+
+
+def _average_color(colors: list[str]) -> str:
+    """多個 #RRGGBB 的平均色。
+
+參數：
+    colors: 顏色。
+
+回傳：
+    #RRGGBB。"""
+    channels = [[int(color[i:i + 2], 16) for i in (1, 3, 5)] for color in colors]
+    return "#{:02X}{:02X}{:02X}".format(*(round(sum(values) / len(values)) for values in zip(*channels)))
+
+
 def _gradient(begin, end, colors: list[str]) -> ft.Paint:
-    """線性漸層填色。
+    """線性漸層填色（``USE_GRADIENT`` 為假時退回單色，避免部分客戶端繪製中斷）。
 
 參數：
     begin: 起點。
@@ -128,6 +147,8 @@ def _gradient(begin, end, colors: list[str]) -> ft.Paint:
 
 回傳：
     Paint。"""
+    if not USE_GRADIENT:
+        return _fill(_average_color(colors))
     return ft.Paint(style=ft.PaintingStyle.FILL, gradient=ft.PaintLinearGradient(begin=begin, end=end, colors=colors))
 
 
