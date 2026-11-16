@@ -490,43 +490,76 @@ def test_compressor_only_runs_on_frequency_steps(table: CycleTable, operation: O
         previous = record.frequency_hz
 
 
-def test_cooling_with_both_fans_is_held_near_minimum_frequency_by_freeze_protection(table: CycleTable) -> None:
-    """冷房、送風機 A+B：開機降溫時 60 Hz，之後防凍保護（冰水出水溫度 < 4 °C）限頻，
-    冰水可降到約 7.5～8 °C（接近 7 °C 目標），出水溫度不低於約 3.5 °C；此時蒸發溫度可低於 0 °C。
+def test_water_loop_is_in_series_through_fan_coils(table: CycleTable) -> None:
+    """管路串聯（水桶 → 水泵 → 送風機 → 板式換熱器 → 水桶）：換熱器進水是送風機回水。
+    冷房：蒸發器進水 = 冰水桶 + 盤管負荷 ÷ (ṁ·cp)；暖房：冷凝器進水 = 熱水桶 − 盤管負荷 ÷ (ṁ·cp)；
+    沒有送風機時進水 = 桶溫；桶溫能量平衡不變（盤管負荷 − 蒸發器取熱量）。
+
+回傳：
+    無。"""
+    cold = replace(default_settings(OperationMode.COOLING), fans=frozenset({"A", "B"}))
+    first = HeatPumpSimulation(table, settings=cold, initial_cold_k=celsius(9.0), initial_hot_k=celsius(30.0)).step()
+    params = HeatPumpParameters()
+    rate = gpm_to_kg_s(params.cold_pump.flow_gpm(60.0)) * 4186.0
+    assert first.evaporator_water_in_k == pytest.approx(celsius(9.0) + first.fan_coil_load_w / rate, abs=0.02)
+    assert first.evaporator_water_in_k - celsius(9.0) > 2.5  # 送風機回水比桶溫高約 3 K
+    assert first.evaporator_water_out_k == pytest.approx(
+        first.evaporator_water_in_k - first.cooling_w / rate, abs=0.02)
+    no_fans = replace(cold, fans=frozenset())
+    bare = HeatPumpSimulation(table, settings=no_fans, initial_cold_k=celsius(9.0), initial_hot_k=celsius(30.0)).step()
+    assert bare.evaporator_water_in_k == pytest.approx(celsius(9.0))
+    heat = default_settings(OperationMode.HEATING)
+    warm = HeatPumpSimulation(table, settings=heat, initial_cold_k=celsius(15.0), initial_hot_k=celsius(40.0)).step()
+    hot_rate = gpm_to_kg_s(params.hot_pump.flow_gpm(60.0)) * 4186.0
+    assert warm.condenser_water_in_k == pytest.approx(celsius(40.0) - warm.fan_coil_load_w / hot_rate, abs=0.05)
+    assert warm.evaporator_water_in_k == pytest.approx(celsius(15.0))  # 暖房冰水迴路不經過送風機
+
+
+def test_cooling_with_both_fans_rests_at_7_and_restarts_at_8(table: CycleTable) -> None:
+    """冷房、送風機 A+B（水桶 → 水泵 → 送風機 → 蒸發器 → 水桶 串聯）：蒸發器進水是送風機回水（約 11 °C），
+    出水約 7 °C；冰水降到 7 °C 壓縮機休息、回升到 8 °C（停滿 3 min）再啟動，防凍保護不會觸發。
 
 回傳：
     無。"""
     sim, records, summary = _run(table, OperationMode.COOLING, {"A", "B"})
     assert sim.events[0].code == "smart_cooling" and sim.events[0].time_s / 60 == pytest.approx(5.0, abs=1.0)
     assert records[0].frequency_hz == 60.0
-    assert summary.stops == 0 and not any(e.code == "freeze_stop" for e in sim.events)
-    assert WARNING_FREEZE_LIMITING in summary.warnings
+    assert 5 <= summary.stops <= 15 and not any(e.code == "freeze_stop" for e in sim.events)
+    assert WARNING_FREEZE_LIMITING not in summary.warnings
+    assert 0.75 < summary.run_fraction < 0.95
     steady = [r for r in records if r.time_s > 2 * HOUR]
-    assert all(celsius(7.0) < r.cold_water_k < celsius(8.6) for r in steady)
+    assert all(celsius(6.9) < r.cold_water_k < celsius(9.5) for r in steady)
+    running = [r for r in steady if r.compressor_on]
+    assert 10.0 < sum(r.evaporator_water_in_k for r in running) / len(running) - 273.15 < 12.5
+    assert 6.0 < sum(r.evaporator_water_out_k for r in running) / len(running) - 273.15 < 8.0
     assert summary.max_condensing_k < celsius(58.5)
     plate = [r for r in records if r.compressor_on and r.mode is not RefrigerantMode.SMART_HEATING]
-    assert min(r.evaporator_water_out_k for r in plate) > celsius(3.5)
+    assert min(r.evaporating_k for r in plate) > celsius(1.0)
+    assert min(r.evaporator_water_out_k for r in plate) > celsius(5.0)
+    restart_temps = [next(r for r in records if r.time_s + r.dt_s >= e.time_s).cold_water_k
+                     for e in sim.events if e.code == "start"]
+    assert restart_temps and all(t >= celsius(8.0) - 0.05 for t in restart_temps)
     assert 1.4 < summary.system_cop < 2.0
 
 
-def test_cooling_with_fan_b_cycles_on_freeze_protection(table: CycleTable) -> None:
+def test_cooling_with_fan_b_cycles_between_7_and_8_degrees(table: CycleTable) -> None:
     """冷房、送風機 B：負荷小於最低頻率能力，冰水降到 7 °C 就停機、回升到 8 °C 才重啟（使用者決定），
-    反覆啟停；防凍保護（出水 < 4 °C）仍會限頻，出水不低於約 3.5 °C。
+    反覆啟停；出水不低於約 5 °C，防凍保護不會觸發。
 
 回傳：
     無。"""
     sim, records, summary = _run(table, OperationMode.COOLING, {"B"})
     stops = [e for e in sim.events if e.code == "stop"]
-    assert 8 <= len(stops) <= 30
-    assert WARNING_FREEZE_LIMITING in summary.warnings
-    assert 0.6 < summary.run_fraction < 0.85
+    assert 12 <= len(stops) <= 30 and not any(e.code == "freeze_stop" for e in sim.events)
+    assert WARNING_FREEZE_LIMITING not in summary.warnings
+    assert 0.55 < summary.run_fraction < 0.85
     steady = [r for r in records if r.time_s > 2 * HOUR]
     assert all(celsius(6.9) < r.cold_water_k < celsius(8.6) for r in steady)
     restart_temps = [next(r for r in records if r.time_s + r.dt_s >= e.time_s).cold_water_k
                      for e in sim.events if e.code == "start"]
     assert restart_temps and all(t >= celsius(8.0) - 0.05 for t in restart_temps)
     plate = [r for r in records if r.compressor_on and r.mode is not RefrigerantMode.SMART_HEATING]
-    assert min(r.evaporator_water_out_k for r in plate) > celsius(3.5)
+    assert min(r.evaporator_water_out_k for r in plate) > celsius(5.0)
     assert 1.2 < summary.system_cop < 1.9
 
 
@@ -588,7 +621,7 @@ def test_heating_with_fan_a_stops_at_46_and_restarts_at_42(table: CycleTable) ->
 
 def test_pump_auto_mode_saves_pump_power_and_keeps_chilled_water(table: CycleTable) -> None:
     """水泵自動（水側溫差控制）：熱水泵降到低階、冰水泵多半維持 50–60 Hz；
-    水泵耗電明顯減少、系統 COP 較手動 60 Hz 高，冷房冰水仍在約 7.5–8.5 °C。
+    水泵耗電明顯減少、系統 COP 較手動 60 Hz 高，冷房冰水仍在 7～9.5 °C 之間循環。
 
 回傳：
     無。"""
@@ -597,8 +630,8 @@ def test_pump_auto_mode_saves_pump_power_and_keeps_chilled_water(table: CycleTab
     assert sum(r.pump_power_w * r.dt_s for r in auto) < 0.8 * sum(r.pump_power_w * r.dt_s for r in manual)
     assert auto_summary.system_cop > manual_summary.system_cop
     steady = [r for r in auto if r.time_s > 2 * HOUR]
-    assert all(celsius(7.0) < r.cold_water_k < celsius(8.8) for r in steady)
-    assert min(r.cold_pump_hz for r in steady) >= 50.0
+    assert all(celsius(6.9) < r.cold_water_k < celsius(9.5) for r in steady)
+    assert sum(r.cold_pump_hz >= 50.0 for r in steady) / len(steady) > 0.6
     assert sum(r.hot_pump_hz <= 40.0 for r in steady) / len(steady) > 0.8
 
 
@@ -627,19 +660,21 @@ def test_pump_auto_mode_steps_one_at_a_time_with_dwell(table: CycleTable) -> Non
 
 
 def test_freeze_protection_limits_frequency_when_leaving_water_below_four_degrees(table: CycleTable) -> None:
-    """冰水 8 °C、板式蒸發器流路：全速運轉出水溫度會低於 4 °C，保護逐步降頻並維持出水不低於約 3.5 °C。
+    """冰水桶 8 °C、無送風機（蒸發器進水＝桶溫，沒有回水加熱）：全速運轉出水溫度會低於 4 °C，
+    保護逐步降頻並維持出水不低於約 3.5 °C（之後冰水降到 7 °C 停機）。
 
 回傳：
     無。"""
-    settings = replace(default_settings(OperationMode.COOLING), fans=frozenset({"A", "B"}))
+    settings = replace(default_settings(OperationMode.COOLING), fans=frozenset())
     sim = HeatPumpSimulation(table, settings=settings, initial_cold_k=celsius(8.0), initial_hot_k=celsius(30.0))
     first = sim.step()
     assert first.frequency_hz == 60.0 and first.evaporator_water_out_k < celsius(4.0)
     records = sim.run(600.0)
     assert any(WARNING_FREEZE_LIMITING in r.warnings for r in records[:40])
-    assert records[-1].frequency_hz < 60.0
-    assert records[-1].evaporator_water_out_k > celsius(3.5)
-    assert records[-1].frequency_limit_hz >= 30.0  # 高壓限頻未動作；限頻來自防凍保護
+    running = [r for r in records if r.compressor_on]
+    assert min(r.frequency_hz for r in running) < 60.0
+    assert min(r.evaporator_water_out_k for r in running) > celsius(3.5)
+    assert all(r.frequency_limit_hz >= 30.0 for r in records)  # 高壓限頻未動作；限頻來自防凍保護
 
 
 def test_freeze_protection_stops_at_minimum_frequency_and_restarts_only_when_safe(table: CycleTable) -> None:
@@ -814,11 +849,13 @@ def test_manual_frequency_is_capped_by_freeze_protection(table: CycleTable) -> N
 回傳：
     無。"""
     settings = replace(default_settings(OperationMode.COOLING), frequency_mode=FrequencyMode.MANUAL,
-                       manual_frequency_hz=60.0, fans=frozenset({"A", "B"}))
+                       manual_frequency_hz=60.0, fans=frozenset())
     sim = HeatPumpSimulation(table, settings=settings, initial_cold_k=celsius(8.0))
     records = sim.run(600.0)
     assert records[0].frequency_hz == 60.0
-    assert records[-1].frequency_hz < 60.0 and records[-1].evaporator_water_out_k > celsius(3.5)
+    running = [r for r in records if r.compressor_on]
+    assert min(r.frequency_hz for r in running) < 60.0
+    assert min(r.evaporator_water_out_k for r in running) > celsius(3.5)
 
 
 def test_safety_trip_latches_until_reset(table: CycleTable) -> None:

@@ -90,9 +90,12 @@ COMPRESSOR = Box("compressor", "壓縮機", 465, 62, 70, 86)
 COMPRESSOR_CENTER: Point = (500.0, 110.0)
 EXPANSION_VALVE: Point = (650.0, 470.0)
 OUTDOOR_FAN_CENTER: Point = (525.0, 545.0)
+# 水泵位置：直接迴路（水桶 → 水泵 → 板式換熱器）與經送風機的迴路（水桶 → 水泵 → 送風機 → 板式換熱器）各有一個位置，
+# 示意圖只在目前使用的迴路上畫水泵。
 COLD_PUMP: Point = (210.0, 420.0)
 HOT_PUMP: Point = (790.0, 420.0)
-FAN_PUMP: Point = (150.0, 28.0)
+COLD_PUMP_FAN_LOOP: Point = (60.0, 150.0)
+HOT_PUMP_FAN_LOOP: Point = (940.0, 100.0)
 
 BOXES = (COLD_TANK, HOT_TANK, EVAPORATOR, CONDENSER, OUTDOOR, FAN_A, FAN_B)
 
@@ -120,7 +123,9 @@ COLD_SUPPLY = Pipe("cold_supply", ((170, 420), (250, 420)))
 COLD_RETURN = Pipe("cold_return", ((250, 320), (170, 320)))
 HOT_SUPPLY = Pipe("hot_supply", ((830, 420), (750, 420)))
 HOT_RETURN = Pipe("hot_return", ((750, 320), (830, 320)))
-FAN_HEADER = Pipe("fan_header", ((60, 28), (940, 28)))
+# 送風機水路為串聯：水桶 → 水泵 → 供水管 → 送風機 → 回水管 → 板式換熱器 → 水桶。
+FAN_HEADER_COLD = Pipe("fan_header_cold", ((60, 28), (740, 28)))
+FAN_HEADER_HOT = Pipe("fan_header_hot", ((940, 28), (260, 28)))
 FAN_DROPS = Pipe("fan_drops", ((260, 28), (260, 45)))
 FAN_DROP_B = Pipe("fan_drop_b", ((740, 28), (740, 45)))
 # 除濕後再熱盤管：熱水桶 → 盤管 → 熱水桶（冷房時使用）
@@ -129,6 +134,11 @@ REHEAT_SUPPLY = Pipe("reheat_supply", ((875, 288), (875, 196)))
 REHEAT_RETURN = Pipe("reheat_return", ((905, 196), (905, 288)))
 FAN_LOOP_COLD = Pipe("fan_loop_cold", ((60, 282), (60, 28)))
 FAN_LOOP_HOT = Pipe("fan_loop_hot", ((940, 282), (940, 28)))
+# 送風機回水：升管 → 回水總管 → 板式蒸發器（冷房）或板式冷凝器（暖房）進水口
+FAN_RISER_A = Pipe("fan_riser_a", ((300, 45), (300, 10)))
+FAN_RISER_B = Pipe("fan_riser_b", ((780, 45), (780, 10)))
+FAN_RETURN_COLD = Pipe("fan_return_cold", ((780, 10), (190, 10), (190, 420), (250, 420)))
+FAN_RETURN_HOT = Pipe("fan_return_hot", ((300, 10), (810, 10), (810, 420), (750, 420)))
 
 # ---- 電磁閥：位置與方向（h 水平管、v 垂直管） ----
 VALVE_POSITIONS: dict[int, Point] = {

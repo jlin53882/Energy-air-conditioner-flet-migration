@@ -21,6 +21,7 @@ from ..heat_pump_presentation import (
     CANVAS_HEIGHT,
     CANVAS_WIDTH,
     COLD_PUMP,
+    COLD_PUMP_FAN_LOOP,
     COLD_RETURN,
     COLD_SUPPLY,
     COLD_TANK,
@@ -33,11 +34,16 @@ from ..heat_pump_presentation import (
     FAN_B,
     FAN_DROP_B,
     FAN_DROPS,
-    FAN_HEADER,
+    FAN_HEADER_COLD,
+    FAN_HEADER_HOT,
     FAN_LOOP_COLD,
     FAN_LOOP_HOT,
-    FAN_PUMP,
+    FAN_RETURN_COLD,
+    FAN_RETURN_HOT,
+    FAN_RISER_A,
+    FAN_RISER_B,
     HOT_PUMP,
+    HOT_PUMP_FAN_LOOP,
     HOT_RETURN,
     HOT_SUPPLY,
     HOT_TANK,
@@ -690,17 +696,23 @@ class HeatPumpSchematic(ft.Container):
         fan_tank = state.fan_loop_tank if started else None
         fan_color = cold if fan_tank == "cold_tank" else hot
         fans_on = started and bool(state.fans_on)
+        cold_fan_loop = fans_on and fan_tank == "cold_tank"
+        hot_fan_loop = fans_on and fan_tank == "hot_tank"
+        fan_a = fans_on and "A" in state.fans_on
+        fan_b = fans_on and "B" in state.fans_on
+        # 先畫未使用（虛線）再畫使用中，避免重疊時虛線蓋住實線。
         pipes = [
-            (COLD_SUPPLY, cold, started), (COLD_RETURN, cold, started),
-            (HOT_SUPPLY, hot, started), (HOT_RETURN, hot, started),
-            (FAN_HEADER, fan_color, fans_on), (FAN_DROPS, fan_color, fans_on and "A" in state.fans_on),
-            (FAN_DROP_B, fan_color, fans_on and "B" in state.fans_on),
-            (FAN_LOOP_COLD, cold, fans_on and fan_tank == "cold_tank"),
-            (FAN_LOOP_HOT, hot, fans_on and fan_tank == "hot_tank"),
+            (COLD_SUPPLY, cold, started and not cold_fan_loop), (COLD_RETURN, cold, started),
+            (HOT_SUPPLY, hot, started and not hot_fan_loop), (HOT_RETURN, hot, started),
+            (FAN_LOOP_COLD, cold, cold_fan_loop), (FAN_LOOP_HOT, hot, hot_fan_loop),
+            (FAN_HEADER_COLD, fan_color, cold_fan_loop), (FAN_HEADER_HOT, fan_color, hot_fan_loop),
+            (FAN_DROPS, fan_color, fan_a), (FAN_DROP_B, fan_color, fan_b),
+            (FAN_RISER_A, fan_color, fan_a), (FAN_RISER_B, fan_color, fan_b),
+            (FAN_RETURN_COLD, fan_color, cold_fan_loop), (FAN_RETURN_HOT, fan_color, hot_fan_loop),
         ]
         reheating = started and state.reheat_w > 0
         pipes += [(REHEAT_SUPPLY, hot, reheating), (REHEAT_RETURN, hot, reheating)]
-        for pipe, color, active in pipes:
+        for pipe, color, active in sorted(pipes, key=lambda item: item[2]):
             if active:
                 shapes.append(_polyline(pipe.points, _stroke(_mix(color, "#000000", 0.25), 7)))
                 shapes.append(_polyline(pipe.points, _stroke(color, 4.5)))
@@ -708,16 +720,23 @@ class HeatPumpSchematic(ft.Container):
                            for x, y in flow_dots(pipe.points, phase, 30)]
             else:
                 shapes.append(_polyline(pipe.points, _stroke(IDLE_LINE_COLOR, 2, [5, 5])))
-        shapes += _pump(COLD_PUMP, cold, angle if started else 0.0)
-        shapes += _pump(HOT_PUMP, hot, angle if started else 0.0)
-        shapes += _pump(FAN_PUMP, fan_color if fans_on else IDLE_LINE_COLOR, angle if fans_on else 0.0)
+        cold_pump = COLD_PUMP_FAN_LOOP if cold_fan_loop else COLD_PUMP
+        hot_pump = HOT_PUMP_FAN_LOOP if hot_fan_loop else HOT_PUMP
+        shapes += _pump(cold_pump, cold, angle if started else 0.0)
+        shapes += _pump(hot_pump, hot, angle if started else 0.0)
         if record is not None:
-            for x, hz, gpm in ((210, record.cold_pump_hz, record.cold_pump_gpm), (790, record.hot_pump_hz, record.hot_pump_gpm)):
-                shapes.append(_label(x, 400, f"{hz:.0f} Hz · {gpm:.1f} GPM", 9, TOKENS.text_secondary, True))
+            for (x, y), hz, gpm, label_dx, label_dy in (
+                (cold_pump, record.cold_pump_hz, record.cold_pump_gpm, 55 if cold_fan_loop else 0, 0 if cold_fan_loop else -20),
+                (hot_pump, record.hot_pump_hz, record.hot_pump_gpm, -55 if hot_fan_loop else 0, 0 if hot_fan_loop else -20),
+            ):
+                shapes.append(_label(x + label_dx, y + label_dy, f"{hz:.0f} Hz · {gpm:.1f} GPM", 9,
+                                     TOKENS.text_secondary, True))
             room = "冷房" if fan_tank == "cold_tank" else "暖房"
-            shapes.append(_label(380, 14, f"送風機水路（{room}，冰水泵）", 10, TOKENS.text_muted))
-            for water_in, water_out, x in ((record.evaporator_water_in_k, record.evaporator_water_out_k, 210),
-                                           (record.condenser_water_in_k, record.condenser_water_out_k, 790)):
+            tank = "冰水桶" if fan_tank == "cold_tank" else "熱水桶"
+            shapes.append(_label(500, 42, f"送風機水路（{room}）：{tank} → 水泵 → 送風機 → 換熱器 → {tank}", 9,
+                                 TOKENS.text_muted))
+            for water_in, water_out, x in ((record.evaporator_water_in_k, record.evaporator_water_out_k, 220),
+                                           (record.condenser_water_in_k, record.condenser_water_out_k, 780)):
                 if water_in is not None:
                     shapes.append(_label(x, 306, f"出 {format_temperature(water_out)} °C", 10, TOKENS.text_secondary, True))
                     shapes.append(_label(x, 446, f"進 {format_temperature(water_in)} °C", 10, TOKENS.text_secondary, True))

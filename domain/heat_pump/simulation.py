@@ -456,6 +456,33 @@ class HeatPumpSimulation:
         if hot != ctrl.hot_pump_hz:
             ctrl.hot_pump_hz, ctrl.hot_pump_changed_s = hot, self.time_s
 
+    def _fan_coil_load_w(self) -> float:
+        """送風機盤管負荷（供水＝水桶溫度；冷房取冰水桶，暖房取熱水桶）。
+
+回傳：
+            W。"""
+        s = self._settings
+        fan_ua = sum(fan.ua_w_k for fan in self.params.fan_coils if fan.name in s.fans)
+        if s.operation is OperationMode.COOLING:
+            return max(0.0, fan_ua * (s.room_k - self.cold_water_k))
+        return max(0.0, fan_ua * (self.hot_water_k - s.room_k))
+
+    def _inlet_temperatures(self) -> tuple[float, float]:
+        """板式蒸發器與冷凝器的進水溫度（§1.4 管路串聯）。
+
+迴路：水桶 → 水泵 → 送風機 → 板式換熱器 → 水桶。所以板式換熱器進水是送風機**回水**：
+    冷房：蒸發器進水 = 冰水桶 + Q_fc ÷ (ṁ_cold·cp)；冷凝器進水 = 熱水桶（再熱盤管與熱水桶並聯）。
+    暖房：冷凝器進水 = 熱水桶 − Q_fc ÷ (ṁ_hot·cp)；蒸發器進水 = 冰水桶（冰水迴路不經過送風機）。
+
+回傳：
+    (蒸發器進水 K, 冷凝器進水 K)。"""
+        fan_load = self._fan_coil_load_w()
+        if self._settings.operation is OperationMode.COOLING:
+            rate = self._cold_flow_kg_s() * WATER_CP_J_KG_K
+            return self.cold_water_k + fan_load / rate, self.hot_water_k
+        rate = self._hot_flow_kg_s() * WATER_CP_J_KG_K
+        return self.cold_water_k, self.hot_water_k - fan_load / rate
+
     def _conditions(self, frequency_hz: float) -> OperatingConditions:
         """組合求解條件。
 
@@ -465,10 +492,11 @@ class HeatPumpSimulation:
 回傳：
     OperatingConditions。"""
         s = self._settings
+        evaporator_in_k, condenser_in_k = self._inlet_temperatures()
         return OperatingConditions(
             mode=self.mode,
-            cold_water_k=self.cold_water_k,
-            hot_water_k=self.hot_water_k,
+            cold_water_k=evaporator_in_k,
+            hot_water_k=condenser_in_k,
             outdoor_k=s.outdoor_k,
             frequency_hz=frequency_hz,
             evaporator_conductance_w_k=self._evaporator.conductance(self._cold_flow_kg_s()),
@@ -520,10 +548,8 @@ class HeatPumpSimulation:
         active_fans = [fan for fan in p.fan_coils if fan.name in s.fans]
         fan_ua = sum(fan.ua_w_k for fan in active_fans)
         fan_power = sum(fan.fan_power_w for fan in active_fans)
-        if cooling:
-            fan_load = max(0.0, fan_ua * (s.room_k - self.cold_water_k))
-        else:
-            fan_load = max(0.0, fan_ua * (self.hot_water_k - s.room_k))
+        fan_load = self._fan_coil_load_w()
+        evaporator_in_k, condenser_in_k = self._inlet_temperatures()
         cold_pump_hz, hot_pump_hz = self._pump_hz()
         cold_pump_power = p.cold_pump.power_w(cold_pump_hz)
         hot_pump_power = p.hot_pump.power_w(hot_pump_hz)
@@ -537,19 +563,19 @@ class HeatPumpSimulation:
 
         q_evap_water = perf.cooling_w if perf is not None and self.mode is not RefrigerantMode.SMART_HEATING else 0.0
         q_cond_water = perf.heating_w if perf is not None and self.mode is not RefrigerantMode.SMART_COOLING else 0.0
-        # 板式換熱器進出水溫（進水 = 本步開始時的桶溫）；室外換熱量依模式取冷凝或蒸發側。
+        # 板式換熱器進出水溫（進水 = 本步開始時的送風機回水或桶溫，見 _inlet_temperatures）；室外換熱量依模式取冷凝或蒸發側。
         evap_in = cond_in = evap_out = cond_out = None
         outdoor_heat = 0.0
         if perf is not None:
             cold_rate = self._cold_flow_kg_s() * WATER_CP_J_KG_K
             hot_rate = self._hot_flow_kg_s() * WATER_CP_J_KG_K
             if self.mode is not RefrigerantMode.SMART_HEATING:
-                evap_in = self.cold_water_k
+                evap_in = evaporator_in_k
                 evap_out = evap_in - perf.cooling_w / cold_rate
             else:
                 outdoor_heat = perf.cooling_w
             if self.mode is not RefrigerantMode.SMART_COOLING:
-                cond_in = self.hot_water_k
+                cond_in = condenser_in_k
                 cond_out = cond_in + perf.heating_w / hot_rate
             else:
                 outdoor_heat = perf.heating_w
@@ -722,7 +748,7 @@ class HeatPumpSimulation:
 回傳：
     出水溫度（K）。"""
         rate = self._cold_flow_kg_s() * WATER_CP_J_KG_K
-        return self.cold_water_k - perf.cooling_w / rate
+        return self._inlet_temperatures()[0] - perf.cooling_w / rate
 
     def _update_compressor(self, perf: CompressorPerformance | None, dt_s: float) -> frozenset[str]:
         """更新高壓與防凍限頻、頻率與啟停（§2.3）。
