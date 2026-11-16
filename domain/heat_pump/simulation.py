@@ -587,7 +587,7 @@ class HeatPumpSimulation:
                                   "冰水達下限：關 SV10、開 SV11，切換智慧暖房")
             elif self.mode is RefrigerantMode.DUAL and self._ctrl.freeze_stopped:
                 self._switch_mode(RefrigerantMode.SMART_HEATING, "smart_heating",
-                                  "蒸發溫度過低（防凍保護）：關 SV10、開 SV11，改由室外換熱器吸熱")
+                                  "冰水出水溫度過低（防凍保護）：關 SV10、開 SV11，改由室外換熱器吸熱")
             elif (self.mode is RefrigerantMode.SMART_HEATING and self.cold_water_k >= c.heating_cold_return_k
                   and settled and self._plate_evaporator_safe(RefrigerantMode.DUAL)):
                 self._switch_mode(RefrigerantMode.DUAL, "dual", "冰水回升：關 SV11、開 SV10，回到雙效")
@@ -619,7 +619,7 @@ class HeatPumpSimulation:
         self._guess = None
 
     def _plate_evaporator_safe(self, mode: RefrigerantMode | None = None) -> bool:
-        """以最低頻率預測蒸發溫度，是否不低於防凍保護設定（板式蒸發器不在流路時恆為真）。
+        """以最低頻率預測冰水出水溫度，是否不低於防凍保護設定（板式蒸發器不在流路時恆為真）。
 
 參數：
     mode: 要預測的冷媒模式（預設目前模式）。
@@ -631,7 +631,18 @@ class HeatPumpSimulation:
             return True
         conditions = replace(self._conditions(self.params.compressor.min_frequency_hz), mode=mode)
         predicted = self._solver.solve(conditions, None)
-        return predicted.evaporating_k >= self.params.control.freeze_limit_start_k
+        return self._evaporator_leaving_k(predicted) >= self.params.control.freeze_limit_start_k
+
+    def _evaporator_leaving_k(self, perf: CompressorPerformance) -> float:
+        """板式蒸發器出水（冰水）溫度：進水（冰水桶）溫度減去水側取熱量 ÷ 水流熱容率。
+
+參數：
+    perf: 運轉點。
+
+回傳：
+    出水溫度（K）。"""
+        rate = self._cold_flow_kg_s() * WATER_CP_J_KG_K
+        return self.cold_water_k - perf.cooling_w / rate
 
     def _update_compressor(self, perf: CompressorPerformance | None, dt_s: float) -> frozenset[str]:
         """更新高壓與防凍限頻、頻率與啟停（§2.3）。
@@ -680,12 +691,12 @@ class HeatPumpSimulation:
         freezing = False
         plate_in_use = self.mode is not RefrigerantMode.SMART_HEATING
         if perf is not None and plate_in_use:
-            evaporating = perf.evaporating_k
-            if evaporating < c.freeze_limit_start_k:
+            leaving = self._evaporator_leaving_k(perf)
+            if leaving < c.freeze_limit_start_k:
                 ctrl.freeze_limit_hz = max(comp.min_frequency_hz,
                                            ctrl.freeze_limit_hz - c.freeze_limit_down_hz_per_s * dt_s)
                 freezing = True
-            elif evaporating >= c.freeze_release_k:
+            elif leaving >= c.freeze_release_k:
                 ctrl.freeze_limit_hz = min(comp.max_frequency_hz,
                                            ctrl.freeze_limit_hz + c.freeze_limit_up_hz_per_s * dt_s)
             else:
@@ -710,16 +721,16 @@ class HeatPumpSimulation:
             ctrl.off_since_s = self.time_s
             self._event("stop", "已達溫度目標，壓縮機停機")
             return frozenset()
-        # 防凍停機：已在最低頻率運轉、蒸發溫度仍低於設定，持續 freeze_stop_delay_s。
+        # 防凍停機：已在最低頻率運轉、冰水出水溫度仍低於設定，持續 freeze_stop_delay_s。
         at_floor = perf is not None and perf.frequency_hz <= comp.min_frequency_hz + 1e-9
-        if perf is not None and plate_in_use and at_floor and perf.evaporating_k < c.freeze_limit_start_k:
+        if perf is not None and plate_in_use and at_floor and self._evaporator_leaving_k(perf) < c.freeze_limit_start_k:
             ctrl.freeze_timer_s += dt_s
             if ctrl.freeze_timer_s >= c.freeze_stop_delay_s:
                 ctrl.compressor_on = False
                 ctrl.freeze_stopped = True
                 ctrl.freeze_timer_s = 0.0
                 ctrl.off_since_s = self.time_s
-                self._event("freeze_stop", f"蒸發溫度低於 {c.freeze_limit_start_k - 273.15:g} °C，防凍保護停機")
+                self._event("freeze_stop", f"冰水出水溫度低於 {c.freeze_limit_start_k - 273.15:g} °C，防凍保護停機")
                 return frozenset()
         else:
             ctrl.freeze_timer_s = 0.0

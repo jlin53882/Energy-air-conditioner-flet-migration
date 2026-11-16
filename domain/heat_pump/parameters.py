@@ -378,8 +378,9 @@ class ControlParameters:
     hp_limit_down_hz_per_s: float = 0.2
     hp_limit_up_hz_per_s: float = 0.04
 
+    # 防凍保護以「板式蒸發器冰水出水溫度」判斷（非蒸發溫度）。
     freeze_limit_start_k: float = celsius(4.0)
-    freeze_release_k: float = celsius(6.0)
+    freeze_release_k: float = celsius(5.0)
     freeze_limit_down_hz_per_s: float = 0.5
     freeze_limit_up_hz_per_s: float = 0.04
     freeze_stop_delay_s: float = 60.0

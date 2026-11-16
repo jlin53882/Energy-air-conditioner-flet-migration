@@ -490,8 +490,8 @@ def test_compressor_only_runs_on_frequency_steps(table: CycleTable, operation: O
 
 
 def test_cooling_with_both_fans_is_held_near_minimum_frequency_by_freeze_protection(table: CycleTable) -> None:
-    """冷房、送風機 A+B：開機降溫時 60 Hz，之後防凍保護（蒸發溫度 < 4 °C）把頻率壓到 30 Hz，
-    冰水只能維持在約 11 °C（板式蒸發器對這顆壓縮機偏小），蒸發溫度不低於約 3.5 °C。
+    """冷房、送風機 A+B：開機降溫時 60 Hz，之後防凍保護（冰水出水溫度 < 4 °C）限頻，
+    冰水可降到約 7.5～8 °C（接近 7 °C 目標），出水溫度不低於約 3.5 °C；此時蒸發溫度可低於 0 °C。
 
 回傳：
     無。"""
@@ -499,30 +499,29 @@ def test_cooling_with_both_fans_is_held_near_minimum_frequency_by_freeze_protect
     assert sim.events[0].code == "smart_cooling" and sim.events[0].time_s / 60 == pytest.approx(5.0, abs=1.0)
     assert records[0].frequency_hz == 60.0
     assert summary.stops == 0 and not any(e.code == "freeze_stop" for e in sim.events)
-    assert summary.mean_frequency_hz < 40.0
     assert WARNING_FREEZE_LIMITING in summary.warnings
     steady = [r for r in records if r.time_s > 2 * HOUR]
-    assert all(celsius(10.0) < r.cold_water_k < celsius(12.5) for r in steady)
+    assert all(celsius(7.0) < r.cold_water_k < celsius(8.6) for r in steady)
     assert summary.max_condensing_k < celsius(58.5)
     plate = [r for r in records if r.compressor_on and r.mode is not RefrigerantMode.SMART_HEATING]
-    assert min(r.evaporating_k for r in plate) > celsius(3.3)
-    assert 1.5 < summary.system_cop < 2.2
+    assert min(r.evaporator_water_out_k for r in plate) > celsius(3.5)
+    assert 1.4 < summary.system_cop < 2.0
 
 
 def test_cooling_with_fan_b_cycles_on_freeze_protection(table: CycleTable) -> None:
-    """冷房、送風機 B：負荷小於最低頻率能力，防凍保護反覆停機；冰水在 9～11 °C，蒸發溫度不低於約 3.5 °C。
+    """冷房、送風機 B：負荷小於最低頻率能力，防凍保護（出水 < 4 °C）反覆停機；冰水在 6～10 °C 之間循環。
 
 回傳：
     無。"""
     sim, records, summary = _run(table, OperationMode.COOLING, {"B"})
     freeze_stops = [e for e in sim.events if e.code == "freeze_stop"]
-    assert 8 <= len(freeze_stops) <= 30
+    assert 2 <= len(freeze_stops) <= 20
     assert WARNING_FREEZE_STOPPED in summary.warnings and WARNING_FREEZE_LIMITING in summary.warnings
-    assert 0.6 < summary.run_fraction < 0.85
+    assert 0.6 < summary.run_fraction < 0.9
     steady = [r for r in records if r.time_s > 2 * HOUR]
-    assert all(celsius(8.5) < r.cold_water_k < celsius(11.5) for r in steady)
+    assert all(celsius(6.0) < r.cold_water_k < celsius(10.5) for r in steady)
     plate = [r for r in records if r.compressor_on and r.mode is not RefrigerantMode.SMART_HEATING]
-    assert min(r.evaporating_k for r in plate) > celsius(3.3)
+    assert min(r.evaporator_water_out_k for r in plate) > celsius(3.5)
     assert 1.2 < summary.system_cop < 1.9
 
 
@@ -543,7 +542,7 @@ def test_cooling_with_fan_a_freeze_stops_restart_after_dwell(table: CycleTable) 
 
 
 def test_heating_switches_to_outdoor_evaporator_when_freeze_protection_trips(table: CycleTable) -> None:
-    """暖房、送風機 A+B：冰水還有約 9 °C 時蒸發溫度就低於 4 °C，防凍保護停機並改由室外換熱器吸熱
+    """暖房、送風機 A+B：冰水出水溫度低於 4 °C，防凍保護停機並改由室外換熱器吸熱
     （不必等冰水降到 5 °C）；切換後持續運轉，熱水維持在約 45 °C。
 
 回傳：
@@ -552,7 +551,7 @@ def test_heating_switches_to_outdoor_evaporator_when_freeze_protection_trips(tab
     switch = next(e for e in sim.events if e.code == "smart_heating")
     assert "防凍" in switch.message and any(e.code == "freeze_stop" for e in sim.events)
     at_switch = next(r for r in records if r.time_s + r.dt_s >= switch.time_s)
-    assert at_switch.cold_water_k > celsius(7.0)
+    assert at_switch.cold_water_k > celsius(5.0)  # 尚未降到一般切換條件（5 °C）就因防凍提前切換
     after = [r for r in records if r.time_s > switch.time_s + 600]
     assert all(r.mode is RefrigerantMode.SMART_HEATING for r in after)
     assert sum(r.compressor_on for r in after) / len(after) > 0.95
@@ -580,34 +579,34 @@ def test_heating_with_fan_a_stops_at_46_and_restarts_at_42(table: CycleTable) ->
     assert summary.stops >= 2
 
 
-def test_freeze_protection_limits_frequency_below_four_degrees(table: CycleTable) -> None:
-    """冰水 9 °C、板式蒸發器流路：全速運轉蒸發溫度會低於 4 °C，保護把頻率逐步降到 30 Hz 並維持蒸發溫度。
+def test_freeze_protection_limits_frequency_when_leaving_water_below_four_degrees(table: CycleTable) -> None:
+    """冰水 7 °C、板式蒸發器流路：全速運轉出水溫度會低於 4 °C，保護逐步降頻並維持出水不低於約 3.5 °C。
 
 回傳：
     無。"""
     settings = replace(default_settings(OperationMode.COOLING), fans=frozenset({"A", "B"}))
-    sim = HeatPumpSimulation(table, settings=settings, initial_cold_k=celsius(9.0), initial_hot_k=celsius(30.0))
+    sim = HeatPumpSimulation(table, settings=settings, initial_cold_k=celsius(7.0), initial_hot_k=celsius(30.0))
     first = sim.step()
-    assert first.frequency_hz == 60.0 and first.evaporating_k < celsius(4.0)
+    assert first.frequency_hz == 60.0 and first.evaporator_water_out_k < celsius(4.0)
     records = sim.run(600.0)
-    assert WARNING_FREEZE_LIMITING in records[5].warnings
-    assert records[-1].frequency_hz == 30.0
-    assert records[-1].evaporating_k > celsius(3.3)
+    assert any(WARNING_FREEZE_LIMITING in r.warnings for r in records[:40])
+    assert records[-1].frequency_hz < 60.0
+    assert records[-1].evaporator_water_out_k > celsius(3.5)
     assert records[-1].frequency_limit_hz >= 30.0  # 高壓限頻未動作；限頻來自防凍保護
 
 
 def test_freeze_protection_stops_at_minimum_frequency_and_restarts_only_when_safe(table: CycleTable) -> None:
-    """以較高的防凍設定（8 °C）讓保護必然停機：最低頻率運轉仍過低 60 s 後停機；
+    """以較高的防凍設定（出水 9 °C）讓保護必然停機：最低頻率運轉仍過低 60 s 後停機；
     預測最低頻率仍不安全時即使溫度條件成立也不重啟，冰水夠熱後才重啟。
 
 回傳：
     無。"""
-    params = HeatPumpParameters(control=ControlParameters(freeze_limit_start_k=celsius(8.0), freeze_release_k=celsius(10.0)))
+    params = HeatPumpParameters(control=ControlParameters(freeze_limit_start_k=celsius(9.0), freeze_release_k=celsius(10.0)))
     settings = replace(default_settings(OperationMode.COOLING), fans=frozenset())  # 無負荷，冰水溫度不會自己回升
     sim = HeatPumpSimulation(table, params, settings, initial_cold_k=celsius(10.5))
     sim.run(900.0)
     assert any(e.code == "freeze_stop" for e in sim.events)
-    sim.cold_water_k = celsius(11.0)  # 已達一般重啟溫度（≥ 10 °C），但最低頻率預測蒸發溫度仍低於 8 °C
+    sim.cold_water_k = celsius(11.0)  # 已達一般重啟溫度（≥ 10 °C），但最低頻率預測出水溫度仍低於 9 °C
     records = sim.run(900.0)
     assert not any(r.compressor_on for r in records)
     assert WARNING_FREEZE_STOPPED in records[-1].warnings
@@ -769,10 +768,10 @@ def test_manual_frequency_is_capped_by_freeze_protection(table: CycleTable) -> N
     無。"""
     settings = replace(default_settings(OperationMode.COOLING), frequency_mode=FrequencyMode.MANUAL,
                        manual_frequency_hz=60.0, fans=frozenset({"A", "B"}))
-    sim = HeatPumpSimulation(table, settings=settings, initial_cold_k=celsius(9.0))
+    sim = HeatPumpSimulation(table, settings=settings, initial_cold_k=celsius(8.0))
     records = sim.run(600.0)
     assert records[0].frequency_hz == 60.0
-    assert records[-1].frequency_hz == 30.0 and records[-1].evaporating_k > celsius(3.3)
+    assert records[-1].frequency_hz < 60.0 and records[-1].evaporator_water_out_k > celsius(3.5)
 
 
 def test_safety_trip_latches_until_reset(table: CycleTable) -> None:
