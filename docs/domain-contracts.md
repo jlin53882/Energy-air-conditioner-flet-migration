@@ -190,7 +190,8 @@ Invalid request shape、known property 不足、invalid fluid/policy 與 unknown
 - 系統 COP 為送風機送出（或取走）的熱量除以壓縮機、開啟送風機與水泵的總耗電。
 - 壓縮機頻率：日立 E505DH-49A2W（49 cc 渦卷式）由外接變頻器在固定階梯 `frequency_steps_hz`（預設 30／40／50／60 Hz）運轉。自動控制為 `PidController`（Kp、Ti、Td，微分低通、條件式積分抗飽和）輸出連續頻率，再由 `FrequencyStepper` 換成階梯（遲滯 2 Hz、變階最短停留 60 s、一次一階；高壓限頻上限低於目前階梯時立即降階）。手動頻率必須是階梯之一，否則以 `ValueError` 拒絕；手動→自動為無擾切換。
 - 水泵：冰水泵與熱水泵各自選擇階梯頻率（`cold_pump_hz`／`hot_pump_hz`，預設 60 Hz）。流量與耗電採實測曲線（`PumpParameters.flow_ratio_by_hz`、`power_w_by_hz`；實測為 √3·V·I 視在功率，40–60 Hz 實測、30 Hz 冪次外插）；沒有曲線時退回相似定律（流量 ∝ f、耗電 ∝ f³）。冰水泵額定流量為實測 0.62 kg/s，熱水泵無實測、沿用設計 12.06 GPM。泵浦全程運轉，耗電計入總耗電。
-- 送風機冷卻能力隨冰水泵頻率：`fan_coil_capacity_ratio_by_cold_pump_hz`（實測，≥ 50 Hz 為 1、40 Hz 約 0.95、30 Hz 約 0.88）只套用於冷房；暖房無實測，不套用。
+- 水泵實測資料（冰水泵）的功率因數預設 `power_factor = 1.0`（√3·V·I 視為有效功率）；熱水泵沒有量測，沿用同一條曲線（假設）。送風機冷卻能力與水泵頻率無關（表 8.1.1 的量測對象待確認，暫不套用實測係數）。
+- 防凍保護：板式蒸發器在流路時（雙效、智慧冷房）蒸發溫度低於 `freeze_limit_start_k`（4 °C）先以 `freeze_limit_down_hz_per_s` 逐步限頻（蒸發溫度回到 `freeze_release_k` 以上才回升），已在最低頻率仍過低持續 `freeze_stop_delay_s` 則停機；重啟除一般條件外，需預測最低頻率下的蒸發溫度不低於設定。暖房時雙效中防凍停機會改由室外換熱器吸熱（智慧暖房）。保護優先於手動頻率；室外換熱器當蒸發器時不適用。
 - 除濕後再熱：冷房時 `reheat_fraction`（0–0.6）× 送風機冷卻盤管負荷為再熱需求，受盤管能力（熱水與盤管出風溫差）限制；再熱量由熱水桶扣除，不改變盤管負荷。`StepRecord` 記錄 `reheat_demand_w`、`reheat_w`、`reheat_energy_j` 與 `net_cooling_w`。
 - 模式回切：智慧冷房／智慧暖房切回雙效前，需在智慧模式停留至少 `mode_return_dwell_s`（預設 300 s）；切入智慧模式不受限。
 - 室外換熱器以原廠資料（報告表 2.1.5）的有效熱導 G = Q ÷ (T_冷媒平均 − T_設計進風) 計算；設計進風溫度（35 °C）為假設值。

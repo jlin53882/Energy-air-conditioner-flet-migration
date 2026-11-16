@@ -29,6 +29,8 @@ from .parameters import (
     gpm_to_kg_s,
 )
 from .simulation import (
+    WARNING_FREEZE_LIMITING,
+    WARNING_FREEZE_STOPPED,
     WARNING_FROST,
     WARNING_HIGH_PRESSURE,
     WARNING_HP_LIMITING,
@@ -46,6 +48,8 @@ from .simulation import (
 
 __all__ = [
     "VALVES_OPEN",
+    "WARNING_FREEZE_LIMITING",
+    "WARNING_FREEZE_STOPPED",
     "WARNING_FROST",
     "WARNING_HIGH_PRESSURE",
     "WARNING_HP_LIMITING",

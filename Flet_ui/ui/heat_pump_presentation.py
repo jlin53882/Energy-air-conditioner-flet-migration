@@ -465,6 +465,8 @@ WARNING_LABELS: dict[str, str] = {
     "high_pressure": "高壓接近上限",
     "hp_limiting": "高壓限頻中",
     "frost": "蒸發溫度 < 0 °C（結霜／結冰風險）",
+    "freeze_limiting": "防凍保護限頻中（板式蒸發器溫度過低）",
+    "freeze_stopped": "防凍保護停機（等待蒸發溫度回升）",
     "tripped": "安全停機（需復歸）",
 }
 

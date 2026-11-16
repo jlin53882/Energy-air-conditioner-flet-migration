@@ -26,7 +26,7 @@ from .components import (
 )
 from .control import FrequencyStepper, PidController
 from .cycle_table import CycleTable
-from .parameters import WATER_CP_J_KG_K, HeatPumpParameters, celsius, gpm_to_kg_s, interpolate_table
+from .parameters import WATER_CP_J_KG_K, HeatPumpParameters, celsius, gpm_to_kg_s
 
 
 class OperationMode(str, Enum):
@@ -50,6 +50,8 @@ WARNING_HIGH_PRESSURE = "high_pressure"
 WARNING_HP_LIMITING = "hp_limiting"
 WARNING_FROST = "frost"
 WARNING_TRIPPED = "tripped"
+WARNING_FREEZE_LIMITING = "freeze_limiting"
+WARNING_FREEZE_STOPPED = "freeze_stopped"
 
 
 @dataclass(frozen=True)
@@ -182,6 +184,9 @@ class _ControllerState:
     compressor_on: bool = True
     frequency_hz: float = 60.0
     frequency_limit_hz: float = 60.0
+    freeze_limit_hz: float = 60.0
+    freeze_timer_s: float = 0.0
+    freeze_stopped: bool = False
     off_since_s: float | None = None
     tripped: bool = False
 
@@ -229,7 +234,8 @@ class HeatPumpSimulation:
         self.mode = RefrigerantMode.DUAL
         comp = self.params.compressor
         control = self.params.control
-        self._ctrl = _ControllerState(frequency_hz=comp.max_frequency_hz, frequency_limit_hz=comp.max_frequency_hz)
+        self._ctrl = _ControllerState(frequency_hz=comp.max_frequency_hz, frequency_limit_hz=comp.max_frequency_hz,
+                                      freeze_limit_hz=comp.max_frequency_hz)
         self._pid = PidController(
             kp=control.kp_hz_per_k, ti_s=control.integral_time_s, td_s=control.derivative_time_s,
             out_min=comp.min_frequency_hz, out_max=comp.max_frequency_hz, bias=comp.min_frequency_hz,
@@ -425,6 +431,8 @@ class HeatPumpSimulation:
                 perf = None
         if ctrl.tripped:
             warnings.add(WARNING_TRIPPED)
+        if ctrl.freeze_stopped and not ctrl.compressor_on:
+            warnings.add(WARNING_FREEZE_STOPPED)
         if perf is not None:
             if perf.condensing_k >= p.control.warn_high_pressure_k:
                 warnings.add(WARNING_HIGH_PRESSURE)
@@ -435,9 +443,7 @@ class HeatPumpSimulation:
         fan_ua = sum(fan.ua_w_k for fan in active_fans)
         fan_power = sum(fan.fan_power_w for fan in active_fans)
         if cooling:
-            # 冰水泵頻率低於 40 Hz 時送風機能力下降（實測，§1.5）。
-            capacity_ratio = interpolate_table(p.fan_coil_capacity_ratio_by_cold_pump_hz, s.cold_pump_hz)
-            fan_load = max(0.0, fan_ua * (s.room_k - self.cold_water_k)) * capacity_ratio
+            fan_load = max(0.0, fan_ua * (s.room_k - self.cold_water_k))
         else:
             fan_load = max(0.0, fan_ua * (self.hot_water_k - s.room_k))
         cold_pump_power = p.cold_pump.power_w(s.cold_pump_hz)
@@ -539,9 +545,9 @@ class HeatPumpSimulation:
             ctrl.off_since_s = self.time_s
             self._event("trip", "高壓或排氣溫度過高，安全停機（需手動復歸）")
         self._update_mode()
-        hp_limiting = self._update_compressor(perf, dt_s)
-        if hp_limiting:
-            record = replace(record, warnings=record.warnings | {WARNING_HP_LIMITING})
+        extra_warnings = self._update_compressor(perf, dt_s)
+        if extra_warnings:
+            record = replace(record, warnings=record.warnings | extra_warnings)
         return record
 
     def _switch_mode(self, mode: RefrigerantMode, code: str, message: str) -> None:
@@ -579,7 +585,11 @@ class HeatPumpSimulation:
             if self.mode is RefrigerantMode.DUAL and self.cold_water_k <= c.heating_cold_switch_k:
                 self._switch_mode(RefrigerantMode.SMART_HEATING, "smart_heating",
                                   "冰水達下限：關 SV10、開 SV11，切換智慧暖房")
-            elif self.mode is RefrigerantMode.SMART_HEATING and self.cold_water_k >= c.heating_cold_return_k and settled:
+            elif self.mode is RefrigerantMode.DUAL and self._ctrl.freeze_stopped:
+                self._switch_mode(RefrigerantMode.SMART_HEATING, "smart_heating",
+                                  "蒸發溫度過低（防凍保護）：關 SV10、開 SV11，改由室外換熱器吸熱")
+            elif (self.mode is RefrigerantMode.SMART_HEATING and self.cold_water_k >= c.heating_cold_return_k
+                  and settled and self._plate_evaporator_safe(RefrigerantMode.DUAL)):
                 self._switch_mode(RefrigerantMode.DUAL, "dual", "冰水回升：關 SV11、開 SV10，回到雙效")
             elif self.mode is RefrigerantMode.SMART_COOLING:
                 self.mode = RefrigerantMode.DUAL
@@ -608,24 +618,36 @@ class HeatPumpSimulation:
             self._event("hp_preempt", f"切換室外冷凝前預先限頻至 {chosen:.0f} Hz")
         self._guess = None
 
-    def _update_compressor(self, perf: CompressorPerformance | None, dt_s: float) -> bool:
-        """更新高壓限頻、頻率與啟停（§2.3）。
+    def _plate_evaporator_safe(self, mode: RefrigerantMode | None = None) -> bool:
+        """以最低頻率預測蒸發溫度，是否不低於防凍保護設定（板式蒸發器不在流路時恆為真）。
+
+參數：
+    mode: 要預測的冷媒模式（預設目前模式）。
+
+回傳：
+    bool。"""
+        mode = mode or self.mode
+        if mode is RefrigerantMode.SMART_HEATING:
+            return True
+        conditions = replace(self._conditions(self.params.compressor.min_frequency_hz), mode=mode)
+        predicted = self._solver.solve(conditions, None)
+        return predicted.evaporating_k >= self.params.control.freeze_limit_start_k
+
+    def _update_compressor(self, perf: CompressorPerformance | None, dt_s: float) -> frozenset[str]:
+        """更新高壓與防凍限頻、頻率與啟停（§2.3）。
 
 參數：
     perf: 本步運轉點（停機時為 None）。
     dt_s: 時間步長。
 
 回傳：
-    本步是否處於高壓限頻。
-
-回傳說明：
-    限頻狀態供記錄警示。"""
+    本步額外的警示代碼（高壓限頻、防凍限頻）。"""
         c = self.params.control
         comp = self.params.compressor
         s = self._settings
         ctrl = self._ctrl
         if ctrl.tripped:
-            return False
+            return frozenset()
         cooling = s.operation is OperationMode.COOLING
         controlled = self.cold_water_k if cooling else self.hot_water_k
         error = self._control_error()
@@ -633,15 +655,18 @@ class HeatPumpSimulation:
         if not ctrl.compressor_on:
             restart = controlled >= c.cooling_restart_k if cooling else controlled <= c.heating_restart_k
             waited = ctrl.off_since_s is None or self.time_s - ctrl.off_since_s >= c.min_off_time_s
-            if restart and waited:
+            if restart and waited and self._plate_evaporator_safe():
                 ctrl.compressor_on = True
+                ctrl.freeze_stopped = False
+                ctrl.freeze_timer_s = 0.0
                 self._pid.reset()
                 ctrl.off_since_s = None
                 request = (s.manual_frequency_hz if s.frequency_mode is FrequencyMode.MANUAL
                            else max(comp.min_frequency_hz, min(comp.max_frequency_hz, self._pid.output(error))))
-                ctrl.frequency_hz = self._stepper.start(request, ctrl.frequency_limit_hz, self.time_s)
+                ctrl.frequency_hz = self._stepper.start(
+                    request, min(ctrl.frequency_limit_hz, ctrl.freeze_limit_hz), self.time_s)
                 self._event("start", "壓縮機重新啟動")
-            return False
+            return frozenset()
 
         limiting = False
         if perf is not None:
@@ -652,7 +677,22 @@ class HeatPumpSimulation:
                 ctrl.frequency_limit_hz = min(comp.max_frequency_hz, ctrl.frequency_limit_hz + c.hp_limit_up_hz_per_s * dt_s)
             else:
                 limiting = ctrl.frequency_limit_hz < comp.max_frequency_hz
-        limit = ctrl.frequency_limit_hz
+        freezing = False
+        plate_in_use = self.mode is not RefrigerantMode.SMART_HEATING
+        if perf is not None and plate_in_use:
+            evaporating = perf.evaporating_k
+            if evaporating < c.freeze_limit_start_k:
+                ctrl.freeze_limit_hz = max(comp.min_frequency_hz,
+                                           ctrl.freeze_limit_hz - c.freeze_limit_down_hz_per_s * dt_s)
+                freezing = True
+            elif evaporating >= c.freeze_release_k:
+                ctrl.freeze_limit_hz = min(comp.max_frequency_hz,
+                                           ctrl.freeze_limit_hz + c.freeze_limit_up_hz_per_s * dt_s)
+            else:
+                freezing = ctrl.freeze_limit_hz < comp.max_frequency_hz
+        elif not plate_in_use:
+            ctrl.freeze_limit_hz = comp.max_frequency_hz
+        limit = min(ctrl.frequency_limit_hz, ctrl.freeze_limit_hz)
 
         if s.frequency_mode is FrequencyMode.AUTO:
             request = self._pid.update(error, dt_s, out_max=limit)
@@ -669,7 +709,26 @@ class HeatPumpSimulation:
             ctrl.compressor_on = False
             ctrl.off_since_s = self.time_s
             self._event("stop", "已達溫度目標，壓縮機停機")
-        return limiting
+            return frozenset()
+        # 防凍停機：已在最低頻率運轉、蒸發溫度仍低於設定，持續 freeze_stop_delay_s。
+        at_floor = perf is not None and perf.frequency_hz <= comp.min_frequency_hz + 1e-9
+        if perf is not None and plate_in_use and at_floor and perf.evaporating_k < c.freeze_limit_start_k:
+            ctrl.freeze_timer_s += dt_s
+            if ctrl.freeze_timer_s >= c.freeze_stop_delay_s:
+                ctrl.compressor_on = False
+                ctrl.freeze_stopped = True
+                ctrl.freeze_timer_s = 0.0
+                ctrl.off_since_s = self.time_s
+                self._event("freeze_stop", f"蒸發溫度低於 {c.freeze_limit_start_k - 273.15:g} °C，防凍保護停機")
+                return frozenset()
+        else:
+            ctrl.freeze_timer_s = 0.0
+        warnings: set[str] = set()
+        if limiting:
+            warnings.add(WARNING_HP_LIMITING)
+        if freezing:
+            warnings.add(WARNING_FREEZE_LIMITING)
+        return frozenset(warnings)
 
     def _control_error(self) -> float:
         """PID 控制誤差：冷房為冰水 − 目標，暖房為目標 − 熱水（正值表示需要更多能力）。

@@ -121,12 +121,6 @@ MEASURED_PUMP_FLOW_RATIO: tuple[tuple[float, float], ...] = tuple(
     (hz, kg_s / _RATED_FLOW_KG_S) for hz, kg_s in MEASURED_PUMP_FLOW_KG_S
 )
 
-# 實測：送風機空氣側冷量（0.22 kg/s × 進出口焓差）相對 60 Hz 的比例，四種進風條件平均，上限 1。
-MEASURED_FAN_COIL_CAPACITY_RATIO: tuple[tuple[float, float], ...] = (
-    (20.0, 0.787), (30.0, 0.884), (40.0, 0.954), (50.0, 1.0), (60.0, 1.0),
-)
-
-
 @dataclass(frozen=True)
 class PumpParameters:
     """定頻水泵加變頻器（§1.6）。
@@ -134,7 +128,8 @@ class PumpParameters:
     - 流量：``flow_ratio_by_hz``（相對 60 Hz 的比例，預設為冰水泵實測）× 額定流量；
       沒有曲線時流量 ∝ f。
     - 耗電：``power_w_by_hz``（預設為實測 √3·V·I；40–60 Hz 實測，低於 40 Hz 以冪次外插）；
-      沒有曲線時耗電 ∝ f³（相似定律）。實測值未乘功率因數（視在功率），實際有效功率可能較低。
+      沒有曲線時耗電 ∝ f³（相似定律）。實測值為 √3·V·I（視在功率），``power_factor`` 預設 1.0
+      （使用者決定：視為有效功率，不另外折減）；有效功率 = 曲線值 × power_factor。
     """
 
     rated_flow_gpm: float = 12.06
@@ -143,6 +138,7 @@ class PumpParameters:
     frequency_steps_hz: tuple[float, ...] = (30.0, 40.0, 50.0, 60.0)
     flow_ratio_by_hz: tuple[tuple[float, float], ...] = MEASURED_PUMP_FLOW_RATIO
     power_w_by_hz: tuple[tuple[float, float], ...] = MEASURED_PUMP_POWER_W
+    power_factor: float = 1.0
 
     def flow_gpm(self, frequency_hz: float) -> float:
         """某頻率下的流量。
@@ -165,8 +161,8 @@ class PumpParameters:
 回傳：
             W。"""
         if self.power_w_by_hz:
-            return interpolate_power_law(self.power_w_by_hz, frequency_hz)
-        return self.rated_power_w * (frequency_hz / self.rated_frequency_hz) ** 3
+            return interpolate_power_law(self.power_w_by_hz, frequency_hz) * self.power_factor
+        return self.rated_power_w * (frequency_hz / self.rated_frequency_hz) ** 3 * self.power_factor
 
 
 @dataclass(frozen=True)
@@ -382,6 +378,12 @@ class ControlParameters:
     hp_limit_down_hz_per_s: float = 0.2
     hp_limit_up_hz_per_s: float = 0.04
 
+    freeze_limit_start_k: float = celsius(4.0)
+    freeze_release_k: float = celsius(6.0)
+    freeze_limit_down_hz_per_s: float = 0.5
+    freeze_limit_up_hz_per_s: float = 0.04
+    freeze_stop_delay_s: float = 60.0
+
     trip_condensing_k: float = celsius(60.0)
     trip_discharge_k: float = celsius(110.0)
     warn_high_pressure_k: float = celsius(58.0)
@@ -419,7 +421,6 @@ class HeatPumpParameters:
         default_factory=lambda: PumpParameters(rated_flow_gpm=MEASURED_PUMP_FLOW_KG_S[-1][1] / gpm_to_kg_s(1.0))
     )
     hot_pump: PumpParameters = field(default_factory=PumpParameters)
-    fan_coil_capacity_ratio_by_cold_pump_hz: tuple[tuple[float, float], ...] = MEASURED_FAN_COIL_CAPACITY_RATIO
     reheat: ReheatParameters = field(default_factory=ReheatParameters)
     control: ControlParameters = field(default_factory=ControlParameters)
 
