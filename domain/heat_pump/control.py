@@ -17,6 +17,12 @@ class PidController:
     ``u = bias + Kp·e + I + Kp·Td·ė_f``，其中 ``I`` 以 ``Kp/Ti·e·dt`` 累積，
     輸出在 ``(out_min, out_max)`` 之內才積分（避免積分飽和）；``ė_f`` 為經一階低通濾波的誤差變化率。
     ``ti_s``、``td_s`` 為 0 時分別關閉積分與微分。
+
+    - ``directional_anti_windup``：為真時，輸出已飽和仍允許「朝解除飽和方向」積分
+      （超上限時誤差為負、低於下限時誤差為正）；為假時維持原本的條件式積分（§4 LEGACY）。
+    - ``derivative_on_measurement``：為真時微分項對量測值（``update`` 的 ``measurement``）取，
+      目標值變動（冰水重設）不會造成微分突跳。量測值須與誤差同號（冷房：誤差 = 冰水溫度 − 目標，
+      量測值 = 冰水溫度；暖房：量測值 = −熱水溫度）。
     """
 
     kp: float
@@ -26,6 +32,8 @@ class PidController:
     out_max: float
     bias: float = 0.0
     filter_ratio: float = 5.0
+    directional_anti_windup: bool = False
+    derivative_on_measurement: bool = False
     integral: float = 0.0
     _previous_error: float | None = field(default=None, repr=False)
     _derivative: float = field(default=0.0, repr=False)
@@ -39,17 +47,19 @@ class PidController:
         self._previous_error = None
         self._derivative = 0.0
 
-    def preset(self, output: float, error: float) -> None:
+    def preset(self, output: float, error: float, measurement: float | None = None) -> None:
         """無擾切換：令下一次輸出（不含微分）等於 ``output``。
 
 參數：
             output: 目標輸出。
             error: 目前誤差。
+            measurement: 與誤差同號的量測值（``derivative_on_measurement`` 時作為微分的前值）。
 
 回傳：
             無。"""
         self.integral = output - self.bias - self.kp * error
-        self._previous_error = error
+        self._previous_error = (measurement if self.derivative_on_measurement and measurement is not None
+                                else error)
         self._derivative = 0.0
 
     def output(self, error: float) -> float:
@@ -62,13 +72,16 @@ class PidController:
             控制輸出。"""
         return self.bias + self.kp * error + self.integral + self.kp * self.td_s * self._derivative
 
-    def update(self, error: float, dt_s: float, out_max: float | None = None) -> float:
+    def update(self, error: float, dt_s: float, out_max: float | None = None,
+               measurement: float | None = None) -> float:
         """推進一步並回傳夾限後的輸出。
 
 參數：
             error: 誤差（正值表示需要更多輸出）。
             dt_s: 時間步長（秒，須大於 0）。
             out_max: 本步輸出上限（預設為建構時的 ``out_max``）。
+            measurement: 「誤差同號」的量測值（誤差 = measurement − 目標）；``derivative_on_measurement``
+                為真時以它取微分，未提供時退回誤差。
 
 回傳：
             夾在 ``[out_min, out_max]`` 之內的控制輸出。
@@ -78,14 +91,18 @@ class PidController:
         if dt_s <= 0:
             raise ValueError("時間步長必須大於 0。")
         upper = self.out_max if out_max is None else min(self.out_max, out_max)
+        signal = measurement if self.derivative_on_measurement and measurement is not None else error
         if self.td_s > 0 and self._previous_error is not None:
-            raw = (error - self._previous_error) / dt_s
+            raw = (signal - self._previous_error) / dt_s
             tau = self.td_s / max(self.filter_ratio, 1e-9)
             self._derivative += (raw - self._derivative) * dt_s / (tau + dt_s)
-        self._previous_error = error
+        self._previous_error = signal
         unclamped = self.output(error)
-        if self.ti_s > 0 and self.out_min < unclamped < upper:
-            self.integral += self.kp / self.ti_s * error * dt_s
+        if self.ti_s > 0:
+            inside = self.out_min < unclamped < upper
+            unwinding = (unclamped >= upper and error < 0) or (unclamped <= self.out_min and error > 0)
+            if inside or (self.directional_anti_windup and unwinding):
+                self.integral += self.kp / self.ti_s * error * dt_s
         value = self.output(error)
         return max(self.out_min, min(upper, value))
 

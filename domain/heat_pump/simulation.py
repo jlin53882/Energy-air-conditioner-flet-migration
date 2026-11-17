@@ -176,6 +176,9 @@ class StepRecord:
     system_enabled: bool = True
     outdoor_fan_power_w: float = 0.0
     standby_power_w: float = 0.0
+    # 控制診斷（§8.12）：PID 未量化的要求頻率與積分項（本步開始時的值；停機時為 0）。
+    pid_request_hz: float = 0.0
+    pid_integral_hz: float = 0.0
 
     @property
     def net_cooling_w(self) -> float:
@@ -223,6 +226,7 @@ class _ControllerState:
     hot_pump_hz: float = 60.0
     cold_pump_changed_s: float = -1e9
     hot_pump_changed_s: float = -1e9
+    pid_request_hz: float = 0.0
 
 
 class HeatPumpSimulation:
@@ -862,6 +866,8 @@ class HeatPumpSimulation:
             system_enabled=enabled,
             outdoor_fan_power_w=outdoor_fan_power,
             standby_power_w=standby_power,
+            pid_request_hz=ctrl.pid_request_hz if ctrl.compressor_on else 0.0,
+            pid_integral_hz=self._pid.integral if ctrl.compressor_on else 0.0,
         )
 
         self.time_s += dt_s
