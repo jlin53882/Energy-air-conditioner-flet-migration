@@ -69,7 +69,7 @@ ROOM_COLOR = "#1F7A6D"
 RH_COLOR = "#2F6FB5"
 BAND_COLOR = "#8A9A95"
 # 冷房模式可選的再熱方式（預設關閉）；協調除濕屬於除濕模式，不在此列。
-REHEAT_MODE_LABELS = {ReheatMode.OFF: "關閉", ReheatMode.DEMAND: "按需", ReheatMode.FIXED: "固定 20 %"}
+REHEAT_MODE_LABELS = {ReheatMode.OFF: "關閉", ReheatMode.DEMAND: "按需", ReheatMode.FIXED: "固定"}  # 固定 = 20 % 盤管冷量
 MODE_NAMES = {"cooling": "冷房", "heating": "暖房", "dehumidify": "除濕"}
 ZONE_MODE_LABELS = {ZoneMode.COOLING: "冷房", ZoneMode.DEHUMIDIFY: "除濕", ZoneMode.OFF: "停止"}
 ZONE_COLORS = {"A": "#C2410C", "B": "#1F4E89"}
@@ -99,21 +99,25 @@ CONTROL_MODE_LABELS = {
 LoopStarter = Callable[[Callable[[], Awaitable[None]]], None]
 
 
-def _segmented(options: list[tuple[str, str]], selected: str, on_change) -> ft.SegmentedButton:
+def _segmented(options: list[tuple[str, str]], selected: str, on_change, *,
+               show_icon: bool | None = None) -> ft.SegmentedButton:
     """單選分段按鈕。
 
 參數：
     options: (值, 標籤)。
     selected: 預設值。
     on_change: 事件。
+    show_icon: 是否顯示選取勾號（None：少於三個選項才顯示）。
 
 回傳：
     SegmentedButton。"""
     return ft.SegmentedButton(
         allow_empty_selection=False,
-        segments=[ft.Segment(value=value, label=ft.Text(label)) for value, label in options],
+        segments=[ft.Segment(value=value, label=ft.Text(label, no_wrap=True)) for value, label in options],
         selected=[selected],
         on_change=on_change,
+        # 三個以上選項時不顯示勾號：控制欄寬度有限，勾號會把「冷房」擠成兩行。
+        show_selected_icon=len(options) < 3 if show_icon is None else show_icon,
     )
 
 
@@ -366,22 +370,20 @@ class HeatPumpSimulationView(ft.Column):
         self.hot_pump = _StepSelector(
             "熱水泵頻率", params.hot_pump.frequency_steps_hz, 60.0,
             lambda hz: f"{params.hot_pump.flow_gpm(hz):.2f} GPM · {params.hot_pump.power_w(hz):.0f} W", self._on_pumps)
-        self.room_mode_button = _segmented([("fixed", "固定室溫"), ("room", "房間溫濕度（§8）")], "fixed",
-                                           self._on_room_mode)
+        self.room_mode_button = _segmented([("fixed", "固定室溫"), ("room", "房間溫濕度")], "fixed",
+                                           self._on_room_mode, show_icon=False)
         self.scenario_dropdown = style_dropdown(ft.Dropdown(
-            options=[ft.dropdown.Option(key, f"{sc.name}（外氣 {sc.outdoor_mean_c - sc.outdoor_amplitude_k:g}–"
-                                             f"{sc.outdoor_mean_c + sc.outdoor_amplitude_k:g} °C）")
-                     for key, sc in SCENARIOS.items()],
+            options=[ft.dropdown.Option(key, sc.name) for key, sc in SCENARIOS.items()],
             value=self._scenario, on_select=self._on_room_option, expand=True,
         ))
         self.reheat_mode_button = _segmented([(m.value, label) for m, label in REHEAT_MODE_LABELS.items()],
                                              self._reheat_mode.value, self._on_room_option)
         self.reheat_mode_label = ft.Text("除濕後再熱方式（冷房）", size=TOKENS.caption, color=TOKENS.text_secondary)
-        self.chw_reset_box = ft.Checkbox(label="冰水溫度重設 7–10 °C（快降慢升）", value=False,
+        self.chw_reset_box = ft.Checkbox(label="冰水溫度重設 7–10 °C", value=False,
                                          on_change=self._on_room_option)
-        self.zoned_box = ft.Checkbox(label="A、B 各自房間（分區，各選模式）", value=False, on_change=self._on_zone_option)
+        self.zoned_box = ft.Checkbox(label="A、B 分區（各選模式）", value=False, on_change=self._on_zone_option)
         self.zone_scenario_dropdown = style_dropdown(ft.Dropdown(
-            options=[ft.dropdown.Option(key, title) for key, (title, _a, _b) in ZONE_SCENARIOS.items()],
+            options=[ft.dropdown.Option(key, title.split("：")[0]) for key, (title, _a, _b) in ZONE_SCENARIOS.items()],
             value=self._zone_scenario, on_select=self._on_zone_option, expand=True,
         ))
         self.zone_buttons = {
@@ -531,7 +533,7 @@ class HeatPumpSimulationView(ft.Column):
         self.room_card = EngineeringCard("室內溫濕度（§8 房間模型）", ft.Column([
             ft.ResponsiveRow([room_temp_box, room_rh_box], spacing=TOKENS.spacing_md),
             self.room_note,
-        ]), subtitle="50 m² 假設房間；在室時段才計入舒適度", icon=ft.Icons.WATER_DROP_OUTLINED)
+        ]), subtitle="假設房間；在室時段才計入舒適度", icon=ft.Icons.WATER_DROP_OUTLINED)
         self.room_card.visible = False
         self.control_card = EngineeringCard("受控水桶與啟停門檻", ft.Column([
             self.control_chart, self.control_legend, self.control_note,
@@ -1132,6 +1134,9 @@ class HeatPumpSimulationView(ft.Column):
         k["aux"].set_value(format_power(record.fan_power_w + record.pump_power_w), "kW")
         k["reheat"].set_value(format_power(record.reheat_w), "kW")
         k["net_cooling"].set_value(format_power(record.net_cooling_w), "kW")
+        # 分區時「A｜B」並列的數值卡改用較小字級，避免換行。
+        for key in ("room_t", "room_rh", "room_w", "dehum_state"):
+            k[key].value_control.size = TOKENS.metric if record.zones else TOKENS.display
         if record.zones:
             # 分區：「A｜B」並列，不顯示平均（平均不代表任何一區）。
             zs = record.zones
@@ -1143,7 +1148,7 @@ class HeatPumpSimulationView(ft.Column):
             k["room_rh"].set_value(f"{(record.room_rh or 0) * 100:.0f}", "%")
             k["room_w"].set_value(f"{(record.room_humidity_ratio or 0) * 1000:.1f}", "g/kg")
         if record.room_k is not None:
-            k["coil_split"].set_value(f"{record.coil_sensible_w / 1000:.2f}／{record.coil_latent_w / 1000:.2f}", "kW")
+            k["coil_split"].set_value(f"{record.coil_sensible_w / 1000:.1f}／{record.coil_latent_w / 1000:.1f}", "kW")
             k["outdoor"].set_value(format_temperature(record.outdoor_k), "°C")
             k["chw_set"].set_value(format_temperature(record.chw_setpoint_k), "°C")
             k["supply"].set_value(format_temperature(record.supply_k), "°C" if record.supply_k is not None else "")
@@ -1154,8 +1159,8 @@ class HeatPumpSimulationView(ft.Column):
                     "停止" if z.mode is ZoneMode.OFF else ("除濕" if z.dehum_mode else "顯冷") for z in record.zones),
                     "A｜B")
             elif self._mode == "dehumidify" and room is not None:
-                k["dehum_state"].set_value("除濕＋補熱" if room.dehum_mode else "顯冷／待機",
-                                           "再熱中" if record.reheat_w > 0 else "")
+                k["dehum_state"].set_value("除濕" if room.dehum_mode else "顯冷",
+                                           "補熱中" if record.reheat_w > 0 else "")
             else:
                 k["dehum_state"].set_value("—", "")
         k["flow"].set_value(f"{record.mass_flow_kg_s * 1000:.1f}" if on else "—", "g/s" if on else "")

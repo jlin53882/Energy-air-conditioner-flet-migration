@@ -555,7 +555,7 @@ def test_view_dehumidify_mode_uses_room_model_and_coordinated_reheat(service: He
     view.speed = 1200
     for _ in range(45):  # 06:00 → 09:00
         view.tick()
-    assert view.kpis["dehum_state"].value_control.value in ("除濕＋補熱", "顯冷／待機")
+    assert view.kpis["dehum_state"].value_control.value in ("除濕", "顯冷")
     view.operation_button.selected = ["cooling"]
     view._on_operation(None)
     assert view.sim.room is not None and view.sim.room.reheat_mode is ReheatMode.OFF
