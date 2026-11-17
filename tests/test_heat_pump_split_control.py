@@ -179,3 +179,35 @@ def test_split_mode_stops_only_at_minimum_step_after_hold(table: CycleTable) -> 
     starts = [e for e in sim.events if e.code == "start"]
     restart_temps = [next(r for r in records if r.time_s + r.dt_s >= e.time_s).cold_water_k for e in starts]
     assert restart_temps and all(t >= celsius(8.0) - 0.05 for t in restart_temps)
+
+
+def test_startup_loss_ramps_capacity_and_costs_tau_seconds(table: CycleTable) -> None:
+    """啟停損失：重啟後冷量以 1 − e^(−t/τ) 爬升、耗電全額；每次啟動累計損失 τ 秒的滿載冷量；
+    模擬起點即運轉時不扣。
+
+回傳：
+    無。"""
+    params = HeatPumpParameters()
+    params = replace(params, control=replace(params.control, startup_capacity_tau_s=60.0))
+    settings = replace(default_settings(OperationMode.COOLING), fans=frozenset({"A"}))
+    sim = HeatPumpSimulation(table, params, settings, initial_cold_k=celsius(30.0), initial_hot_k=celsius(30.0))
+    base = HeatPumpSimulation(table, HeatPumpParameters(), settings, initial_cold_k=celsius(30.0),
+                              initial_hot_k=celsius(30.0))
+    assert sim.step().cooling_w == pytest.approx(base.step().cooling_w)  # 模擬起點即運轉：不扣
+    records = sim.run(HOUR)
+    start = next(e for e in sim.events if e.code == "start")
+    first = next(r for r in records if r.time_s >= start.time_s - 1e-9)
+    later = next(r for r in records if r.time_s >= start.time_s + 120.0)
+    assert first.compressor_on and first.cooling_w < 0.1 * later.cooling_w
+    assert first.compressor_power_w > 0.8 * later.compressor_power_w
+
+    # 積分損失：固定運轉點逐步推進，Σ(1 − factor)·dt = τ。
+    perf = sim._solver.solve(sim._conditions(60.0))
+    sim._ctrl.on_since_s = sim.time_s
+    lost = 0.0
+    t = sim.time_s
+    for _ in range(200):
+        lost += (1.0 - sim._apply_startup_loss(perf, 5.0).cooling_w / perf.cooling_w) * 5.0
+        sim.time_s += 5.0
+    sim.time_s = t
+    assert lost == pytest.approx(60.0, rel=1e-3)

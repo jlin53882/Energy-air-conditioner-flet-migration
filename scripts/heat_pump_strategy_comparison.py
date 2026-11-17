@@ -58,6 +58,9 @@ VARIANTS = {
     "split_pid": "目標分離＋微分 Td 30 s（對量測值微分）",
     "steps_50_60": "壓縮機只用原廠標示 50／60 Hz",
     "band_15": "冷房重啟差 1.5 K（重啟 = 停機 + 1.5 K）",
+    "tank_x2": "冰水桶加大為 320 L",
+    "start_loss_60": "啟停損失：啟動後能力以 τ 60 s 爬升（每次啟動約損失 60 s 滿載能力）",
+    "start_loss_120": "啟停損失：啟動後能力以 τ 120 s 爬升",
 }
 _TABLE: CycleTable | None = None
 
@@ -120,6 +123,11 @@ def _apply_variant(variant: str, coils, room: RoomParameters, params: HeatPumpPa
         params = replace(params, compressor=replace(params.compressor, frequency_steps_hz=(50.0, 60.0)))
     elif variant == "band_15":
         params = replace(params, control=replace(control, cooling_restart_k=control.cooling_setpoint_k + 1.5))
+    elif variant == "tank_x2":
+        params = replace(params, cold_tank=replace(params.cold_tank, volume_l=2 * params.cold_tank.volume_l))
+    elif variant in ("start_loss_60", "start_loss_120"):
+        tau = 60.0 if variant == "start_loss_60" else 120.0
+        params = replace(params, control=replace(control, startup_capacity_tau_s=tau))
     else:
         raise ValueError(f"未知的敏感度變體：{variant}")
     return coils, room, params

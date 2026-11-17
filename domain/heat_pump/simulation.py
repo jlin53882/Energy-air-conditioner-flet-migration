@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -739,6 +740,8 @@ class HeatPumpSimulation:
                 ctrl.compressor_on = False
                 tripped_now = True
                 perf = None
+        if perf is not None:
+            perf = self._apply_startup_loss(perf, dt_s)
         if ctrl.tripped:
             warnings.add(WARNING_TRIPPED)
         if ctrl.freeze_stopped and not ctrl.compressor_on:
@@ -1131,6 +1134,25 @@ class HeatPumpSimulation:
         if freezing:
             warnings.add(WARNING_FREEZE_LIMITING)
         return frozenset(warnings)
+
+    def _apply_startup_loss(self, perf: CompressorPerformance, dt_s: float) -> CompressorPerformance:
+        """啟停損失：啟動後冷量與熱量以 1 − e^(−t/τ) 爬升（本步取時間平均），耗電不變（§8.12.7）。
+
+參數：
+    perf: 穩態運轉點。
+    dt_s: 時間步長。
+
+回傳：
+    修正後的運轉點（τ = 0 或模擬起始即運轉時原樣回傳）。"""
+        tau = self.params.control.startup_capacity_tau_s
+        on_since = self._ctrl.on_since_s
+        if tau <= 0 or on_since is None:
+            return perf
+        t0 = max(0.0, self.time_s - on_since)
+        if t0 > 10 * tau:
+            return perf
+        factor = 1.0 - tau / dt_s * (math.exp(-t0 / tau) - math.exp(-(t0 + dt_s) / tau))
+        return replace(perf, cooling_w=perf.cooling_w * factor, heating_w=perf.heating_w * factor)
 
     def control_thresholds(self) -> tuple[float, float, float]:
         """受控水桶目前的（PID 目標, 停機門檻, 重啟門檻），K。

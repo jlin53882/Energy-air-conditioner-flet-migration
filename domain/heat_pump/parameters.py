@@ -427,6 +427,10 @@ class ControlParameters:
     split_derivative_time_s: float = 0.0
     split_integral_min_hz: float = -5.0
 
+    # 啟停損失（§8.12.7；預設 0 = 不計，§4 與既有結果不變）：每次啟動後，冷量與熱量以時間常數 τ 指數爬升
+    # （1 − e^(−t/τ)），耗電立即為全額；每次啟動等效損失 τ 秒的滿載能力（冷媒遷移、壓力建立、金屬熱容）。
+    startup_capacity_tau_s: float = 0.0
+
 
 @dataclass(frozen=True)
 class ElectricalParameters:
