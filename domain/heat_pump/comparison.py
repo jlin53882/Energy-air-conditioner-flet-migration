@@ -2,10 +2,11 @@
 
 做法：
 - 每個策略從相同初始狀態（0 時，室內 29 °C／65 %RH、冰水桶 12 °C、熱水桶 30 °C）開始，第一天量「達標時間」；
-  之後**重複同一日工況，直到週期穩態**，以**最後兩天的平均**統計（用電、超標量、啟動次數都是每日平均）。
+  之後**重複同一日工況，直到週期穩態**，以**最後四天的平均**統計（用電、超標量、啟動次數都是每日平均），
+  並列出這四天單日用電的全距（水桶相位與 24 h 可能是準週期，不只一天或兩天循環）。
   兩個水桶在啟停遲滯帶內循環，停機時的相位每天不同，有時形成兩天一循環（例如熱水桶相位決定隔天再熱量），
   所以收斂判定比較「相隔兩天」的狀態：室溫、含濕量接近，水桶溫差在遲滯帶寬度內，且相隔兩天的單日用電差 ≤ 1 %。
-  殘留影響以「殘差修正」與「日間變動」兩欄量化，策略間差距小於日間變動時不視為有意義。
+  殘留影響以「殘差修正」與「日用電全距」兩欄量化，策略間差距小於全距時不視為有意義。
   這取代「跑兩天＋以平均 COP 換算儲能差」：COP 換算只能粗估，房間溫差也會改變整天外殼負荷。
   最後一天的殘留儲能差仍以主機 COP 換算列出（診斷用，不計入排名）。
 - 舒適度判定分兩層：**絕對門檻**（``AbsoluteComfort``）與**不劣於舒適基準**（``ComfortTolerance``）。
@@ -92,11 +93,12 @@ CORE_STRATEGIES: tuple[str, ...] = ("base", "reheat_off", "pump_auto", "combo3")
 
 @dataclass(frozen=True)
 class ComfortTolerance:
-    """「不劣於舒適基準」的容許值。"""
+    """「不劣於舒適基準」的容許值。達標時間容許 max(3 min, 5 %)：它量自第一天的任意初始狀態，1 min 太嚴。"""
 
     temperature_kh: float = 0.1
     humidity_high_pct_h: float = 1.0
-    pulldown_s: float = 60.0
+    pulldown_s: float = 180.0
+    pulldown_fraction: float = 0.05
 
 
 @dataclass(frozen=True)
@@ -147,7 +149,11 @@ class StrategyResult:
     drift_hot_k: float = 0.0
     coil_check_failures: int = 0
     room_condensed_kg: float = 0.0
-    day_to_day_kwh: float = 0.0
+    daily_kwh_range: float = 0.0
+    mean_room_k: float = 0.0
+    mean_humidity_ratio: float = 0.0
+    occupancy_start_k: float = 0.0
+    starts_per_hour: float = 0.0
 
     def comfort_ok(self, base: StrategyResult, tol: ComfortTolerance | None = None) -> bool:
         """舒適度是否不劣於基準（溫度超標、濕度高側超標、達標時間）。
@@ -163,8 +169,10 @@ class StrategyResult:
             return False
         if self.humidity_high_pct_h > base.humidity_high_pct_h + tol.humidity_high_pct_h:
             return False
-        if base.pulldown_s is not None and (self.pulldown_s is None or self.pulldown_s > base.pulldown_s + tol.pulldown_s):
-            return False
+        if base.pulldown_s is not None:
+            allowed = max(tol.pulldown_s, tol.pulldown_fraction * base.pulldown_s)
+            if self.pulldown_s is None or self.pulldown_s > base.pulldown_s + allowed:
+                return False
         return True
 
     def absolute_ok(self, limits: AbsoluteComfort | None = None) -> bool:
@@ -221,7 +229,7 @@ def _pulldown_s(records: list[StepRecord], control: IndoorControlParameters, sta
 
 def evaluate(records: list[StepRecord], events: list, scenario_key: str, strategy: Strategy, room: RoomModel,
              params: HeatPumpParameters, day_start_s: float, pulldown_s: float | None,
-             start_state: tuple[float, float, float], days: int = 2, periodic: bool = True,
+             start_state: tuple[float, float, float, float], days: int = 2, periodic: bool = True,
              coil_check_failures: int = 0, window_days: int = 1) -> StrategyResult:
     """彙整統計日的指標。
 
@@ -234,7 +242,7 @@ def evaluate(records: list[StepRecord], events: list, scenario_key: str, strateg
     params: 系統參數。
     day_start_s: 統計日起始時刻。
     pulldown_s: 第一天的達標時間。
-    start_state: 統計日開始時的（冰水桶 K, 熱水桶 K, 室溫 K）。
+    start_state: 統計窗開始時的（冰水桶 K, 熱水桶 K, 室溫 K, 室內含濕量）。
     days: 模擬天數。
     periodic: 是否達到週期穩態。
     coil_check_failures: 盤管不變量違反次數。
@@ -254,8 +262,10 @@ def evaluate(records: list[StepRecord], events: list, scenario_key: str, strateg
     evap = sum(r.cooling_w * r.dt_s for r in records if r.mode.value != "smart_heating") * kwh
     chiller_cop = evap / compressor if compressor > 0 else None
     end = records[-1]
+    # 熱水桶：冷房時其熱量是要排掉的廢熱，不是有用儲能，只列漂移（drift_hot_k）不換算。
     owed_j = (params.cold_tank.heat_capacity_j_k * (end.cold_water_k - start_state[0])
-              + room.params.heat_capacity_j_k * (end.room_k - start_state[2]))
+              + room.params.heat_capacity_j_k * (end.room_k - start_state[2])
+              + room.params.moisture_capacity_kg * (end.room_humidity_ratio - start_state[3]) * 2.501e6)
     correction = owed_j * kwh / chiller_cop if chiller_cop else 0.0
     upper, lower = c.setpoint_k + c.band_k, c.setpoint_k - c.band_k
     per_day_h = HOUR_S * window_days
@@ -286,6 +296,11 @@ def evaluate(records: list[StepRecord], events: list, scenario_key: str, strateg
         drift_room_k=end.room_k - start_state[2], drift_cold_k=end.cold_water_k - start_state[0],
         drift_hot_k=end.hot_water_k - start_state[1],
         coil_check_failures=coil_check_failures, room_condensed_kg=room.condensed_kg,
+        mean_room_k=sum(r.room_k * r.dt_s for r in occ) / sum(r.dt_s for r in occ),
+        mean_humidity_ratio=sum(r.room_humidity_ratio * r.dt_s for r in occ) / sum(r.dt_s for r in occ),
+        occupancy_start_k=next(r.room_k for r in occ),
+        starts_per_hour=(sum(1 for e in in_day if e.code == "start")
+                         / max(1e-9, sum(r.dt_s for r in records if r.system_enabled) / HOUR_S)),
     )
 
 
@@ -301,8 +316,9 @@ class PeriodicTolerance:
     cold_tank_k: float = 1.0
     hot_tank_k: float = 2.5
     energy_fraction: float = 0.01
-    min_days: int = 4
-    max_days: int = 8
+    min_days: int = 5
+    max_days: int = 9
+    window_days: int = 4
 
 
 def _state(sim: HeatPumpSimulation, room: RoomModel) -> _DayState:
@@ -375,7 +391,7 @@ def run_strategy(table: CycleTable, scenario_key: str, scenario: DailyScenario, 
     while True:
         day_starts.append(sim.time_s)
         records = sim.run(DAY_S, dt_s)
-        day_records = (day_records + [records])[-2:]  # 只保留最後兩天，避免多日記錄佔滿記憶體
+        day_records = (day_records + [records])[-periodic.window_days:]  # 只保留統計窗，避免記憶體佔滿
         day_kwh.append(sum(r.total_power_w * r.dt_s for r in records) / 3.6e6)
         states.append(_state(sim, room))
         days += 1
@@ -388,12 +404,13 @@ def run_strategy(table: CycleTable, scenario_key: str, scenario: DailyScenario, 
         if (converged and days >= periodic.min_days) or days >= periodic.max_days:
             break
     failures = sum(sim.coil_check_failures.values())
-    window = day_records[-2] + day_records[-1]
-    start = states[-3]
-    result = evaluate(window, sim.events, scenario_key, strategy, room, params, day_starts[-2], pulldown,
-                      (start.cold_k, start.hot_k, start.room_k), days=days, periodic=converged,
-                      coil_check_failures=failures, window_days=2)
-    return replace(result, day_to_day_kwh=abs(day_kwh[-1] - day_kwh[-2]))
+    n = min(periodic.window_days, len(day_records))
+    window = [r for day in day_records[-n:] for r in day]
+    start = states[-(n + 1)]
+    result = evaluate(window, sim.events, scenario_key, strategy, room, params, day_starts[-n], pulldown,
+                      (start.cold_k, start.hot_k, start.room_k, start.room_w), days=days, periodic=converged,
+                      coil_check_failures=failures, window_days=n)
+    return replace(result, daily_kwh_range=max(day_kwh[-n:]) - min(day_kwh[-n:]))
 
 
 REFERENCE_CANDIDATES = ("base", "reheat_off")

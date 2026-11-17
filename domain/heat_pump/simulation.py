@@ -606,9 +606,14 @@ class HeatPumpSimulation:
             # 只有實際與預測都有餘裕時才允許降階。最低流量即最低階梯，防凍由板式蒸發器保護處理。
             steps = sorted(self.params.cold_pump.frequency_steps_hz)
             dwell_ok = self.time_s - ctrl.cold_pump_changed_s >= c.pump_step_dwell_s
-            if room.comfort_tight():
+            chw_at_min = (not room.chw_reset
+                          or room.chw_setpoint_k <= room.control.chw_min_k + 1e-9)
+            if room.comfort_tight() and chw_at_min:
+                # 先降冰水溫度（便宜）；冰水已在下限仍接近上限，才升泵（40 → 60 Hz 只多約 4 % 冷量）。
                 higher = [step for step in steps if step > ctrl.cold_pump_hz]
                 cold = higher[0] if higher and dwell_ok else max(cold, ctrl.cold_pump_hz)
+            elif room.comfort_tight():
+                cold = max(cold, ctrl.cold_pump_hz)
             elif cold < ctrl.cold_pump_hz and not room.comfort_ample():
                 cold = ctrl.cold_pump_hz
         hot = self._next_pump_hz(self.params.hot_pump.frequency_steps_hz, self.params.hot_pump.flow_gpm,
@@ -685,7 +690,7 @@ class HeatPumpSimulation:
                 ctrl.off_since_s = self.time_s
                 self._event("schedule_stop", "空調排程停用，壓縮機停機")
             room.update_fans(self.time_s, s.fans, enabled)
-            room.update_chw_setpoint(self.time_s, enabled)
+            room.update_chw_setpoint(self.time_s, enabled, ctrl.compressor_on and not ctrl.tripped)
             self._pumps_on = self._pump_states(enabled)
 
         perf: CompressorPerformance | None = None

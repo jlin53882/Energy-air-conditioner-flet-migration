@@ -259,7 +259,7 @@ def test_trend_prediction_triggers_staging_before_limit() -> None:
 
 
 def test_scenario_schedule_and_profiles() -> None:
-    """外氣 14 時最高；日照 07–18 時；午休人數減半；空調 07:30 啟用。
+    """外氣 14 時最高；日照 07–18 時；午休人數減半；空調 07:00 啟用（預冷 1 h）。
 
 回傳：
     無。"""
@@ -268,7 +268,7 @@ def test_scenario_schedule_and_profiles() -> None:
     assert sc.outdoor_k(2 * 3600) - K == pytest.approx(28.0)
     assert sc.solar_w(3 * 3600) == 0.0 and sc.solar_w(12.5 * 3600) == pytest.approx(1200.0)
     assert sc.people_count(12.5 * 3600) == 3 and sc.people_count(9 * 3600) == 6
-    assert not sc.system_enabled(7.4 * 3600) and sc.system_enabled(7.5 * 3600)
+    assert not sc.system_enabled(6.9 * 3600) and sc.system_enabled(7.0 * 3600)
     assert sc.occupied(24 * 3600 + 9 * 3600)
 
 
@@ -281,18 +281,25 @@ def test_fan_staging_keeps_one_fan_when_humid() -> None:
     dry = RoomModel(SCENARIOS["mild"], initial_k=celsius(25.0), initial_rh=0.5)
     dry.update_fans(0.0, frozenset({"A", "B"}), True)
     assert dry.fans_on == frozenset()
-    humid = RoomModel(SCENARIOS["mild"], initial_k=celsius(25.0), initial_rh=0.7)
+    humid = RoomModel(SCENARIOS["mild"], initial_k=celsius(25.3), initial_rh=0.7)
     humid.update_fans(0.0, frozenset({"A", "B"}), True)
     assert humid.fans_on == frozenset({"B"})
+    # 過冷下限：室溫 ≤ 25.0 °C 時即使潮濕也不為除濕保留送風機。
+    cold_humid = RoomModel(SCENARIOS["mild"], initial_k=celsius(24.8), initial_rh=0.75)
+    cold_humid.update_fans(0.0, frozenset({"A", "B"}), True)
+    assert cold_humid.fans_on == frozenset()
     hot = RoomModel(SCENARIOS["mild"], initial_k=control.stage2_on_k + 0.1)
     hot.update_fans(0.0, frozenset({"A", "B"}), True)
+    assert hot.fans_on == frozenset({"B"})  # 第二段需第一段已運轉 ≥ 3 min
+    hot.update_fans(200.0, frozenset({"A", "B"}), True)
     assert hot.fans_on == frozenset({"A", "B"})
     hot.update_fans(1.0, frozenset({"A", "B"}), False)
     assert hot.fans_on == frozenset()
 
 
 def test_chw_reset_moves_setpoint_with_humidity() -> None:
-    """冰水重設：溫濕度都有餘裕時每 5 min 升 0.5 K（上限 10 °C）；濕度接近上限時降。
+    """冰水重設（快降慢升）：有餘裕且壓縮機停機時每 5 min 升 0.5 K（上限 10 °C）；運轉中不升；
+    需要除濕時直接降到 7 °C。
 
 回傳：
     無。"""
@@ -300,11 +307,40 @@ def test_chw_reset_moves_setpoint_with_humidity() -> None:
     for i in range(10):
         room.update_chw_setpoint(i * 300.0, True)
     assert room.chw_setpoint_k == pytest.approx(celsius(10.0))
+    running = RoomModel(SCENARIOS["mild"], chw_reset=True, initial_k=celsius(26.0), initial_rh=0.5)
+    for i in range(10):
+        running.update_chw_setpoint(i * 300.0, True, compressor_on=True)
+    assert running.chw_setpoint_k == pytest.approx(celsius(7.0))  # 運轉中不升
     room.state.humidity_ratio = psy.humidity_ratio(celsius(26.0), 0.65)
     room.update_chw_setpoint(4000.0, True)
-    assert room.chw_setpoint_k == pytest.approx(celsius(9.5))
+    assert room.chw_setpoint_k == pytest.approx(celsius(7.0))
     fixed = RoomModel(SCENARIOS["mild"], chw_reset=False)
     assert fixed.update_chw_setpoint(0.0, True) == pytest.approx(celsius(7.0))
+
+
+def test_humidity_control_uses_humidity_ratio_not_rh() -> None:
+    """除濕判斷用含濕量：同一含濕量下降溫使 RH 升高，但不改變除濕需求（RH 判斷會自我觸發）。
+
+回傳：
+    無。"""
+    w = psy.humidity_ratio(celsius(26.0), 0.57)  # 低於 12.6 g/kg 門檻
+    warm = RoomModel(SCENARIOS["mild"], initial_k=celsius(26.0), initial_rh=0.57)
+    cool = RoomModel(SCENARIOS["mild"], initial_k=celsius(25.4), initial_rh=0.57)
+    cool.state.humidity_ratio = w
+    assert cool.relative_humidity > 0.58  # RH 已超過舊的 58 % 門檻
+    assert not warm.needs_dehumidification() and not cool.needs_dehumidification()
+
+
+def test_comfort_tight_only_evaluated_with_fans_running() -> None:
+    """送風機停轉時室溫上升是必然的，不判為 tight（不觸發升泵、降冰水）。
+
+回傳：
+    無。"""
+    room = RoomModel(SCENARIOS["hot"], initial_k=celsius(26.2), initial_rh=0.5)
+    for i in range(60):
+        room.step(13 * 3600 + i * 5.0, 5.0, [], 0.0)
+    assert room.predicted_temperature_k > room.control.tight_t_k
+    assert not room.comfort_tight()
 
 
 def test_demand_reheat_only_when_humid_and_cool() -> None:

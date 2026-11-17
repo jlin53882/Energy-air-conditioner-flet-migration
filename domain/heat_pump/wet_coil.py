@@ -42,6 +42,7 @@ class CoilParameters:
     rated_water_flow_kg_s: float
     water_flow_exponent: float = 0.8
     fan_power_w: float = 0.0
+    # 濕表面風側 UA 倍數。**只驗證過 1.0**：不等於 1 時交界熱通量不連續，濕區比例的定義需重新推導。
     wet_air_side_factor: float = 1.0
 
 
@@ -268,7 +269,6 @@ def coil_performance(coil: CoilParameters, air_in_k: float, air_in_humidity_rati
         return CoilResult(0.0, 0.0, 0.0, air_in_k, w_in, water_in_k, False, 0.0)
     c_water = water_flow_kg_s * WATER_CP_J_KG_K
     ua_a = coil.air_side_ua_w_k
-    ua_a_wet = ua_a * coil.wet_air_side_factor
     dew_k = psy.dew_point_k(w_in)
 
     def interface_surface(solution: _Solution) -> float:
@@ -279,12 +279,13 @@ def coil_performance(coil: CoilParameters, air_in_k: float, air_in_humidity_rati
     if water_in_k >= air_in_k or interface_surface(dry_only) >= dew_k:
         return _finish(coil, dry_only, 0.0, air_in_k, w_in, water_in_k, c_water)
     wet_only = _solve(coil, 1.0, air_in_k, w_in, water_in_k, c_water, ua_w)
-    if _surface_k(air_in_k, _wet_end_water(wet_only, water_in_k, c_water), ua_a_wet, ua_w) <= dew_k:
+    # 結露判斷用乾式表面溫度公式（風側 UA 用乾表面值），與交界條件一致。
+    if _surface_k(air_in_k, _wet_end_water(wet_only, water_in_k, c_water), ua_a, ua_w) <= dew_k:
         return _finish(coil, wet_only, 1.0, air_in_k, w_in, water_in_k, c_water)
     # 部分濕：f 增加時交界表面溫度上升；以夾擠割線法找 T_s(f) = 露點。
     low, high = 0.0, 1.0
     g_low = interface_surface(dry_only) - dew_k
-    g_high = _surface_k(air_in_k, _wet_end_water(wet_only, water_in_k, c_water), ua_a_wet, ua_w) - dew_k
+    g_high = _surface_k(air_in_k, _wet_end_water(wet_only, water_in_k, c_water), ua_a, ua_w) - dew_k
     best = dry_only
     fraction = 0.0
     converged = False

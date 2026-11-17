@@ -62,6 +62,10 @@ def make_coils(air_side_ua_w_k: float = 292.0, water_side_ua_w_k: float = 5538.0
 DEFAULT_COILS: tuple[CoilParameters, ...] = make_coils()
 # 敏感度：n 固定 0.5 時的擬合結果（擬合 2.2 %、驗證 4.8 %）。
 ALTERNATIVE_COILS: tuple[CoilParameters, ...] = make_coils(329.0, 2977.0, 0.5)
+# 敏感度：表 8.1.1 的空氣側冷量可能因出風 RH 讀低而高估 13–22 %（§8.2），風側 UA × 0.8。
+REDUCED_AIR_UA_COILS: tuple[CoilParameters, ...] = make_coils(292.0 * 0.8, 5538.0, 0.8)
+# 敏感度：表中流量為 A+B 總流量（B 只分到 60 %）重新擬合；水側 UA 擬合發散（水側熱阻可忽略），取 1e5 W/K。
+TOTAL_FLOW_COILS: tuple[CoilParameters, ...] = make_coils(280.0, 1.0e5, 0.8)
 
 
 @dataclass(frozen=True)
@@ -103,7 +107,8 @@ class DailyScenario:
     people: int
     equipment_w: float
     occupied_hours: tuple[float, float] = (8.0, 18.0)
-    precool_h: float = 0.5
+    # 預冷 1 h（07:00 起）：原 0.5 h 在高溫情境 08:00 室溫仍約 27.3 °C，超標來自預冷不足而非尖峰能力（§8.7）。
+    precool_h: float = 1.0
 
     def __post_init__(self) -> None:
         """物理可行性：外氣含濕量不得超過當日最低外氣溫度的飽和含濕量。
@@ -215,14 +220,21 @@ class IndoorControlParameters:
     band_k: float = 0.5
     rh_low: float = 0.50
     rh_high: float = 0.60
-    # 趨勢預判：以 EWMA 斜率（時間常數 trend_tau_s）預測 anticipation_s 後的室溫與 RH，
-    # 讓控制在接近上限且仍上升時就動作，而不是超標後才反應（§8.4）。
+    # 濕度控制量用**含濕量**（不是 RH）：降溫本身會讓 RH 上升，以 RH 判斷會使送風機自我觸發、頻繁切換。
+    # 門檻以 26 °C 時的 RH 換算：60 % → 12.6 g/kg（需除濕）、58 % → 12.2（接近）、55 % → 11.6（有餘裕）。
+    humid_w: float = psy.humidity_ratio(celsius(26.0), 0.60)
+    tight_w: float = psy.humidity_ratio(celsius(26.0), 0.58)
+    ample_w: float = psy.humidity_ratio(celsius(26.0), 0.55)
+    # 過冷下限：室溫低於此值時不為除濕強制保留送風機（避免無再熱時過冷）。
+    overcool_floor_k: float = celsius(25.0)
+    # 趨勢預判：以 EWMA 斜率（時間常數 trend_tau_s）預測室溫與含濕量。第一段（開 B）用短提前量，
+    # 第二段（加開 A）與 tight 判斷用長提前量，且第二段需第一段已運轉 ``stage2_after_s``（§8.4）。
     trend_tau_s: float = 300.0
+    short_anticipation_s: float = 120.0
     anticipation_s: float = 600.0
+    stage2_after_s: float = 180.0
     tight_t_k: float = celsius(26.3)
-    tight_rh: float = 0.58
     ample_t_k: float = celsius(26.1)
-    ample_rh: float = 0.55
     # 送風機分級（開用預測值、關要實際值與預測值都低於門檻）：先開 B，再加 A。
     stage1_on_k: float = celsius(26.2)
     stage2_on_k: float = celsius(26.4)
@@ -237,7 +249,6 @@ class IndoorControlParameters:
     # 按需再熱：濕度高於上限且室溫低於設定值時開啟，以比例控制把室溫拉回 ``reheat_target_k``。
     reheat_on_t_k: float = celsius(26.0)
     reheat_off_t_k: float = celsius(26.4)
-    reheat_off_rh: float = 0.55
     reheat_target_k: float = celsius(26.2)
     reheat_gain_w_k: float = 2000.0
     reheat_min_switch_s: float = 180.0
@@ -271,7 +282,8 @@ class _IndoorState:
     chw_setpoint_k: float = celsius(7.0)
     chw_changed_s: float = -1e9
     t_slope_k_s: float = 0.0
-    rh_slope_s: float = 0.0
+    w_slope_s: float = 0.0
+    stage1_since_s: float | None = None
 
 
 class RoomModel:
@@ -320,39 +332,61 @@ class RoomModel:
             0–1。"""
         return psy.relative_humidity(self.state.temperature_k, self.state.humidity_ratio)
 
+    def predicted_temperature_k_at(self, horizon_s: float) -> float:
+        """預測 ``horizon_s`` 後的室溫（只往上預測；下降趨勢不提前）。
+
+參數：
+    horizon_s: 提前量。
+
+回傳：
+    K。"""
+        return self.state.temperature_k + max(0.0, self._indoor.t_slope_k_s) * horizon_s
+
     @property
     def predicted_temperature_k(self) -> float:
-        """預測 ``anticipation_s`` 後的室溫（只往上預測；下降趨勢不提前）。
+        """預測 ``anticipation_s`` 後的室溫。
 
 回傳：
             K。"""
-        ind = self._indoor
-        return self.state.temperature_k + max(0.0, ind.t_slope_k_s) * self.control.anticipation_s
+        return self.predicted_temperature_k_at(self.control.anticipation_s)
 
     @property
-    def predicted_rh(self) -> float:
-        """預測 ``anticipation_s`` 後的 RH（只往上預測）。
+    def predicted_humidity_ratio(self) -> float:
+        """預測 ``anticipation_s`` 後的含濕量（只往上預測）。
 
 回傳：
-            0–1。"""
-        return min(1.0, self.relative_humidity + max(0.0, self._indoor.rh_slope_s) * self.control.anticipation_s)
+            kg/kg。"""
+        return self.state.humidity_ratio + max(0.0, self._indoor.w_slope_s) * self.control.anticipation_s
 
     def comfort_tight(self) -> bool:
-        """溫度或濕度（預測值）接近上限：取消升水溫、泵不降階並升階。
+        """送風機運轉中，室溫或含濕量（預測）接近上限：冰水降到下限、泵不降階（冰水已在下限才升階）。
+
+送風機停轉時室溫必然上升，斜率不代表能力不足，所以不評估（回傳 False）。
 
 回傳：
             bool。"""
+        if not self._indoor.fans_on:
+            return False
         c = self.control
-        return self.predicted_temperature_k > c.tight_t_k or self.predicted_rh > c.tight_rh
+        return self.predicted_temperature_k > c.tight_t_k or self.predicted_humidity_ratio > c.tight_w
 
     def comfort_ample(self) -> bool:
-        """溫度與濕度（實際與預測）都有餘裕：才允許升水溫或泵降階。
+        """室溫與含濕量（實際與預測）都有餘裕：才允許升冰水溫度或泵降階。
 
 回傳：
             bool。"""
         c = self.control
         return (max(self.state.temperature_k, self.predicted_temperature_k) <= c.ample_t_k
-                and max(self.relative_humidity, self.predicted_rh) <= c.ample_rh)
+                and max(self.state.humidity_ratio, self.predicted_humidity_ratio) <= c.ample_w)
+
+    def needs_dehumidification(self) -> bool:
+        """含濕量高於上限（或預測將高於接近門檻），且室溫高於過冷下限。
+
+回傳：
+            bool。"""
+        c = self.control
+        humid = self.state.humidity_ratio > c.humid_w or self.predicted_humidity_ratio > c.tight_w
+        return humid and self.state.temperature_k > c.overcool_floor_k
 
     @property
     def fans_on(self) -> frozenset[str]:
@@ -395,7 +429,10 @@ class RoomModel:
 
     # ---- 控制 ----
     def update_fans(self, time_s: float, available: frozenset[str], enabled: bool) -> None:
-        """送風機啟停與分級（B 優先；濕度偏高或預測將偏高時至少保留一台）。
+        """送風機啟停與分級（B 優先；需要除濕時至少保留一台，但室溫低於過冷下限時不保留）。
+
+第一段（開 B）看實際室溫加 2 min 提前量；第二段（加開 A）看 10 min 預測，且 B 已運轉 ≥ 3 min
+（避免送風機剛停時的升溫斜率被誤判為能力不足）。
 
 參數：
     time_s: 時間。
@@ -407,6 +444,7 @@ class RoomModel:
         ind = self._indoor
         if not enabled:
             ind.fans_on = set()
+            ind.stage1_since_s = None
             return
         if time_s - ind.fan_switched_s < self.control.fan_min_switch_s:
             return
@@ -414,14 +452,17 @@ class RoomModel:
         order = [name for name in ("B", "A") if name in available] + sorted(available - {"A", "B"})
         if not order:
             return
-        t_on = self.predicted_temperature_k
-        t_off = max(self.state.temperature_k, t_on)
-        humid = self.relative_humidity > c.rh_high or self.predicted_rh > c.tight_rh
+        t = self.state.temperature_k
+        stage1_running = ind.stage1_since_s is not None and time_s - ind.stage1_since_s >= c.stage2_after_s
+        t_stage1 = self.predicted_temperature_k_at(c.short_anticipation_s)
+        t_stage2 = self.predicted_temperature_k if stage1_running else t
+        t_off = max(t, t_stage1)
+        humid = self.needs_dehumidification()
         count = len(ind.fans_on & set(order))
         target = count
-        if t_on >= c.stage2_on_k:
+        if t_stage2 >= c.stage2_on_k and count >= 1:
             target = len(order)
-        elif t_on >= c.stage1_on_k:
+        elif t_stage1 >= c.stage1_on_k:
             target = max(count, 1)
         if t_off <= c.stage1_off_k:
             target = 1 if humid else 0
@@ -432,15 +473,21 @@ class RoomModel:
         target = min(target, len(order))
         new = set(order[:target])
         if new != ind.fans_on:
+            if not ind.fans_on and new:
+                ind.stage1_since_s = time_s
+            elif not new:
+                ind.stage1_since_s = None
             ind.fans_on = new
             ind.fan_switched_s = time_s
 
-    def update_chw_setpoint(self, time_s: float, enabled: bool) -> float:
-        """冰水溫度重設：溫濕度（預測）接近上限時降 0.5 K；實際與預測都有餘裕時才升 0.5 K。
+    def update_chw_setpoint(self, time_s: float, enabled: bool, compressor_on: bool = False) -> float:
+        """冰水溫度重設（快降慢升）：接近上限時**直接降到下限**；實際與預測都有餘裕、且壓縮機停機時，
+        每 5 min 才升 0.5 K（運轉中不升，避免桶溫低於新設定值時立即停機、或改變運轉中的 PID 目標）。
 
 參數：
     time_s: 時間。
     enabled: 系統是否啟用。
+    compressor_on: 壓縮機是否運轉。
 
 回傳：
     冰水停機設定值（K）。"""
@@ -449,19 +496,22 @@ class RoomModel:
         if not self.chw_reset:
             ind.chw_setpoint_k = c.chw_min_k
             return ind.chw_setpoint_k
-        if not enabled or time_s - ind.chw_changed_s < c.chw_interval_s:
+        if not enabled:
             return ind.chw_setpoint_k
-        if self.comfort_tight():
-            ind.chw_setpoint_k = max(c.chw_min_k, ind.chw_setpoint_k - c.chw_step_k)
-        elif self.comfort_ample():
+        if self.comfort_tight() or self.needs_dehumidification():
+            if ind.chw_setpoint_k > c.chw_min_k:
+                ind.chw_setpoint_k = c.chw_min_k
+                ind.chw_changed_s = time_s
+        elif (self.comfort_ample() and not compressor_on and time_s - ind.chw_changed_s >= c.chw_interval_s
+              and ind.chw_setpoint_k < c.chw_max_k):
             ind.chw_setpoint_k = min(c.chw_max_k, ind.chw_setpoint_k + c.chw_step_k)
-        ind.chw_changed_s = time_s
+            ind.chw_changed_s = time_s
         return ind.chw_setpoint_k
 
     def reheat_request_w(self, time_s: float, coil_load_w: float) -> float:
         """再熱需求（未受盤管能力限制）。
 
-按需再熱是以室溫為目標的比例控制（不是中性送風）：濕度偏高（或預測偏高）且室溫低於 26 °C 時開，
+按需再熱是以室溫為目標的比例控制（不是中性送風）：含濕量偏高（或預測偏高）且室溫低於 26 °C 時開，
 需求 = 增益 × (目標 − 室溫)；送風仍可低於室溫，房間的人員與設備顯熱照常由送風帶走。
 
 參數：
@@ -477,12 +527,12 @@ class RoomModel:
         c = self.control
         ind = self._indoor
         t = self.state.temperature_k
-        rh = self.relative_humidity
+        w = self.state.humidity_ratio
         if time_s - ind.reheat_switched_s >= c.reheat_min_switch_s:
-            humid = rh > c.rh_high or self.predicted_rh > c.tight_rh
+            humid = w > c.humid_w or self.predicted_humidity_ratio > c.tight_w
             if not ind.reheat_on and humid and t < c.reheat_on_t_k:
                 ind.reheat_on, ind.reheat_switched_s = True, time_s
-            elif ind.reheat_on and (rh < c.reheat_off_rh or t >= c.reheat_off_t_k):
+            elif ind.reheat_on and (w < c.ample_w or t >= c.reheat_off_t_k):
                 ind.reheat_on, ind.reheat_switched_s = False, time_s
         if not ind.reheat_on:
             return 0.0
@@ -544,7 +594,6 @@ class RoomModel:
             sensible += fan_heat_w
         supply_sensible = sum(s.air_flow_kg_s * cp * (t - s.temperature_k) for s in supplies)
         supply_moisture = sum(s.air_flow_kg_s * (w - s.humidity_ratio) for s in supplies)
-        rh_before = self.relative_humidity
         self.state.temperature_k = t + (sensible - supply_sensible) / p.heat_capacity_j_k * dt_s
         new_w = w + (moisture - supply_moisture) / p.moisture_capacity_kg * dt_s
         saturation = psy.saturation_humidity_ratio(self.state.temperature_k)
@@ -555,6 +604,6 @@ class RoomModel:
         alpha = min(1.0, dt_s / self.control.trend_tau_s)
         ind = self._indoor
         ind.t_slope_k_s += alpha * ((self.state.temperature_k - t) / dt_s - ind.t_slope_k_s)
-        ind.rh_slope_s += alpha * ((self.relative_humidity - rh_before) / dt_s - ind.rh_slope_s)
+        ind.w_slope_s += alpha * ((self.state.humidity_ratio - w) / dt_s - ind.w_slope_s)
         return supply_sensible, supply_moisture
 
