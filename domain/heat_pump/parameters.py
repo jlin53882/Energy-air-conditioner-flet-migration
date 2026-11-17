@@ -400,6 +400,24 @@ class ControlParameters:
 
 
 @dataclass(frozen=True)
+class ElectricalParameters:
+    """耗電漏項（§8.5）。預設全為 0／1，維持 §4 的原始口徑；全系統比較（§8）改用 ``FULL_ELECTRICAL``。
+
+    - ``outdoor_fan_w``：室外換熱器風扇，只在室外換熱器在流路（智慧冷房／智慧暖房）且壓縮機運轉時計入。
+    - ``compressor_drive_efficiency``：壓縮機變頻器效率（壓縮機電功率 ÷ 此值）。
+    - ``standby_w``：控制器待機（系統啟用時）。
+    """
+
+    outdoor_fan_w: float = 0.0
+    compressor_drive_efficiency: float = 1.0
+    standby_w: float = 0.0
+
+
+# 全系統耗電口徑（假設值：5 HP 級 56.4 CMM 軸流扇約 150–250 W；變頻器 96 %；待機 30 W）。
+FULL_ELECTRICAL = ElectricalParameters(outdoor_fan_w=200.0, compressor_drive_efficiency=0.96, standby_w=30.0)
+
+
+@dataclass(frozen=True)
 class HeatPumpParameters:
     """完整系統參數。"""
 
@@ -430,6 +448,7 @@ class HeatPumpParameters:
     hot_pump: PumpParameters = field(default_factory=PumpParameters)
     reheat: ReheatParameters = field(default_factory=ReheatParameters)
     control: ControlParameters = field(default_factory=ControlParameters)
+    electrical: ElectricalParameters = field(default_factory=ElectricalParameters)
 
     @property
     def outdoor_ua_w_k(self) -> float:

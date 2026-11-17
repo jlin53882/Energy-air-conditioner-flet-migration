@@ -25,9 +25,12 @@ from .components import (
     RefrigerantMode,
     refrigerant_side_resistance,
 )
+from . import psychrometrics as psy
 from .control import FrequencyStepper, PidController
 from .cycle_table import CycleTable
 from .parameters import WATER_CP_J_KG_K, HeatPumpParameters, celsius, gpm_to_kg_s
+from .room import RoomModel, SupplyAir
+from .wet_coil import CoilResult, coil_performance
 
 
 class OperationMode(str, Enum):
@@ -53,6 +56,8 @@ class PumpMode(str, Enum):
 
 OUTDOOR_RANGE_K = (celsius(-10.0), celsius(45.0))
 ROOM_RANGE_K = (celsius(10.0), celsius(35.0))
+# 房間模型＋水泵自動：送風機運轉時冰水泵的最低頻率（§8.4）。
+ROOM_COLD_PUMP_FLOOR_HZ = 40.0
 
 WARNING_HIGH_PRESSURE = "high_pressure"
 WARNING_HP_LIMITING = "hp_limiting"
@@ -76,6 +81,8 @@ class SimulationSettings:
     reheat_fraction: float = 0.2
     room_k: float = celsius(27.0)
     outdoor_k: float = celsius(30.0)
+    # 非必要迴路停泵（§8.4）：冰水泵在壓縮機停機且送風機全停時停；熱水泵在板式冷凝器不在流路且無再熱時停。
+    idle_pump_off: bool = False
 
 
 def default_settings(operation: OperationMode) -> SimulationSettings:
@@ -156,6 +163,21 @@ class StepRecord:
     reheat_demand_w: float = 0.0
     reheat_w: float = 0.0
     reheat_energy_j: float = 0.0
+    # 房間模型（§8；未啟用時為 None／0）。
+    room_k: float | None = None
+    room_rh: float | None = None
+    room_humidity_ratio: float | None = None
+    outdoor_k: float | None = None
+    coil_sensible_w: float = 0.0
+    coil_latent_w: float = 0.0
+    condensate_kg_s: float = 0.0
+    supply_k: float | None = None
+    fans_running: frozenset[str] = frozenset()
+    chw_setpoint_k: float | None = None
+    occupied: bool = True
+    system_enabled: bool = True
+    outdoor_fan_power_w: float = 0.0
+    standby_power_w: float = 0.0
 
     @property
     def net_cooling_w(self) -> float:
@@ -169,11 +191,12 @@ class StepRecord:
 
     @property
     def total_power_w(self) -> float:
-        """壓縮機＋送風機＋水泵。
+        """壓縮機＋送風機＋水泵＋室外風扇＋待機（後兩者預設為 0，§8.5）。
 
 回傳：
             W。"""
-        return self.compressor_power_w + self.fan_power_w + self.pump_power_w
+        return (self.compressor_power_w + self.fan_power_w + self.pump_power_w + self.outdoor_fan_power_w
+                + self.standby_power_w)
 
     @property
     def system_cop(self) -> float | None:
@@ -214,6 +237,8 @@ class HeatPumpSimulation:
         settings: SimulationSettings | None = None,
         initial_cold_k: float = celsius(30.0),
         initial_hot_k: float = celsius(30.0),
+        room: RoomModel | None = None,
+        start_time_s: float = 0.0,
     ) -> None:
         """建立模擬器。
 
@@ -223,12 +248,19 @@ class HeatPumpSimulation:
     settings: 初始使用者設定。
     initial_cold_k: 冰水桶初始溫度。
     initial_hot_k: 熱水桶初始溫度。
+    room: 房間溫濕度模型（§8；只支援冷房）。有值時室溫、外氣、送風機啟停、冰水設定值與再熱
+        都由房間模型決定，``settings.fans`` 改為「可用送風機」，``room_k``／``outdoor_k``／``reheat_fraction`` 不使用。
+    start_time_s: 起始時間（房間模型的日負載以此對應時刻；例如 7 h = 25,200 s）。
 
 回傳：
     無。
 
 引發：
-    ValueError：性質表與參數不一致時。"""
+    ValueError：性質表與參數不一致，或房間模型搭配暖房時。"""
+        self.room = room
+        self._pumps_on = (True, True)
+        self._last_reheat_request_w = 0.0
+        self._coil_cache: tuple[tuple, list[tuple[str, CoilResult]]] | None = None
         self.params = params or HeatPumpParameters()
         if table.settings != self.params.cycle:
             raise ValueError("性質表的循環設定與模擬參數不一致。")
@@ -241,7 +273,7 @@ class HeatPumpSimulation:
         self._evaporator = PlateExchanger(self.params.evaporator, self.params.geometry, resistance)
         settings = settings or SimulationSettings()
         self._settings = settings
-        self.time_s = 0.0
+        self.time_s = start_time_s
         self.cold_water_k = initial_cold_k
         self.hot_water_k = initial_hot_k
         self.mode = RefrigerantMode.DUAL
@@ -256,7 +288,7 @@ class HeatPumpSimulation:
         )
         self._stepper = FrequencyStepper(comp.frequency_steps_hz, control.step_hysteresis_hz, control.step_dwell_s,
                                          current_hz=comp.max_frequency_hz)
-        self._mode_since_s = 0.0
+        self._mode_since_s = start_time_s
         self._guess: tuple[float, float] | None = None
         self._energy_j = 0.0
         self._fan_coil_energy_j = 0.0
@@ -311,6 +343,8 @@ class HeatPumpSimulation:
         ):
             if value not in pump.frequency_steps_hz:
                 raise ValueError(f"{label}頻率必須是階梯 {self._format_steps(pump.frequency_steps_hz)} Hz 之一。")
+        if self.room is not None and settings.operation is not OperationMode.COOLING:
+            raise ValueError("房間溫濕度模型目前只支援冷房。")
         if not 0.0 <= settings.reheat_fraction <= self.params.reheat.max_fraction:
             raise ValueError(f"再熱比例必須介於 0～{self.params.reheat.max_fraction:g}。")
         for value, (low, high), label in (
@@ -378,18 +412,129 @@ class HeatPumpSimulation:
         self.events.append(SimulationEvent(self.time_s, code, message))
 
     def _cold_flow_kg_s(self) -> float:
-        """冰水泵目前流量。
+        """冰水泵在目前頻率的流量（不論是否停泵；供換熱器熱導與預測使用）。
 
 回傳：
             kg/s。"""
         return gpm_to_kg_s(self.params.cold_pump.flow_gpm(self._pump_hz()[0]))
 
     def _hot_flow_kg_s(self) -> float:
-        """熱水泵目前流量。
+        """熱水泵在目前頻率的流量（不論是否停泵）。
 
 回傳：
             kg/s。"""
         return gpm_to_kg_s(self.params.hot_pump.flow_gpm(self._pump_hz()[1]))
+
+    def _cold_flow_actual_kg_s(self) -> float:
+        """冰水泵實際流量（停泵時為 0）。
+
+回傳：
+            kg/s。"""
+        return self._cold_flow_kg_s() if self._pumps_on[0] else 0.0
+
+    def _hot_flow_actual_kg_s(self) -> float:
+        """熱水泵實際流量（停泵時為 0）。
+
+回傳：
+            kg/s。"""
+        return self._hot_flow_kg_s() if self._pumps_on[1] else 0.0
+
+    # ---- 房間模型（§8）----
+    def system_enabled(self) -> bool:
+        """空調系統是否啟用（無房間模型時恆為真）。
+
+回傳：
+            bool。"""
+        return self.room is None or self.room.scenario.system_enabled(self.time_s)
+
+    def _outdoor_k(self) -> float:
+        """外氣溫度：房間模型取日負載情境（夾在性質表範圍內），否則取設定值。
+
+回傳：
+            K。"""
+        if self.room is None:
+            return self._settings.outdoor_k
+        low, high = OUTDOOR_RANGE_K
+        return min(high, max(low, self.room.scenario.outdoor_k(self.time_s)))
+
+    def _room_k(self) -> float:
+        """室溫：房間模型狀態或設定值。
+
+回傳：
+            K。"""
+        return self.room.state.temperature_k if self.room is not None else self._settings.room_k
+
+    def _cooling_setpoint_k(self) -> float:
+        """冷房冰水停機設定值（房間模型可做冰水溫度重設）。
+
+回傳：
+            K。"""
+        if self.room is not None:
+            return self.room.chw_setpoint_k
+        return self.params.control.cooling_setpoint_k
+
+    def _cooling_restart_k(self) -> float:
+        """冷房重啟溫度 = 停機設定值 + 原始的重啟差（預設 1 K）。
+
+回傳：
+            K。"""
+        c = self.params.control
+        return self._cooling_setpoint_k() + (c.cooling_restart_k - c.cooling_setpoint_k)
+
+    def _coil_results(self) -> list[tuple[str, CoilResult]]:
+        """各運轉中送風機的濕盤管結果（進水 = 冰水桶，水量依分流比分配；有快取）。
+
+回傳：
+            [(名稱, CoilResult)]。"""
+        room = self.room
+        assert room is not None
+        fans = room.fans_on & self._settings.fans
+        flow = self._cold_flow_actual_kg_s()
+        key = (self.cold_water_k, room.state.temperature_k, room.state.humidity_ratio, fans, flow)
+        if self._coil_cache is not None and self._coil_cache[0] == key:
+            return self._coil_cache[1]
+        flows = room.water_flows(flow, self._settings.fans)
+        results = []
+        for name in sorted(fans):
+            coil = room.coils[name]
+            results.append((name, coil_performance(coil, room.state.temperature_k, room.state.humidity_ratio,
+                                                   self.cold_water_k, flows.get(name, 0.0))))
+        self._coil_cache = (key, results)
+        return results
+
+    def _fan_coil_load_w(self) -> float:
+        """送風機盤管負荷。
+
+無房間模型：UA × 溫差（供水＝水桶溫度；冷房取冰水桶，暖房取熱水桶）。
+有房間模型：濕盤管（顯熱＋潛熱）總冷量，隨水量、室內溫濕度與冰水溫度變化（§8.2）。
+
+回傳：
+            W。"""
+        if self.room is not None:
+            return sum(result.total_w for _, result in self._coil_results())
+        s = self._settings
+        fan_ua = sum(fan.ua_w_k for fan in self.params.fan_coils if fan.name in s.fans)
+        if s.operation is OperationMode.COOLING:
+            return max(0.0, fan_ua * (s.room_k - self.cold_water_k))
+        return max(0.0, fan_ua * (self.hot_water_k - s.room_k))
+
+    def _inlet_temperatures(self) -> tuple[float, float]:
+        """板式蒸發器與冷凝器的進水溫度（§1.4 管路串聯）。
+
+迴路：水桶 → 水泵 → 送風機 → 板式換熱器 → 水桶。所以板式換熱器進水是送風機**回水**：
+    冷房：蒸發器進水 = 冰水桶 + Q_fc ÷ (ṁ_cold·cp)；冷凝器進水 = 熱水桶（再熱盤管與熱水桶並聯）。
+    暖房：冷凝器進水 = 熱水桶 − Q_fc ÷ (ṁ_hot·cp)；蒸發器進水 = 冰水桶（冰水迴路不經過送風機）。
+
+回傳：
+    (蒸發器進水 K, 冷凝器進水 K)。"""
+        fan_load = self._fan_coil_load_w()
+        if self._settings.operation is OperationMode.COOLING:
+            flow = self._cold_flow_actual_kg_s()
+            rise = fan_load / (flow * WATER_CP_J_KG_K) if flow > 0 else 0.0
+            return self.cold_water_k + rise, self.hot_water_k
+        flow = self._hot_flow_actual_kg_s()
+        drop = fan_load / (flow * WATER_CP_J_KG_K) if flow > 0 else 0.0
+        return self.cold_water_k, self.hot_water_k - drop
 
     def _pump_hz(self) -> tuple[float, float]:
         """目前實際的（冰水泵, 熱水泵）頻率：手動取設定值，自動取控制器狀態（§2.4）。
@@ -447,8 +592,20 @@ class HeatPumpSimulation:
                 cold_dt = perf.cooling_w / (self._cold_flow_kg_s() * WATER_CP_J_KG_K)
             if self.mode is not RefrigerantMode.SMART_COOLING:
                 hot_dt = perf.heating_w / (self._hot_flow_kg_s() * WATER_CP_J_KG_K)
+        room = self.room
+        if room is not None and self._cold_flow_actual_kg_s() > 0:
+            # 房間模型：冰水泵也看盤管水側溫差（壓縮機停機時盤管仍在取冷）。
+            cold_dt = max(cold_dt, self._fan_coil_load_w() / (self._cold_flow_kg_s() * WATER_CP_J_KG_K))
         cold = self._next_pump_hz(self.params.cold_pump.frequency_steps_hz, self.params.cold_pump.flow_gpm,
                                   ctrl.cold_pump_hz, cold_dt, c.pump_cold_delta_t_k, ctrl.cold_pump_changed_s)
+        if room is not None and cold < ctrl.cold_pump_hz:
+            ic = room.control
+            # 舒適度保護：室溫高於上限或濕度偏高時不降階；送風機運轉中最低 40 Hz。
+            uncomfortable = (room.state.temperature_k > ic.setpoint_k + ic.band_k
+                             or room.relative_humidity > ic.rh_high)
+            floor = ROOM_COLD_PUMP_FLOOR_HZ if room.fans_on else min(self.params.cold_pump.frequency_steps_hz)
+            if uncomfortable or cold < floor:
+                cold = ctrl.cold_pump_hz
         hot = self._next_pump_hz(self.params.hot_pump.frequency_steps_hz, self.params.hot_pump.flow_gpm,
                                  ctrl.hot_pump_hz, hot_dt, c.pump_hot_delta_t_k, ctrl.hot_pump_changed_s)
         if cold != ctrl.cold_pump_hz:
@@ -456,32 +613,26 @@ class HeatPumpSimulation:
         if hot != ctrl.hot_pump_hz:
             ctrl.hot_pump_hz, ctrl.hot_pump_changed_s = hot, self.time_s
 
-    def _fan_coil_load_w(self) -> float:
-        """送風機盤管負荷（供水＝水桶溫度；冷房取冰水桶，暖房取熱水桶）。
+    def _pump_states(self, enabled: bool) -> tuple[bool, bool]:
+        """房間模型下兩台水泵是否運轉（§8.4）。
+
+系統停用時兩台都停（壓縮機仍在運轉的那一步除外）；``idle_pump_off`` 時，冰水泵只在壓縮機運轉或
+送風機運轉時開，熱水泵只在板式冷凝器在流路（壓縮機運轉且非智慧冷房）或上一步有再熱需求時開。
+
+參數：
+    enabled: 系統是否啟用。
 
 回傳：
-            W。"""
-        s = self._settings
-        fan_ua = sum(fan.ua_w_k for fan in self.params.fan_coils if fan.name in s.fans)
-        if s.operation is OperationMode.COOLING:
-            return max(0.0, fan_ua * (s.room_k - self.cold_water_k))
-        return max(0.0, fan_ua * (self.hot_water_k - s.room_k))
-
-    def _inlet_temperatures(self) -> tuple[float, float]:
-        """板式蒸發器與冷凝器的進水溫度（§1.4 管路串聯）。
-
-迴路：水桶 → 水泵 → 送風機 → 板式換熱器 → 水桶。所以板式換熱器進水是送風機**回水**：
-    冷房：蒸發器進水 = 冰水桶 + Q_fc ÷ (ṁ_cold·cp)；冷凝器進水 = 熱水桶（再熱盤管與熱水桶並聯）。
-    暖房：冷凝器進水 = 熱水桶 − Q_fc ÷ (ṁ_hot·cp)；蒸發器進水 = 冰水桶（冰水迴路不經過送風機）。
-
-回傳：
-    (蒸發器進水 K, 冷凝器進水 K)。"""
-        fan_load = self._fan_coil_load_w()
-        if self._settings.operation is OperationMode.COOLING:
-            rate = self._cold_flow_kg_s() * WATER_CP_J_KG_K
-            return self.cold_water_k + fan_load / rate, self.hot_water_k
-        rate = self._hot_flow_kg_s() * WATER_CP_J_KG_K
-        return self.cold_water_k, self.hot_water_k - fan_load / rate
+    (冰水泵, 熱水泵)。"""
+        running = self._ctrl.compressor_on and not self._ctrl.tripped
+        condenser = running and self.mode is not RefrigerantMode.SMART_COOLING
+        fans = bool(self.room.fans_on) if self.room is not None else True
+        reheat = self._last_reheat_request_w > 0
+        if not enabled:
+            return running, condenser
+        if not self._settings.idle_pump_off:
+            return True, True
+        return running or fans, condenser or reheat
 
     def _conditions(self, frequency_hz: float) -> OperatingConditions:
         """組合求解條件。
@@ -491,13 +642,12 @@ class HeatPumpSimulation:
 
 回傳：
     OperatingConditions。"""
-        s = self._settings
         evaporator_in_k, condenser_in_k = self._inlet_temperatures()
         return OperatingConditions(
             mode=self.mode,
             cold_water_k=evaporator_in_k,
             hot_water_k=condenser_in_k,
-            outdoor_k=s.outdoor_k,
+            outdoor_k=self._outdoor_k(),
             frequency_hz=frequency_hz,
             evaporator_conductance_w_k=self._evaporator.conductance(self._cold_flow_kg_s()),
             condenser_conductance_w_k=self._condenser.conductance(self._hot_flow_kg_s()),
@@ -521,6 +671,21 @@ class HeatPumpSimulation:
         s = self._settings
         ctrl = self._ctrl
         cooling = s.operation is OperationMode.COOLING
+        room = self.room
+        enabled = self.system_enabled()
+        if room is not None:
+            if not enabled and ctrl.compressor_on:
+                # 排程停用：在求解前停機（含模擬起點落在停用時段時）。
+                ctrl.compressor_on = False
+                ctrl.off_since_s = self.time_s
+                self._event("schedule_stop", "空調排程停用，壓縮機停機")
+            room.update_fans(self.time_s, s.fans, enabled)
+            if (s.pump_mode is PumpMode.AUTO and room.fans_on
+                    and ctrl.cold_pump_hz < ROOM_COLD_PUMP_FLOOR_HZ <= max(p.cold_pump.frequency_steps_hz)):
+                # 送風機運轉中冰水泵最低 40 Hz（立即生效，不受最短停留限制）。
+                ctrl.cold_pump_hz, ctrl.cold_pump_changed_s = ROOM_COLD_PUMP_FLOOR_HZ, self.time_s
+            room.update_chw_setpoint(self.time_s, enabled)
+            self._pumps_on = self._pump_states(enabled)
 
         perf: CompressorPerformance | None = None
         warnings: set[str] = set()
@@ -545,21 +710,44 @@ class HeatPumpSimulation:
             if perf.evaporating_k < p.control.warn_frost_k:
                 warnings.add(WARNING_FROST)
 
-        active_fans = [fan for fan in p.fan_coils if fan.name in s.fans]
-        fan_ua = sum(fan.ua_w_k for fan in active_fans)
-        fan_power = sum(fan.fan_power_w for fan in active_fans)
         fan_load = self._fan_coil_load_w()
         evaporator_in_k, condenser_in_k = self._inlet_temperatures()
         cold_pump_hz, hot_pump_hz = self._pump_hz()
-        cold_pump_power = p.cold_pump.power_w(cold_pump_hz)
-        hot_pump_power = p.hot_pump.power_w(hot_pump_hz)
+        cold_pump_hz = cold_pump_hz if self._pumps_on[0] else 0.0
+        hot_pump_hz = hot_pump_hz if self._pumps_on[1] else 0.0
+        cold_pump_power = p.cold_pump.power_w(cold_pump_hz) if cold_pump_hz > 0 else 0.0
+        hot_pump_power = p.hot_pump.power_w(hot_pump_hz) if hot_pump_hz > 0 else 0.0
         pump_power = cold_pump_power + hot_pump_power
         reheat_demand = reheat = 0.0
-        if cooling and fan_ua > 0 and fan_load > 0:
-            reheat_demand = s.reheat_fraction * fan_load
-            coil_air_k = self.cold_water_k + p.reheat.coil_air_approach_k
-            capacity = p.reheat.ua_ratio_to_fan_coil * fan_ua * max(0.0, self.hot_water_k - coil_air_k)
-            reheat = min(reheat_demand, capacity)
+        supplies: list[SupplyAir] = []
+        coil_sensible = coil_latent = condensate = 0.0
+        if room is None:
+            active_fans = [fan for fan in p.fan_coils if fan.name in s.fans]
+            fan_ua = sum(fan.ua_w_k for fan in active_fans)
+            fan_power = sum(fan.fan_power_w for fan in active_fans)
+            if cooling and fan_ua > 0 and fan_load > 0:
+                reheat_demand = s.reheat_fraction * fan_load
+                coil_air_k = self.cold_water_k + p.reheat.coil_air_approach_k
+                capacity = p.reheat.ua_ratio_to_fan_coil * fan_ua * max(0.0, self.hot_water_k - coil_air_k)
+                reheat = min(reheat_demand, capacity)
+        else:
+            results = self._coil_results()
+            running = {name for name, _ in results}
+            fan_power = sum(fan.fan_power_w for fan in p.fan_coils if fan.name in running)
+            reheat_demand = room.reheat_request_w(self.time_s, fan_load)
+            self._last_reheat_request_w = reheat_demand
+            capacities = [room.reheat_capacity_w(r.air_out_k, room.coils[name].air_flow_kg_s, self.hot_water_k)
+                          if self._pumps_on[1] else 0.0 for name, r in results]
+            reheat = min(reheat_demand, sum(capacities))
+            total_capacity = sum(capacities)
+            for (name, r), cap in zip(results, capacities):
+                air = room.coils[name].air_flow_kg_s
+                share = reheat * cap / total_capacity if total_capacity > 0 else 0.0
+                supplies.append(SupplyAir(air, r.air_out_k + share / (air * psy.moist_air_cp(r.air_out_humidity_ratio)),
+                                          r.air_out_humidity_ratio))
+                coil_sensible += r.sensible_w
+                coil_latent += r.latent_w
+                condensate += r.condensate_kg_s
 
         q_evap_water = perf.cooling_w if perf is not None and self.mode is not RefrigerantMode.SMART_HEATING else 0.0
         q_cond_water = perf.heating_w if perf is not None and self.mode is not RefrigerantMode.SMART_COOLING else 0.0
@@ -579,14 +767,25 @@ class HeatPumpSimulation:
                 cond_out = cond_in + perf.heating_w / hot_rate
             else:
                 outdoor_heat = perf.heating_w
-        cold_loss = p.cold_tank.loss_ua_w_k * (s.room_k - self.cold_water_k)
-        hot_loss = p.hot_tank.loss_ua_w_k * (s.room_k - self.hot_water_k)
+        room_k = self._room_k()
+        cold_loss = p.cold_tank.loss_ua_w_k * (room_k - self.cold_water_k)
+        hot_loss = p.hot_tank.loss_ua_w_k * (room_k - self.hot_water_k)
         cold_net = (fan_load if cooling else 0.0) - q_evap_water + cold_loss
         hot_net = q_cond_water - (0.0 if cooling else fan_load) - reheat + hot_loss
         self.cold_water_k += cold_net / p.cold_tank.heat_capacity_j_k * dt_s
         self.hot_water_k += hot_net / p.hot_tank.heat_capacity_j_k * dt_s
-        compressor_power = perf.power_w if perf is not None else 0.0
-        self._energy_j += (compressor_power + fan_power + pump_power) * dt_s
+        elec = p.electrical
+        compressor_power = perf.power_w / elec.compressor_drive_efficiency if perf is not None else 0.0
+        outdoor_fan_power = (elec.outdoor_fan_w if perf is not None and self.mode is not RefrigerantMode.DUAL
+                             else 0.0)
+        standby_power = elec.standby_w if enabled else 0.0
+        self._energy_j += (compressor_power + fan_power + pump_power + outdoor_fan_power + standby_power) * dt_s
+        room_rh = room_w = supply_k = None
+        if room is not None:
+            room.step(self.time_s, dt_s, supplies, fan_power)
+            room_rh, room_w = room.relative_humidity, room.state.humidity_ratio
+            flow = sum(sup.air_flow_kg_s for sup in supplies)
+            supply_k = sum(sup.air_flow_kg_s * sup.temperature_k for sup in supplies) / flow if flow > 0 else None
         self._fan_coil_energy_j += fan_load * dt_s
         self._reheat_energy_j += reheat * dt_s
 
@@ -643,6 +842,20 @@ class HeatPumpSimulation:
             reheat_demand_w=reheat_demand,
             reheat_w=reheat,
             reheat_energy_j=self._reheat_energy_j,
+            room_k=room.state.temperature_k if room is not None else None,
+            room_rh=room_rh,
+            room_humidity_ratio=room_w,
+            outdoor_k=self._outdoor_k(),
+            coil_sensible_w=coil_sensible,
+            coil_latent_w=coil_latent,
+            condensate_kg_s=condensate,
+            supply_k=supply_k,
+            fans_running=frozenset(name for name, _ in self._coil_results()) if room is not None else s.fans,
+            chw_setpoint_k=self._cooling_setpoint_k() if cooling else None,
+            occupied=room.scenario.occupied(self.time_s) if room is not None else True,
+            system_enabled=enabled,
+            outdoor_fan_power_w=outdoor_fan_power,
+            standby_power_w=standby_power,
         )
 
         self.time_s += dt_s
@@ -770,7 +983,8 @@ class HeatPumpSimulation:
         error = self._control_error()
 
         if not ctrl.compressor_on:
-            restart = controlled >= c.cooling_restart_k if cooling else controlled <= c.heating_restart_k
+            restart = controlled >= self._cooling_restart_k() if cooling else controlled <= c.heating_restart_k
+            restart = restart and self.system_enabled()
             waited = ctrl.off_since_s is None or self.time_s - ctrl.off_since_s >= c.min_off_time_s
             if restart and waited and self._plate_evaporator_safe():
                 ctrl.compressor_on = True
@@ -817,11 +1031,12 @@ class HeatPumpSimulation:
             at_minimum = ctrl.frequency_hz <= comp.min_frequency_hz + 1e-9
             margin = c.auto_stop_margin_k
             # 冷房：冰水降到設定值（7 °C）即停機（使用者決定）；暖房：最低頻率且熱水超過設定值 + 裕度才停。
-            stop = (controlled <= c.cooling_setpoint_k if cooling
+            stop = (controlled <= self._cooling_setpoint_k() if cooling
                     else at_minimum and controlled >= c.heating_setpoint_k + margin)
         else:
             ctrl.frequency_hz = self._stepper.start(s.manual_frequency_hz, limit, self.time_s)
-            stop = controlled <= c.cooling_setpoint_k if cooling else controlled >= c.heating_setpoint_k
+            stop = controlled <= self._cooling_setpoint_k() if cooling else controlled >= c.heating_setpoint_k
+        stop = stop or not self.system_enabled()
         if stop:
             ctrl.compressor_on = False
             ctrl.off_since_s = self.time_s
@@ -854,7 +1069,7 @@ class HeatPumpSimulation:
     K。"""
         c = self.params.control
         if self._settings.operation is OperationMode.COOLING:
-            return self.cold_water_k - c.cooling_setpoint_k
+            return self.cold_water_k - self._cooling_setpoint_k()
         return c.heating_setpoint_k - self.hot_water_k
 
     def run(self, duration_s: float, dt_s: float = 5.0) -> list[StepRecord]:

@@ -196,3 +196,11 @@ Invalid request shape、known property 不足、invalid fluid/policy 與 unknown
 - 除濕後再熱：冷房時 `reheat_fraction`（0–0.6）× 送風機冷卻盤管負荷為再熱需求，受盤管能力（熱水與盤管出風溫差）限制；再熱量由熱水桶扣除，不改變盤管負荷。`StepRecord` 記錄 `reheat_demand_w`、`reheat_w`、`reheat_energy_j` 與 `net_cooling_w`。
 - 模式回切：智慧冷房／智慧暖房切回雙效前，需在智慧模式停留至少 `mode_return_dwell_s`（預設 300 s）；切入智慧模式不受限。
 - 室外換熱器以原廠資料（報告表 2.1.5）的有效熱導 G = Q ÷ (T_冷媒平均 − T_設計進風) 計算；設計進風溫度（35 °C）為假設值。
+- 房間溫濕度模型（選用，只支援冷房；`simulation-model.md` §8）：`HeatPumpSimulation(..., room=RoomModel(...), start_time_s=...)`。有房間模型時：
+  - 室溫、含濕量是狀態（`RoomModel.state`），外氣取日負載情境（`DailyScenario`），`settings.room_k`／`outdoor_k`／`reheat_fraction` 不使用；`settings.fans` 改為「可用送風機」，實際運轉由室內控制器分級（`StepRecord.fans_running`）。
+  - 送風機盤管改為濕盤管（`wet_coil.coil_performance`，Braun 焓基 ε-NTU，乾／濕取大者）：冷量隨冰水溫度、**冰水流量**與室內溫濕度變化，分顯熱／潛熱（`coil_sensible_w`／`coil_latent_w`），盤管進水為冰水桶、回水再進板式蒸發器（串聯不變）。
+  - 再熱由 `ReheatMode`（`OFF`／`FIXED`／`DEMAND`）決定，再熱量從熱水桶扣除**並加回送風顯熱**（`supply_k`）。
+  - 冷房冰水停機溫度可由冰水溫度重設改變（`chw_setpoint_k`；重啟 = 設定值 + 1 K）。
+  - 排程外（`DailyScenario.system_enabled` 為假）壓縮機、水泵、送風機都停。`settings.idle_pump_off` 啟用非必要迴路停泵。水泵自動時，送風機運轉中冰水泵最低 40 Hz，且室溫或濕度超出上限時不降階。
+- 耗電口徑：`HeatPumpParameters.electrical`（`ElectricalParameters`）預設全為 0／1，維持既有口徑；`FULL_ELECTRICAL` 另計室外風扇 200 W（室外換熱器在流路且壓縮機運轉時）、變頻器效率 96 %、待機 30 W（假設值）。`StepRecord.total_power_w` 含 `outdoor_fan_power_w` 與 `standby_power_w`。
+- 策略比較（`domain/heat_pump/comparison.py`、`scripts/heat_pump_strategy_comparison.py`）：每策略自相同初始狀態連跑兩天，第一天量達標時間、第二天統計；以主機冷房 COP 修正冰水桶與房間儲能差；只在舒適度不劣於舒適基準（`ComfortTolerance`）者中選修正後用電最低者。
