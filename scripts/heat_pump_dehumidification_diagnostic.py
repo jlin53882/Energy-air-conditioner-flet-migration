@@ -7,7 +7,11 @@
 - D0：按需再熱（§8.7 已跑過的現行控制）。
 - D1：D0 ＋ 室溫 > 25 °C 時兩台送風機都開（除濕風量最大），按需再熱把室溫拉回 26 °C 附近。
 - D2：D1 ＋ 冰水 5.5 °C（低水溫；板式出水會接近 4 °C 防凍限頻，另列保護事件次數）。
-- D3：D2 ＋ 再熱盤管 UA × 2、再熱增益 × 2（再熱能力不再是瓶頸）。
+- D3：D2 ＋ 再熱盤管 UA × 2、再熱增益 × 2。
+- D4：D2 ＋ 再熱盤管 UA × 6、再熱增益 × 3（近似「再熱不受限」，確認瓶頸是否在再熱能力）。
+- D5：D4 ＋ 再熱只依室溫開關（室溫 < 26 °C 開、≥ 26.4 °C 關，不再因含濕量 < 11.6 g/kg 關閉），
+  確認瓶頸是否在按需再熱的濕度閘門。
+- D6：D5 但再熱能力維持原規格，判斷是否需要加大再熱盤管。
 
 用法：
     uv run python scripts/heat_pump_dehumidification_diagnostic.py [--split]
@@ -33,6 +37,9 @@ STEPS = {
     "D1": "＋兩台送風機（室溫 > 25 °C 時全開）",
     "D2": "＋冰水 5.5 °C",
     "D3": "＋再熱能力 × 2",
+    "D4": "＋再熱能力 × 6（近似不受限）",
+    "D5": "＋再熱只依室溫開關",
+    "D6": "D5 但再熱能力維持原規格（UA 88 W/K）",
 }
 _TABLE: CycleTable | None = None
 
@@ -51,25 +58,42 @@ def _table() -> CycleTable:
     return _TABLE
 
 
+# 各步驟套用的放寬項目（逐項累加；D6 為「D5 但再熱能力維持原規格」，用來判斷是否需要加大再熱盤管）。
+_RELAX = {
+    "D0": set(),
+    "D1": {"fans"},
+    "D2": {"fans", "chw"},
+    "D3": {"fans", "chw", "reheat_x2"},
+    "D4": {"fans", "chw", "reheat_x6"},
+    "D5": {"fans", "chw", "reheat_x6", "reheat_by_temperature"},
+    "D6": {"fans", "chw", "reheat_by_temperature"},
+}
+
+
 def control_for(step: str) -> IndoorControlParameters:
-    """各診斷步驟的室內控制參數（逐項累加）。
+    """各診斷步驟的室內控制參數。
 
 參數：
-    step: D0–D3。
+    step: D0–D6。
 
 回傳：
     IndoorControlParameters。"""
     c = IndoorControlParameters()
-    level = int(step[1])
-    if level >= 1:
+    relax = _RELAX[step]
+    if "fans" in relax:
         # 室溫 > 25 °C（舒適帶下限 25.5 再留 0.5 K）時兩台送風機都開，除濕風量最大；室溫降到 25 °C 才減台，
         # 避免把房間壓到舒適帶以下（第一版門檻壓到 20 °C，室溫被拉到約 20 °C，再熱補不回來，結果無效）。
         c = replace(c, stage1_on_k=celsius(25.2), stage2_on_k=celsius(25.3), stage2_off_k=celsius(25.1),
                     stage1_off_k=celsius(25.0), overcool_floor_k=celsius(25.0), stage2_after_s=0.0)
-    if level >= 2:
+    if "chw" in relax:
         c = replace(c, chw_min_k=celsius(5.5), chw_max_k=celsius(5.5))
-    if level >= 3:
+    if "reheat_x2" in relax:
         c = replace(c, reheat_ua_w_k=2 * c.reheat_ua_w_k, reheat_gain_w_k=2 * c.reheat_gain_w_k)
+    if "reheat_x6" in relax:
+        c = replace(c, reheat_ua_w_k=6 * c.reheat_ua_w_k, reheat_gain_w_k=3 * c.reheat_gain_w_k)
+    if "reheat_by_temperature" in relax:
+        # 含濕量門檻歸零：再熱只看室溫；「需除濕」恆成立，送風機至少保留一台。
+        c = replace(c, humid_w=0.0, tight_w=0.0, ample_w=0.0)
     return c
 
 
@@ -98,9 +122,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--split", action="store_true", help="壓縮機用目標分離控制")
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--steps", default=",".join(STEPS), help="只跑指定步驟，例如 D4")
     args = parser.parse_args()
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
-        rows = list(pool.map(_job, [(step, args.split) for step in STEPS]))
+        rows = list(pool.map(_job, [(step, args.split) for step in args.steps.split(",")]))
     print("| 步驟 | 內容 | kWh/日 | 顯冷／潛冷／再熱 kWh | 溫度超標 K·h | RH>60 %·h | RH 最高 | 平均室溫／含濕量 | "
           "冰水桶平均 | 主機 COP | 保護事件 次/日 | 絕對門檻 |")
     print("|" + "---|" * 12)

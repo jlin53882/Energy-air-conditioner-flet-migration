@@ -174,8 +174,9 @@ def render(results: list[StrategyResult]) -> str:
         conditional = best_relative_only(rows) if best is None else None
         lines.append(f"**{scenario.name}（{key}）**\n")
         if full is not None and not full.absolute_ok():
-            lines.append("> **容量檢查**：全力方案（水泵 60 Hz、冰水 7 °C、不再熱）也未通過絕對門檻，"
-                         "此情境以現有設備（或此假設房間）達不到門檻。\n")
+            lines.append("> **容量檢查**：現行控制的最大除濕方案（水泵 60 Hz、冰水 7 °C、不再熱）也未通過絕對門檻。"
+                         "它受送風機分級與過冷下限約束，不是最大除濕能力測試；原因請用 "
+                         "scripts/heat_pump_dehumidification_diagnostic.py 分離（§8.12.5）。\n")
         if best is None:
             lines.append("> 沒有任何策略通過絕對舒適門檻。☆ 為**條件式**最低用電（只要求不劣於舒適基準與數值檢查），"
                          "只表示「與基準一樣不舒適時誰較省電」，不代表達標。\n")

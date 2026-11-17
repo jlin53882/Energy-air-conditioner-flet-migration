@@ -352,6 +352,9 @@ class HeatPumpSimulationView(ft.Column):
         self.warning_row = ft.Row(wrap=True, spacing=TOKENS.spacing_xs)
         self.event_list = ft.ListView(height=160, spacing=2)
         self.trend_chart = self._make_trend_chart()
+        # 0–65：標籤每 10 一格，不顯示 65（否則「60、65」擠在一起）。
+        self.trend_chart.left_axis.label_spacing = 10
+        self.trend_chart.left_axis.show_max = False
         self.ph_chart = self._make_ph_chart()
         self.ts_chart = self._make_ts_chart()
         self.response_chart = self._make_trend_chart(max_y=20, title="kW／COP")
@@ -977,6 +980,7 @@ class HeatPumpSimulationView(ft.Column):
             peak = max(max(r.cooling_w, r.heating_w, r.total_power_w, r.reheat_w) for r in samples) / 1000
             peak = max(peak, max(cops))
             self.response_chart.max_y = max(20, 4 * math.ceil(peak / 4))
+            self.response_chart.left_axis.label_spacing = 4
             self.response_chart.data_series = [
                 series([r.cooling_w / 1000 for r in samples], QE_COLOR),
                 series([r.heating_w / 1000 for r in samples], QC_COLOR),
@@ -1065,7 +1069,7 @@ class HeatPumpSimulationView(ft.Column):
         # 門檻線用細實線（不用虛線或漸層：部分桌面客戶端遇到特殊畫筆會中斷繪製）。
         series = [
             fch.LineChartData(points=[fch.LineChartDataPoint(start, line.value_c), fch.LineChartDataPoint(end, line.value_c)],
-                              color=THRESHOLD_COLORS[line.key], stroke_width=1.2, curved=False)
+                              color=THRESHOLD_COLORS[line.key], stroke_width=1.8, curved=False)
             for line in band.lines
         ]
         series.append(fch.LineChartData(
