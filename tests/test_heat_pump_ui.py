@@ -7,7 +7,15 @@ from dataclasses import replace
 import pytest
 
 from application.heat_pump_simulation import HeatPumpSimulationService
-from domain.heat_pump import OperationMode, PumpMode, RefrigerantMode, celsius, default_settings
+from domain.heat_pump import (
+    CoolingControlMode,
+    FrequencyMode,
+    OperationMode,
+    PumpMode,
+    RefrigerantMode,
+    celsius,
+    default_settings,
+)
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units.converter import CanonicalUnitConverter
 from Flet_ui.ui import heat_pump_presentation as hp
@@ -206,7 +214,8 @@ def test_view_loads_plays_and_ticks(service: HeatPumpSimulationService) -> None:
     assert all(r.dt_s <= 5.0 for r in view.records)
     assert view.kpis["cold"].value_control.value != "—"
     assert view.schematic.state is not None
-    assert len(view.trend_chart.data_series) == 3
+    assert len(view.trend_chart.data_series) == 4  # 自動模式另畫 PID 要求頻率
+    assert view.pid_legend.visible
     assert len(view.ph_chart.data_series) == 3
     assert view.clock_text.value == "00:04:00"
 
@@ -372,3 +381,74 @@ def test_schematic_canvas_draws_new_elements(service: HeatPumpSimulationService)
     assert any(text.startswith("40 Hz") for text in texts)
     assert "E505DH-49A2W" in texts
     assert hp.REHEAT_COIL.key == "reheat_coil"
+
+
+# ---- 受控水桶門檻圖與冷房控制架構（§8.12） ----
+
+
+def test_threshold_lines_merge_overlapping_values() -> None:
+    """LEGACY 冷房目標＝停機合併成一條線；目標分離則三條線，由低到高排列。
+
+回傳：
+    無。"""
+    legacy = hp.threshold_lines(celsius(7.0), celsius(7.0), celsius(8.0))
+    assert [line.label for line in legacy] == ["停機＝PID 目標 7.0 °C", "重啟 8.0 °C"]
+    assert legacy[0].key == "target"
+    split = hp.threshold_lines(celsius(7.5), celsius(7.0), celsius(8.0))
+    assert [line.key for line in split] == ["stop", "target", "restart"]
+    assert [line.value_c for line in split] == pytest.approx([7.0, 7.5, 8.0])
+
+
+def test_control_band_zooms_and_clips(service: HeatPumpSimulationService) -> None:
+    """冷房視窗為停機 − 2 ～ 重啟 + 4 K、向外取偶數（4–12 °C）；起始 30 °C 的降溫貼在上緣並標示；
+    暖房改畫熱水桶與 45／46／42 °C。
+
+回傳：
+    無。"""
+    sim = service.new_session(cooling_control_mode=CoolingControlMode.SPLIT)
+    records = sim.run(1800.0)
+    band = hp.control_band(records)
+    assert band is not None and band.title.startswith("冰水桶")
+    assert (band.min_y, band.max_y) == (4, 12)
+    assert band.clipped and max(band.tank_c) == 12
+    assert len(band.lines) == 3
+    heating = service.new_session(default_settings(OperationMode.HEATING))
+    hb = hp.control_band(heating.run(600.0))
+    assert hb is not None and hb.title.startswith("熱水桶")
+    assert [line.value_c for line in hb.lines] == pytest.approx([42.0, 45.0, 46.0])
+    assert (hb.min_y, hb.max_y) == (38, 50)
+    assert hp.control_band([]) is None
+
+
+def test_view_control_mode_switch_resets_and_draws_thresholds(service: HeatPumpSimulationService) -> None:
+    """切換冷房控制架構會重設模擬並暫停；門檻圖畫出三條參考線＋桶溫；手動頻率時不畫 PID 要求頻率。
+
+回傳：
+    無。"""
+    view, _started = _view(service)
+    view._on_play(None)
+    view.speed = 120
+    for _ in range(5):
+        view.tick()
+    assert len(view.control_chart.data_series) == 3  # LEGACY：兩條門檻線＋桶溫
+    assert "只有兩條線" in view.control_note.value
+    old = view.sim
+    view.control_mode_button.selected = [CoolingControlMode.SPLIT.value]
+    view._on_control_mode(None)
+    assert view.sim is not old and view.sim.time_s == 0.0 and not view.running
+    assert view.sim.params.control.cooling_control_mode is CoolingControlMode.SPLIT
+    assert "已切換" in view.status_text.value
+    for _ in range(5):
+        view.tick()
+    assert len(view.control_chart.data_series) == 4
+    assert view.latest.control_target_k == pytest.approx(celsius(7.5))
+    assert view.control_chart.min_y == 4 and view.control_chart.max_y == 12
+    assert view.response_chart.max_y >= 20 and view.response_chart.max_y % 4 == 0
+    view.freq_mode_button.selected = ["manual"]
+    view._on_freq_mode(None)
+    assert view.sim.settings.frequency_mode is FrequencyMode.MANUAL
+    view.tick()
+    assert len(view.trend_chart.data_series) == 3 and not view.pid_legend.visible
+    view.operation_button.selected = ["heating"]
+    view._on_operation(None)
+    assert "暖房不受影響" in view.control_mode_text.value

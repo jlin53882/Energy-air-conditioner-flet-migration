@@ -20,6 +20,7 @@ import flet_charts as fch
 
 from application.heat_pump_simulation import HeatPumpSimulationService, SaturationDome
 from domain.heat_pump import (
+    CoolingControlMode,
     FrequencyMode,
     HeatPumpSimulation,
     OperationMode,
@@ -39,6 +40,7 @@ from ..heat_pump_presentation import (
     MODE_SHORT_LABELS,
     WARNING_LABELS,
     TEMPERATURE_LEGEND,
+    control_band,
     downsample,
     format_clock,
     format_power,
@@ -65,6 +67,12 @@ QC_COLOR = "#C2410C"
 POWER_COLOR = "#5E6764"
 REHEAT_COLOR = "#D08C1F"
 COP_COLOR = "#2E7D4F"
+PID_REQUEST_COLOR = "#C4A3D6"
+THRESHOLD_COLORS = {"target": "#2E7D4F", "stop": "#B42318", "restart": "#D08C1F"}
+CONTROL_MODE_LABELS = {
+    CoolingControlMode.LEGACY: "舊控制：PID 目標＝停機 7 °C、8 °C 重啟（§4 結果依此）",
+    CoolingControlMode.SPLIT: "目標分離：PID 目標 7.5 °C、7 °C 停機、8 °C 重啟（§8.12）",
+}
 
 LoopStarter = Callable[[Callable[[], Awaitable[None]]], None]
 
@@ -284,6 +292,7 @@ class HeatPumpSimulationView(ft.Column):
         self._rotor_angle = 0.0
         self._event_count = 0
         self._settings = default_settings(OperationMode.COOLING)
+        self._control_mode = self.service.params.control.cooling_control_mode
 
         self.status_text = ft.Text("尚未載入", size=TOKENS.caption, color=TOKENS.text_muted)
         self.clock_text = ft.Text("00:00:00", style=mono_style(size=TOKENS.metric, weight=ft.FontWeight.W_700,
@@ -309,6 +318,11 @@ class HeatPumpSimulationView(ft.Column):
             lambda hz: f"{hz:g} Hz" + ("（低於原廠 50–60 Hz 工作範圍）" if hz < params.compressor.manufacturer_min_frequency_hz else ""),
             self._on_manual_freq)
         self.freq_step.disabled = True
+        self.control_mode_button = _segmented(
+            [(CoolingControlMode.LEGACY.value, "舊控制"), (CoolingControlMode.SPLIT.value, "目標分離")],
+            self._control_mode.value, self._on_control_mode)
+        self.control_mode_text = ft.Text(self._control_mode_caption(), size=TOKENS.caption,
+                                         color=TOKENS.text_muted)
         self.pump_mode_button = _segmented([("manual", "手動"), ("auto", "自動（水側溫差）")], "manual",
                                            self._on_pump_mode)
         self.cold_pump = _StepSelector(
@@ -341,6 +355,11 @@ class HeatPumpSimulationView(ft.Column):
         self.ph_chart = self._make_ph_chart()
         self.ts_chart = self._make_ts_chart()
         self.response_chart = self._make_trend_chart(max_y=20, title="kW／COP")
+        self.control_chart = self._make_trend_chart(max_y=12, title="°C")
+        self.control_chart.height = 220
+        self.control_legend = ft.Row(spacing=TOKENS.spacing_md, wrap=True)
+        self.control_note = ft.Text("", size=TOKENS.caption, color=TOKENS.text_muted)
+        self.pid_legend = self._legend_item(PID_REQUEST_COLOR, "PID 要求頻率 Hz（量化前）")
         self._dome: SaturationDome | None = None
 
         legend = ft.Row([
@@ -372,6 +391,9 @@ class HeatPumpSimulationView(ft.Column):
                         color=TOKENS.text_secondary),
                 self.freq_mode_button,
                 self.freq_step,
+                ft.Text("冷房控制架構（切換會重設模擬）", size=TOKENS.caption, color=TOKENS.text_secondary),
+                self.control_mode_button,
+                self.control_mode_text,
                 ft.Divider(height=8, color=TOKENS.border),
                 ft.Text("水泵頻率（變頻器階梯）", size=TOKENS.caption, color=TOKENS.text_secondary),
                 self.pump_mode_button,
@@ -394,10 +416,14 @@ class HeatPumpSimulationView(ft.Column):
             icon=ft.Icons.ACCOUNT_TREE_OUTLINED,
         )
         schematic_card.col = {"xs": 12, "lg": 8, "xl": 9}
+        self.control_card = EngineeringCard("受控水桶與啟停門檻", ft.Column([
+            self.control_chart, self.control_legend, self.control_note,
+        ]), subtitle="縱軸放大到門檻附近；趨勢圖的 0–65 刻度看不出 0.5 K 的差異", icon=ft.Icons.THERMOSTAT)
         trend_card = EngineeringCard("水溫與頻率趨勢", ft.Column([
             self.trend_chart,
             ft.Row([self._legend_item(COLD_COLOR, "冰水 °C"), self._legend_item(HOT_COLOR, "熱水 °C"),
-                    self._legend_item(FREQ_COLOR, "壓縮機頻率 Hz")], spacing=TOKENS.spacing_md, wrap=True),
+                    self._legend_item(FREQ_COLOR, "壓縮機頻率 Hz（實際階梯）"), self.pid_legend],
+                   spacing=TOKENS.spacing_md, wrap=True),
         ]), icon=ft.Icons.SHOW_CHART)
         trend_card.col = {"xs": 12, "lg": 6}
         response_card = EngineeringCard("時間響應", ft.Column([
@@ -421,6 +447,7 @@ class HeatPumpSimulationView(ft.Column):
                 ft.ResponsiveRow([controls_card, schematic_card], spacing=TOKENS.spacing_md,
                                  run_spacing=TOKENS.spacing_md),
                 ft.ResponsiveRow(list(self.kpis.values()), spacing=TOKENS.spacing_sm, run_spacing=TOKENS.spacing_sm),
+                self.control_card,
                 ft.ResponsiveRow([trend_card, response_card], spacing=TOKENS.spacing_md,
                                  run_spacing=TOKENS.spacing_md),
                 ft.ResponsiveRow([ph_card, ts_card], spacing=TOKENS.spacing_md, run_spacing=TOKENS.spacing_md),
@@ -548,7 +575,7 @@ class HeatPumpSimulationView(ft.Column):
 
 回傳：
     無。"""
-        self.sim = self.service.new_session(self._settings)
+        self.sim = self.service.new_session(self._settings, cooling_control_mode=self._control_mode)
         self.records = []
         self._event_count = 0
         self.event_list.controls = []
@@ -681,6 +708,8 @@ class HeatPumpSimulationView(ft.Column):
         self.outdoor_slider.set_value(defaults.outdoor_k - 273.15)
         self._apply_settings(replace(self._settings, operation=operation, room_k=defaults.room_k,
                                      outdoor_k=defaults.outdoor_k, reheat_fraction=self.reheat_slider.value / 100.0))
+        self.control_mode_text.value = self._control_mode_caption()
+        self._safe_update()
 
     def _on_fans(self, _event: ft.ControlEvent) -> None:
         """送風機台數。
@@ -705,6 +734,37 @@ class HeatPumpSimulationView(ft.Column):
         self.freq_step.disabled = mode is FrequencyMode.AUTO
         self._apply_settings(replace(self._settings, frequency_mode=mode,
                                      manual_frequency_hz=self.freq_step.value))
+
+    def _control_mode_caption(self) -> str:
+        """控制架構說明（暖房時註明不影響）。
+
+回傳：
+    文字。"""
+        text = CONTROL_MODE_LABELS[self._control_mode]
+        if self._settings.operation is OperationMode.HEATING:
+            text += "；暖房不受影響"
+        return text
+
+    def _on_control_mode(self, _event: ft.ControlEvent) -> None:
+        """冷房控制架構：PID 參數依架構不同，只能在建立 session 時決定，所以切換會重設模擬並暫停。
+
+參數：
+    _event: 事件。
+
+回傳：
+    無。"""
+        mode = CoolingControlMode(_selected(self.control_mode_button))
+        if mode is self._control_mode:
+            return
+        self._control_mode = mode
+        self.control_mode_text.value = self._control_mode_caption()
+        if self.sim is not None:
+            self.running = False
+            self.play_button.content = "播放"
+            self.play_button.icon = ft.Icons.PLAY_ARROW
+            self.status_text.value = "已切換冷房控制架構，模擬已重設"
+            self._new_session()
+        self._safe_update()
 
     def _on_manual_freq(self, value: float) -> None:
         """手動頻率。
@@ -893,14 +953,30 @@ class HeatPumpSimulationView(ft.Column):
                     color=color, stroke_width=2, curved=False,
                 )
 
-            self.trend_chart.data_series = [
+            # PID 要求頻率只在自動模式有意義（手動時不畫）；先畫，讓實際階梯線疊在上面。
+            show_pid = self._settings.frequency_mode is FrequencyMode.AUTO
+            self.pid_legend.visible = show_pid
+            self.trend_chart.data_series = (
+                [fch.LineChartData(
+                    points=[fch.LineChartDataPoint(r.time_s / 60, r.pid_request_hz) for r in samples],
+                    color=PID_REQUEST_COLOR, stroke_width=1.5, curved=False)] if show_pid else []
+            ) + [
                 series([r.cold_water_k - 273.15 for r in samples], COLD_COLOR),
                 series([r.hot_water_k - 273.15 for r in samples], HOT_COLOR),
                 series([r.frequency_hz for r in samples], FREQ_COLOR),
             ]
+            for chart in (self.trend_chart, self.response_chart, self.control_chart):
+                # 橫軸標籤與格線同間距（否則全寬的門檻圖會每 0.5 min 一個標籤）。
+                chart.bottom_axis.label_spacing = interval
             for attr in ("min_x", "max_x", "vertical_grid_lines"):
                 setattr(self.response_chart, attr, getattr(self.trend_chart, attr))
+                setattr(self.control_chart, attr, getattr(self.trend_chart, attr))
+            self._update_control_chart(samples)
             cops = [instant_cop(r) or 0.0 for r in samples]
+            # 縱軸隨資料放大：Flet 圖表不裁切超出 max_y 的線，起始降溫時熱量可超過 20 kW，會畫到卡片標題上。
+            peak = max(max(r.cooling_w, r.heating_w, r.total_power_w, r.reheat_w) for r in samples) / 1000
+            peak = max(peak, max(cops))
+            self.response_chart.max_y = max(20, 4 * math.ceil(peak / 4))
             self.response_chart.data_series = [
                 series([r.cooling_w / 1000 for r in samples], QE_COLOR),
                 series([r.heating_w / 1000 for r in samples], QC_COLOR),
@@ -911,6 +987,7 @@ class HeatPumpSimulationView(ft.Column):
         else:
             self.trend_chart.data_series = []
             self.response_chart.data_series = []
+            self._update_control_chart([])
 
         series = []
         max_bar = self.ph_chart.max_y
@@ -964,6 +1041,46 @@ class HeatPumpSimulationView(ft.Column):
                                            stroke_width=1.5),
             ))
         self.ts_chart.data_series = ts_series
+
+    def _update_control_chart(self, samples: list[StepRecord]) -> None:
+        """受控水桶與門檻線（§2.3、§8.12）。
+
+參數：
+    samples: 抽樣後記錄。
+
+回傳：
+    無。"""
+        band = control_band(samples)
+        if band is None:
+            self.control_chart.data_series = []
+            self.control_legend.controls = []
+            self.control_note.value = "播放後顯示受控水桶溫度與 PID 目標、停機、重啟門檻。"
+            return
+        self.control_card.title_control.value = band.title
+        self.control_chart.min_y = band.min_y
+        self.control_chart.max_y = band.max_y
+        self.control_chart.horizontal_grid_lines = fch.ChartGridLines(interval=1, color=TOKENS.border, width=0.6)
+        self.control_chart.left_axis.label_spacing = 2
+        start, end = band.times_min[0], band.times_min[-1]
+        # 門檻線用細實線（不用虛線或漸層：部分桌面客戶端遇到特殊畫筆會中斷繪製）。
+        series = [
+            fch.LineChartData(points=[fch.LineChartDataPoint(start, line.value_c), fch.LineChartDataPoint(end, line.value_c)],
+                              color=THRESHOLD_COLORS[line.key], stroke_width=1.2, curved=False)
+            for line in band.lines
+        ]
+        series.append(fch.LineChartData(
+            points=[fch.LineChartDataPoint(t, v) for t, v in zip(band.times_min, band.tank_c)],
+            color=COLD_COLOR if band.tank_label.startswith("冰水") else HOT_COLOR, stroke_width=2, curved=False))
+        self.control_chart.data_series = series
+        self.control_legend.controls = [self._legend_item(COLD_COLOR if band.tank_label.startswith("冰水") else HOT_COLOR,
+                                                          band.tank_label)] + [
+            self._legend_item(THRESHOLD_COLORS[line.key], line.label) for line in reversed(band.lines)]
+        notes = []
+        if band.clipped:
+            notes.append(f"超出 {band.min_y:g}–{band.max_y:g} °C 的部分貼在圖框邊緣（例如起始降溫）")
+        if len(band.lines) < 3:
+            notes.append("舊控制的 PID 目標與停機門檻相同，桶溫一到目標就停機，所以只有兩條線")
+        self.control_note.value = "；".join(notes)
 
     def _safe_update(self) -> None:
         """已掛載時才更新畫面。

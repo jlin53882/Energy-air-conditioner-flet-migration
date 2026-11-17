@@ -7,9 +7,10 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from domain.heat_pump import (
+    CoolingControlMode,
     CycleTable,
     HeatPumpParameters,
     HeatPumpSimulation,
@@ -114,6 +115,7 @@ class HeatPumpSimulationService:
         settings: SimulationSettings | None = None,
         initial_cold_k: float = celsius(30.0),
         initial_hot_k: float = celsius(30.0),
+        cooling_control_mode: CoolingControlMode | None = None,
     ) -> HeatPumpSimulation:
         """建立新的模擬 session。
 
@@ -121,12 +123,17 @@ class HeatPumpSimulationService:
     settings: 初始設定（預設冷房）。
     initial_cold_k: 冰水桶初始溫度。
     initial_hot_k: 熱水桶初始溫度。
+    cooling_control_mode: 冷房控制架構（None 沿用 ``params``；預設 LEGACY）。PID 參數依架構不同，
+        所以只能在建立 session 時決定，切換需重設模擬。
 
 回傳：
     HeatPumpSimulation。"""
+        params = self.params
+        if cooling_control_mode is not None:
+            params = replace(params, control=replace(params.control, cooling_control_mode=cooling_control_mode))
         return HeatPumpSimulation(
             self.table(),
-            self.params,
+            params,
             settings or default_settings(OperationMode.COOLING),
             initial_cold_k=initial_cold_k,
             initial_hot_k=initial_hot_k,

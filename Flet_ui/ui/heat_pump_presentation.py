@@ -593,3 +593,95 @@ def downsample(values: Sequence, limit: int) -> list:
     if sampled[-1] is not values[-1]:
         sampled.append(values[-1])
     return sampled
+
+
+# ---- 受控水桶與啟停門檻圖（§2.3、§8.12） ----
+
+
+@dataclass(frozen=True)
+class ThresholdLine:
+    """一條水平參考線（°C）。``label`` 已合併重疊的門檻，例如 LEGACY 冷房的「目標＝停機」。"""
+
+    key: str
+    label: str
+    value_c: float
+
+
+@dataclass(frozen=True)
+class ControlBand:
+    """受控水桶圖的資料：桶溫序列、參考線與縱軸視窗（超出視窗的值已貼邊）。"""
+
+    title: str
+    tank_label: str
+    times_min: tuple[float, ...]
+    tank_c: tuple[float, ...]
+    lines: tuple[ThresholdLine, ...]
+    min_y: float
+    max_y: float
+    clipped: bool
+
+
+THRESHOLD_NAMES = {"target": "PID 目標", "stop": "停機", "restart": "重啟"}
+
+
+def threshold_lines(target_k: float, stop_k: float, restart_k: float) -> tuple[ThresholdLine, ...]:
+    """把（目標, 停機, 重啟）轉成參考線；數值相同（差 < 0.05 K）的合併成一條，避免兩條線疊在一起看不出來。
+
+參數：
+    target_k: PID 目標。
+    stop_k: 停機門檻。
+    restart_k: 重啟門檻。
+
+回傳：
+    依溫度由低到高排列的參考線。"""
+    groups: list[tuple[list[str], float]] = []
+    for key, value in (("stop", stop_k), ("target", target_k), ("restart", restart_k)):
+        for keys, existing in groups:
+            if abs(existing - value) < 0.05:
+                keys.append(key)
+                break
+        else:
+            groups.append(([key], value))
+    lines = []
+    for keys, value in groups:
+        c = value - 273.15
+        name = "＝".join(THRESHOLD_NAMES[k] for k in keys)
+        primary = "target" if "target" in keys else keys[0]
+        lines.append(ThresholdLine(primary, f"{name} {c:.1f} °C", c))
+    return tuple(sorted(lines, key=lambda line: line.value_c))
+
+
+def control_band(records: Sequence[StepRecord]) -> ControlBand | None:
+    """受控水桶圖：只取與最新一筆相同運轉方式的記錄；縱軸固定在門檻附近（冷房 停機 − 2 ～ 重啟 + 4 K，
+    暖房 重啟 − 4 ～ 停機 + 3 K，向外取偶數），讓 0.5 K 的門檻差看得出來。降溫初期等超出視窗的值貼在邊緣。
+
+參數：
+    records: 記錄（通常已抽樣）。
+
+回傳：
+    ControlBand；沒有記錄或缺門檻時為 None。"""
+    if not records:
+        return None
+    latest = records[-1]
+    if latest.control_target_k is None or latest.control_stop_k is None or latest.control_restart_k is None:
+        return None
+    cooling = latest.operation is OperationMode.COOLING
+    same = [r for r in records if r.operation is latest.operation]
+    lines = threshold_lines(latest.control_target_k, latest.control_stop_k, latest.control_restart_k)
+    low = min(line.value_c for line in lines)
+    high = max(line.value_c for line in lines)
+    lower, upper = (low - 2, high + 4) if cooling else (low - 4, high + 3)
+    # 取偶數邊界，刻度每 2 K 一格不會出現「5、6」擠在一起的不等間距標籤。
+    min_y, max_y = 2 * math.floor(lower / 2), 2 * math.ceil(upper / 2)
+    raw = [(r.cold_water_k if cooling else r.hot_water_k) - 273.15 for r in same]
+    tank = tuple(min(max_y, max(min_y, value)) for value in raw)
+    return ControlBand(
+        title="冰水桶與啟停門檻（冷房）" if cooling else "熱水桶與啟停門檻（暖房）",
+        tank_label="冰水桶 °C" if cooling else "熱水桶 °C",
+        times_min=tuple(r.time_s / 60 for r in same),
+        tank_c=tank,
+        lines=lines,
+        min_y=min_y,
+        max_y=max_y,
+        clipped=any(a != b for a, b in zip(raw, tank)),
+    )

@@ -5,7 +5,7 @@
 看是哪一個環節讓濕度守不住：
 
 - D0：按需再熱（§8.7 已跑過的現行控制）。
-- D1：D0 ＋ 兩台送風機強制常開（除濕風量最大），按需再熱補回過冷。
+- D1：D0 ＋ 室溫 > 25 °C 時兩台送風機都開（除濕風量最大），按需再熱把室溫拉回 26 °C 附近。
 - D2：D1 ＋ 冰水 5.5 °C（低水溫；板式出水會接近 4 °C 防凍限頻，另列保護事件次數）。
 - D3：D2 ＋ 再熱盤管 UA × 2、再熱增益 × 2（再熱能力不再是瓶頸）。
 
@@ -30,7 +30,7 @@ from domain.heat_pump.room import SCENARIOS, IndoorControlParameters, ReheatMode
 
 STEPS = {
     "D0": "按需再熱（現行控制）",
-    "D1": "＋兩台送風機常開",
+    "D1": "＋兩台送風機（室溫 > 25 °C 時全開）",
     "D2": "＋冰水 5.5 °C",
     "D3": "＋再熱能力 × 2",
 }
@@ -62,9 +62,10 @@ def control_for(step: str) -> IndoorControlParameters:
     c = IndoorControlParameters()
     level = int(step[1])
     if level >= 1:
-        # 分級門檻壓到遠低於室溫：兩台送風機常開；過冷下限同步下移，不讓「過冷」關掉除濕。
-        c = replace(c, stage1_on_k=celsius(20.0), stage2_on_k=celsius(20.2), stage2_off_k=celsius(19.5),
-                    stage1_off_k=celsius(19.0), overcool_floor_k=celsius(19.0))
+        # 室溫 > 25 °C（舒適帶下限 25.5 再留 0.5 K）時兩台送風機都開，除濕風量最大；室溫降到 25 °C 才減台，
+        # 避免把房間壓到舒適帶以下（第一版門檻壓到 20 °C，室溫被拉到約 20 °C，再熱補不回來，結果無效）。
+        c = replace(c, stage1_on_k=celsius(25.2), stage2_on_k=celsius(25.3), stage2_off_k=celsius(25.1),
+                    stage1_off_k=celsius(25.0), overcool_floor_k=celsius(25.0), stage2_after_s=0.0)
     if level >= 2:
         c = replace(c, chw_min_k=celsius(5.5), chw_max_k=celsius(5.5))
     if level >= 3:

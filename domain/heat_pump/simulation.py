@@ -180,6 +180,10 @@ class StepRecord:
     pid_request_hz: float = 0.0
     pid_integral_hz: float = 0.0
     chw_target_k: float | None = None
+    # 受控水桶（冷房冰水、暖房熱水）目前的 PID 目標、停機門檻與重啟門檻（UI 參考線用；§2.3、§8.12）。
+    control_target_k: float | None = None
+    control_stop_k: float | None = None
+    control_restart_k: float | None = None
 
     @property
     def net_cooling_w(self) -> float:
@@ -824,6 +828,7 @@ class HeatPumpSimulation:
         self._fan_coil_energy_j += fan_load * dt_s
         self._reheat_energy_j += reheat * dt_s
 
+        thresholds = self.control_thresholds()
         record = StepRecord(
             time_s=self.time_s,
             dt_s=dt_s,
@@ -888,6 +893,9 @@ class HeatPumpSimulation:
             fans_running=frozenset(name for name, _ in self._coil_results()) if room is not None else s.fans,
             chw_setpoint_k=self._cooling_setpoint_k() if cooling else None,
             chw_target_k=self._cooling_target_k() if cooling else None,
+            control_target_k=thresholds[0],
+            control_stop_k=thresholds[1],
+            control_restart_k=thresholds[2],
             occupied=room.scenario.occupied(self.time_s) if room is not None else True,
             system_enabled=enabled,
             outdoor_fan_power_w=outdoor_fan_power,
@@ -1095,6 +1103,7 @@ class HeatPumpSimulation:
             stop = (controlled <= self._cooling_setpoint_k() if cooling
                     else at_minimum and controlled >= c.heating_setpoint_k + margin)
         else:
+            ctrl.pid_request_hz = 0.0
             ctrl.frequency_hz = self._stepper.start(s.manual_frequency_hz, limit, self.time_s)
             stop = controlled <= self._cooling_setpoint_k() if cooling else controlled >= c.heating_setpoint_k
         stop = stop or not self.system_enabled()
@@ -1122,6 +1131,20 @@ class HeatPumpSimulation:
         if freezing:
             warnings.add(WARNING_FREEZE_LIMITING)
         return frozenset(warnings)
+
+    def control_thresholds(self) -> tuple[float, float, float]:
+        """受控水桶目前的（PID 目標, 停機門檻, 重啟門檻），K。
+
+        冷房：LEGACY 為 (7, 7, 8)、目標分離為 (7.5, 7, 8) °C，皆隨冰水重設平移；
+        暖房：自動為 (45, 46, 42)、手動為 (45, 45, 42) °C。
+
+回傳：
+    (目標, 停機, 重啟)。"""
+        c = self.params.control
+        if self._settings.operation is OperationMode.COOLING:
+            return self._cooling_target_k(), self._cooling_setpoint_k(), self._cooling_restart_k()
+        margin = c.auto_stop_margin_k if self._settings.frequency_mode is FrequencyMode.AUTO else 0.0
+        return c.heating_setpoint_k, c.heating_setpoint_k + margin, c.heating_restart_k
 
     def _pid_measurement(self) -> float:
         """與誤差同號的量測值（冷房：冰水溫度；暖房：−熱水溫度），供對量測值微分。
