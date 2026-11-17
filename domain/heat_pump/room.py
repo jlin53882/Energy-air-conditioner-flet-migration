@@ -28,6 +28,8 @@ class ReheatMode(str, Enum):
     OFF = "off"
     FIXED = "fixed"
     DEMAND = "demand"
+    # 協調除濕（§8.12.8）：依房間狀況切換「顯冷」與「除濕＋補熱」兩種狀態，濕度回到目標帶即退出除濕。
+    COORDINATED = "coordinated"
 
 
 # 盤管參數（§8.2）：B 以部分乾濕模型對表 8.1.1 的 26／27 °C 兩組 10 點總冷量擬合、28 °C 組驗證
@@ -254,6 +256,13 @@ class IndoorControlParameters:
     reheat_min_switch_s: float = 180.0
     # 再熱盤管：UA（W/K），能力 = ε·ṁ_a·cp·(熱水 − 盤管出風)。
     reheat_ua_w_k: float = 88.0
+    # 協調除濕（ReheatMode.COORDINATED，§8.12.8）：含濕量 > humid_w（或預測 > tight_w）進入除濕狀態；
+    # 含濕量 ≤ dehum_exit_w（26 °C 時約 55 %RH，目標帶中間）才退出，兩次切換至少間隔 dehum_min_s。
+    # 除濕狀態：室溫 > dehum_fan_floor_k 時送風機全開（最大除濕風量），否則至少一台；再熱 = 增益 × (目標 − 室溫)，
+    # 只用來避免過冷。非除濕狀態：送風機只依室溫、不再熱（太熱但濕度正常時不做多餘除濕＋再熱）。
+    dehum_exit_w: float = psy.humidity_ratio(celsius(26.0), 0.55)
+    dehum_min_s: float = 600.0
+    dehum_fan_floor_k: float = celsius(25.6)
 
 
 @dataclass
@@ -284,6 +293,8 @@ class _IndoorState:
     t_slope_k_s: float = 0.0
     w_slope_s: float = 0.0
     stage1_since_s: float | None = None
+    dehum_mode: bool = False
+    dehum_switched_s: float = -1e9
 
 
 class RoomModel:
@@ -389,6 +400,36 @@ class RoomModel:
         return humid and self.state.temperature_k > c.overcool_floor_k
 
     @property
+    def dehum_mode(self) -> bool:
+        """協調除濕是否處於「除濕＋補熱」狀態（其他再熱方式恆為 False）。
+
+回傳：
+            bool。"""
+        return self._indoor.dehum_mode
+
+    def _update_dehum_mode(self, time_s: float, enabled: bool) -> None:
+        """協調除濕的狀態切換（有最短停留時間的遲滯）。
+
+參數：
+    time_s: 時間。
+    enabled: 系統是否啟用。
+
+回傳：
+    無。"""
+        ind = self._indoor
+        if self.reheat_mode is not ReheatMode.COORDINATED or not enabled:
+            ind.dehum_mode = False
+            return
+        if time_s - ind.dehum_switched_s < self.control.dehum_min_s:
+            return
+        c = self.control
+        w = self.state.humidity_ratio
+        if not ind.dehum_mode and (w > c.humid_w or self.predicted_humidity_ratio > c.tight_w):
+            ind.dehum_mode, ind.dehum_switched_s = True, time_s
+        elif ind.dehum_mode and w <= c.dehum_exit_w:
+            ind.dehum_mode, ind.dehum_switched_s = False, time_s
+
+    @property
     def fans_on(self) -> frozenset[str]:
         """目前運轉中的送風機。
 
@@ -442,6 +483,7 @@ class RoomModel:
 回傳：
     無。"""
         ind = self._indoor
+        self._update_dehum_mode(time_s, enabled)
         if not enabled:
             ind.fans_on = set()
             ind.stage1_since_s = None
@@ -457,7 +499,9 @@ class RoomModel:
         t_stage1 = self.predicted_temperature_k_at(c.short_anticipation_s)
         t_stage2 = self.predicted_temperature_k if stage1_running else t
         t_off = max(t, t_stage1)
-        humid = self.needs_dehumidification()
+        coordinated = self.reheat_mode is ReheatMode.COORDINATED
+        # 協調除濕：以除濕狀態取代「需除濕就保留一台」；非除濕狀態只看室溫。
+        humid = ind.dehum_mode if coordinated else self.needs_dehumidification()
         count = len(ind.fans_on & set(order))
         target = count
         if t_stage2 >= c.stage2_on_k and count >= 1:
@@ -470,6 +514,8 @@ class RoomModel:
             target = min(count, 1)
         if humid:
             target = max(target, 1)
+        if coordinated and ind.dehum_mode and t > c.dehum_fan_floor_k:
+            target = len(order)
         target = min(target, len(order))
         new = set(order[:target])
         if new != ind.fans_on:
@@ -498,7 +544,7 @@ class RoomModel:
             return ind.chw_setpoint_k
         if not enabled:
             return ind.chw_setpoint_k
-        if self.comfort_tight() or self.needs_dehumidification():
+        if self.comfort_tight() or self.needs_dehumidification() or ind.dehum_mode:
             if ind.chw_setpoint_k > c.chw_min_k:
                 ind.chw_setpoint_k = c.chw_min_k
                 ind.chw_changed_s = time_s
@@ -525,6 +571,11 @@ class RoomModel:
         if self.reheat_mode is ReheatMode.FIXED:
             return self.reheat_fraction * coil_load_w
         c = self.control
+        if self.reheat_mode is ReheatMode.COORDINATED:
+            # 只在除濕狀態補熱，且只補到不過冷；濕度回到目標帶即退出，不靠再熱撐住室溫繼續除水。
+            if not self._indoor.dehum_mode:
+                return 0.0
+            return max(0.0, c.reheat_gain_w_k * (c.reheat_target_k - self.state.temperature_k))
         ind = self._indoor
         t = self.state.temperature_k
         w = self.state.humidity_ratio

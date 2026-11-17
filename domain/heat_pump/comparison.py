@@ -85,6 +85,10 @@ STRATEGIES: tuple[Strategy, ...] = (
              reheat_mode=ReheatMode.DEMAND, chw_reset=True),
     Strategy("combo", "水泵＋冰水重設＋按需再熱＋停泵",
              {"pump_mode": PumpMode.AUTO, "idle_pump_off": True}, reheat_mode=ReheatMode.DEMAND, chw_reset=True),
+    # 第三輪（§8.12.8）：協調除濕取代按需再熱。
+    Strategy("coord", "協調除濕（除濕＋補熱／顯冷，達標退出）", reheat_mode=ReheatMode.COORDINATED),
+    Strategy("combo_coord", "水泵＋冰水重設＋協調除濕＋停泵",
+             {"pump_mode": PumpMode.AUTO, "idle_pump_off": True}, reheat_mode=ReheatMode.COORDINATED, chw_reset=True),
 )
 
 # Codex 建議的三組核心比較：基準、水泵最佳化、水泵＋冰水重設＋按需再熱。
@@ -109,6 +113,9 @@ class AbsoluteComfort:
     humidity_high_pct_h: float = 5.0
     max_temperature_k: float = celsius(27.0)
     max_rh: float = 0.65
+    # 第三輪補上低濕側（§8.12.8）：原規則只擋濕度過高，D5 最高 RH 46 %（全程低於 50–60 % 目標帶）仍判「通過」。
+    humidity_low_pct_h: float = 5.0
+    min_rh: float = 0.45
 
 
 @dataclass(frozen=True)
@@ -166,9 +173,11 @@ class StrategyResult:
     cold_tank_mean_k: float = 0.0
     cold_tank_max_k: float = 0.0
     mean_chw_target_k: float = 0.0
+    # 在室時段最低 RH（evaluate 一定會填；預設 0.5 只為相容手動建立的結果）。
+    min_rh: float = 0.5
 
     def comfort_ok(self, base: StrategyResult, tol: ComfortTolerance | None = None) -> bool:
-        """舒適度是否不劣於基準（溫度超標、濕度高側超標、達標時間）。
+        """舒適度是否不劣於基準（溫度超標、濕度高側與低側超標、達標時間）。
 
 參數：
     base: 基準結果。
@@ -180,6 +189,8 @@ class StrategyResult:
         if self.temperature_exceed_kh > base.temperature_exceed_kh + tol.temperature_kh:
             return False
         if self.humidity_high_pct_h > base.humidity_high_pct_h + tol.humidity_high_pct_h:
+            return False
+        if self.humidity_low_pct_h > base.humidity_low_pct_h + tol.humidity_high_pct_h:
             return False
         if base.pulldown_s is not None:
             allowed = max(tol.pulldown_s, tol.pulldown_fraction * base.pulldown_s)
@@ -199,7 +210,9 @@ class StrategyResult:
         return (self.temperature_exceed_kh <= limits.temperature_kh
                 and self.humidity_high_pct_h <= limits.humidity_high_pct_h
                 and self.max_temperature_k <= limits.max_temperature_k
-                and self.max_rh <= limits.max_rh)
+                and self.max_rh <= limits.max_rh
+                and self.humidity_low_pct_h <= limits.humidity_low_pct_h
+                and self.min_rh >= limits.min_rh)
 
     @property
     def valid(self) -> bool:
@@ -361,7 +374,7 @@ def evaluate(records: list[StepRecord], events: list, scenario_key: str, strateg
         reheat_kwh=sum(r.reheat_w * r.dt_s for r in records) * kwh,
         temperature_exceed_kh=t_exceed, humidity_high_pct_h=rh_high, humidity_low_pct_h=rh_low,
         max_temperature_k=max(r.room_k for r in occ), min_temperature_k=min(r.room_k for r in occ),
-        max_rh=max(r.room_rh for r in occ), pulldown_s=pulldown_s,
+        max_rh=max(r.room_rh for r in occ), min_rh=min(r.room_rh for r in occ), pulldown_s=pulldown_s,
         compressor_starts=round(sum(1 for e in in_day if e.code == "start") / window_days),
         fan_switches=round(fan_switches / window_days),
         protection_events=round(sum(1 for e in in_day if e.code in {"trip", "freeze_stop", "hp_preempt"}) / window_days),

@@ -65,7 +65,15 @@ ROOM_HISTORY_LIMIT_S = 26 * 3600.0  # 房間模式看一整天
 ROOM_COLOR = "#1F7A6D"
 RH_COLOR = "#2F6FB5"
 BAND_COLOR = "#8A9A95"
-REHEAT_MODE_LABELS = {ReheatMode.DEMAND: "按需", ReheatMode.FIXED: "固定 20 %", ReheatMode.OFF: "關閉"}
+# 冷房模式可選的再熱方式（預設關閉）；協調除濕屬於除濕模式，不在此列。
+REHEAT_MODE_LABELS = {ReheatMode.OFF: "關閉", ReheatMode.DEMAND: "按需", ReheatMode.FIXED: "固定 20 %"}
+MODE_NAMES = {"cooling": "冷房", "heating": "暖房", "dehumidify": "除濕"}
+MODE_CAPTIONS = {
+    "cooling": "冷房：維持室溫；冰水盤管冷卻，再熱預設關閉（過程中仍會自然除濕）",
+    "heating": "暖房：維持室溫；熱水供暖房盤管，再熱支路關閉（目前為固定室溫模型）",
+    "dehumidify": "除濕：降低含濕量並避免過冷；又熱又濕先冷卻除濕、溫度合適但太濕時依室溫再熱、"
+                  "濕度回到目標帶即退出除濕（房間溫濕度模型＋協調除濕，§8.12.8）",
+}
 TREND_POINTS = 360
 EVENT_ROWS = 30
 COLD_COLOR = "#1F4E89"
@@ -300,12 +308,14 @@ class HeatPumpSimulationView(ft.Column):
         self._water_phase = 0.0
         self._rotor_angle = 0.0
         self._event_count = 0
-        self._settings = default_settings(OperationMode.COOLING)
+        # 冷房預設不再熱（§8.12.8；§4 的 20 % 只保留作歷史基準）。
+        self._settings = replace(default_settings(OperationMode.COOLING), reheat_fraction=0.0)
+        self._mode = "cooling"
         self._control_mode = self.service.params.control.cooling_control_mode
         self._room_mode = False
         self._axis = time_axis(0.0, 600.0)
         self._scenario = "hot"
-        self._reheat_mode = ReheatMode.DEMAND
+        self._reheat_mode = ReheatMode.OFF
         self._chw_reset = False
 
         self.status_text = ft.Text("尚未載入", size=TOKENS.caption, color=TOKENS.text_muted)
@@ -322,9 +332,10 @@ class HeatPumpSimulationView(ft.Column):
             options=[ft.dropdown.Option(str(s), f"{s}× （1 秒 = {s} 秒模擬）") for s in SPEEDS],
             value=str(DEFAULT_SPEED), on_select=self._on_speed, expand=True,
         ))
-        self.operation_button = _segmented([("cooling", "冷房"), ("heating", "暖房")], "cooling", self._on_operation)
-        self.operation_label = ft.Text("運轉方式（兩台送風機統一切換）", size=TOKENS.caption,
-                                       color=TOKENS.text_secondary)
+        self.operation_button = _segmented([("cooling", "冷房"), ("heating", "暖房"), ("dehumidify", "除濕")],
+                                           "cooling", self._on_operation)
+        self.operation_label = ft.Text("運轉模式", size=TOKENS.caption, color=TOKENS.text_secondary)
+        self.mode_caption = ft.Text(MODE_CAPTIONS["cooling"], size=TOKENS.caption, color=TOKENS.text_muted)
         self.fan_a = ft.Checkbox(label="送風機 A（3.5 kW）", value=True, on_change=self._on_fans)
         self.fan_b = ft.Checkbox(label="送風機 B（5.3 kW）", value=True, on_change=self._on_fans)
         params = self.service.params
@@ -357,12 +368,13 @@ class HeatPumpSimulationView(ft.Column):
         ))
         self.reheat_mode_button = _segmented([(m.value, label) for m, label in REHEAT_MODE_LABELS.items()],
                                              self._reheat_mode.value, self._on_room_option)
+        self.reheat_mode_label = ft.Text("除濕後再熱方式（冷房）", size=TOKENS.caption, color=TOKENS.text_secondary)
         self.chw_reset_box = ft.Checkbox(label="冰水溫度重設 7–10 °C（快降慢升）", value=False,
                                          on_change=self._on_room_option)
         self.room_controls = ft.Column([
             ft.Text("日負載情境", size=TOKENS.caption, color=TOKENS.text_secondary),
             ft.Row([self.scenario_dropdown]),
-            ft.Text("除濕後再熱方式", size=TOKENS.caption, color=TOKENS.text_secondary),
+            self.reheat_mode_label,
             self.reheat_mode_button,
             self.chw_reset_box,
             ft.Text("在室 08–18 時、07:00 起預冷，其餘時段系統停機；室溫、外氣、送風機台數與再熱由情境和室內控制器決定。"
@@ -387,9 +399,11 @@ class HeatPumpSimulationView(ft.Column):
                 ("reheat", "再熱熱量"), ("net_cooling", "淨冷卻量（扣再熱）"),
                 ("room_t", "室溫"), ("room_rh", "室內 RH"), ("room_w", "室內含濕量"),
                 ("coil_split", "盤管顯冷／潛冷"), ("outdoor", "外氣"), ("chw_set", "冰水設定（停機）"),
+                ("supply", "送風溫度"), ("condensate", "凝結水量"), ("dehum_state", "除濕狀態"),
             )
         }
-        self._room_tiles = ("room_t", "room_rh", "room_w", "coil_split", "outdoor", "chw_set")
+        self._room_tiles = ("room_t", "room_rh", "room_w", "coil_split", "outdoor", "chw_set", "supply", "condensate",
+                            "dehum_state")
         for key in self._room_tiles:
             self.kpis[key].visible = False
         self.warning_row = ft.Row(wrap=True, spacing=TOKENS.spacing_xs)
@@ -437,12 +451,14 @@ class HeatPumpSimulationView(ft.Column):
                 ft.Text("播放速度", size=TOKENS.caption, color=TOKENS.text_secondary),
                 ft.Row([self.speed_dropdown]),
                 ft.Divider(height=8, color=TOKENS.border),
-                ft.Text("室溫模型", size=TOKENS.caption, color=TOKENS.text_secondary),
+                self.operation_label,
+                self.operation_button,
+                self.mode_caption,
+                ft.Text("室溫模型（暖房固定室溫；除濕必須用房間模型）", size=TOKENS.caption,
+                        color=TOKENS.text_secondary),
                 self.room_mode_button,
                 self.room_controls,
                 ft.Divider(height=8, color=TOKENS.border),
-                self.operation_label,
-                self.operation_button,
                 ft.Row([self.fan_a, self.fan_b], wrap=True),
                 ft.Text("壓縮機頻率（日立 E505DH-49A2W，變頻器階梯）", size=TOKENS.caption,
                         color=TOKENS.text_secondary),
@@ -650,7 +666,7 @@ class HeatPumpSimulationView(ft.Column):
     無。"""
         if self._room_mode:
             self.sim = self.service.new_room_session(
-                self._settings, self._scenario, reheat_mode=self._reheat_mode, chw_reset=self._chw_reset,
+                self._settings, self._scenario, reheat_mode=self._room_reheat_mode(), chw_reset=self._chw_reset,
                 cooling_control_mode=self._control_mode)
         else:
             self.sim = self.service.new_session(self._settings, cooling_control_mode=self._control_mode)
@@ -772,20 +788,43 @@ class HeatPumpSimulationView(ft.Column):
         self.speed = int(self.speed_dropdown.value)
 
     def _on_operation(self, _event: ft.ControlEvent) -> None:
-        """冷房／暖房：切換時套用該模式的預設環境溫度。
+        """冷房／暖房／除濕。
+
+        - 冷房：冰水水路；固定室溫或房間模型皆可；再熱預設關閉。
+        - 暖房：熱水水路；固定室溫（房間模型目前只支援冷房）。
+        - 除濕：冰水水路＋房間模型＋協調除濕（再熱只服務除濕、避免過冷）。
+
+        只在固定室溫的冷房／暖房之間切換時沿用目前模擬（即時套用）；牽涉房間模型時重設模擬。
 
 參數：
     _event: 事件。
 
 回傳：
     無。"""
-        operation = OperationMode(_selected(self.operation_button))
+        mode = _selected(self.operation_button)
+        if mode == self._mode:
+            return
+        previous_room = self._room_mode
+        previous_mode = self._mode
+        self._mode = mode
+        if mode == "dehumidify":
+            self._room_mode = True
+        elif mode == "heating":
+            self._room_mode = False
+        operation = OperationMode.HEATING if mode == "heating" else OperationMode.COOLING
         defaults = default_settings(operation)
-        self.reheat_slider.disabled = operation is OperationMode.HEATING
         self.room_slider.set_value(defaults.room_k - 273.15)
         self.outdoor_slider.set_value(defaults.outdoor_k - 273.15)
-        self._apply_settings(replace(self._settings, operation=operation, room_k=defaults.room_k,
-                                     outdoor_k=defaults.outdoor_k, reheat_fraction=self.reheat_slider.value / 100.0))
+        settings = replace(self._settings, operation=operation, room_k=defaults.room_k, outdoor_k=defaults.outdoor_k,
+                           reheat_fraction=self.reheat_slider.value / 100.0 if mode == "cooling" else 0.0)
+        self._sync_room_controls()
+        self.control_mode_text.value = ""
+        if previous_room or self._room_mode or previous_mode == "dehumidify":
+            self._settings = settings
+            self.control_mode_text.value = self._control_mode_caption()
+            self._restart_paused(f"已切換為{MODE_NAMES[mode]}模式，模擬已重設")
+            return
+        self._apply_settings(settings)
         self.control_mode_text.value = self._control_mode_caption()
         self._safe_update()
 
@@ -830,27 +869,39 @@ class HeatPumpSimulationView(ft.Column):
         self._safe_update()
 
     def _sync_room_controls(self) -> None:
-        """依室溫模型啟用／停用相關控制項。
+        """依運轉模式與室溫模型啟用／停用相關控制項。
 
 回傳：
     無。"""
         room = self._room_mode
+        mode = self._mode
+        self.mode_caption.value = MODE_CAPTIONS[mode]
+        self.room_mode_button.selected = ["room" if room else "fixed"]
+        # 暖房只有固定室溫、除濕只有房間模型，只有冷房可切換。
+        self.room_mode_button.disabled = mode != "cooling"
         self.room_controls.visible = room
         self.room_card.visible = room
         for key in self._room_tiles:
             self.kpis[key].visible = room
-        # 房間模式：只支援冷房；室溫、外氣由情境決定；再熱由再熱方式決定；送風機勾選改為「可用」。
-        self.operation_button.disabled = room
+        self.kpis["dehum_state"].visible = room and mode == "dehumidify"
+        # 再熱方式只在冷房＋房間模型可選；除濕固定為協調除濕。
+        self.reheat_mode_label.visible = self.reheat_mode_button.visible = mode == "cooling"
+        # 室溫、外氣由情境決定；固定比例再熱只在固定室溫的冷房有意義；送風機勾選改為「可用」。
         self.room_slider.disabled = room
         self.outdoor_slider.disabled = room
-        self.reheat_slider.disabled = room or self._settings.operation is OperationMode.HEATING
-        self.operation_label.value = ("運轉方式（房間模式只支援冷房）" if room
-                                      else "運轉方式（兩台送風機統一切換）")
+        self.reheat_slider.disabled = room or mode != "cooling"
         self.fan_a.label = "可用：送風機 A（3.5 kW）" if room else "送風機 A（3.5 kW）"
         self.fan_b.label = "可用：送風機 B（5.3 kW）" if room else "送風機 B（5.3 kW）"
 
+    def _room_reheat_mode(self) -> ReheatMode:
+        """房間模型使用的再熱方式：除濕模式為協調除濕，冷房為使用者選擇（預設關閉）。
+
+回傳：
+    ReheatMode。"""
+        return ReheatMode.COORDINATED if self._mode == "dehumidify" else self._reheat_mode
+
     def _on_room_mode(self, _event: ft.ControlEvent) -> None:
-        """固定室溫／房間溫濕度模型（§8）。切到房間模式時改為冷房，並重設模擬。
+        """固定室溫／房間溫濕度模型（§8；只有冷房可切換）。變更會重設模擬。
 
 參數：
     _event: 事件。
@@ -858,15 +909,9 @@ class HeatPumpSimulationView(ft.Column):
 回傳：
     無。"""
         room = _selected(self.room_mode_button) == "room"
-        if room == self._room_mode:
+        if room == self._room_mode or self._mode != "cooling":
             return
         self._room_mode = room
-        if room and self._settings.operation is not OperationMode.COOLING:
-            defaults = default_settings(OperationMode.COOLING)
-            self.operation_button.selected = ["cooling"]
-            self._settings = replace(self._settings, operation=OperationMode.COOLING, room_k=defaults.room_k,
-                                     outdoor_k=defaults.outdoor_k)
-            self.control_mode_text.value = self._control_mode_caption()
         self._sync_room_controls()
         self._restart_paused("已切換為房間溫濕度模型，模擬已重設" if room else "已切換為固定室溫，模擬已重設")
 
@@ -1037,6 +1082,14 @@ class HeatPumpSimulationView(ft.Column):
             k["coil_split"].set_value(f"{record.coil_sensible_w / 1000:.2f}／{record.coil_latent_w / 1000:.2f}", "kW")
             k["outdoor"].set_value(format_temperature(record.outdoor_k), "°C")
             k["chw_set"].set_value(format_temperature(record.chw_setpoint_k), "°C")
+            k["supply"].set_value(format_temperature(record.supply_k), "°C" if record.supply_k is not None else "")
+            k["condensate"].set_value(f"{record.condensate_kg_s * 3600:.2f}", "kg/h")
+            room = self.sim.room if self.sim is not None else None
+            if self._mode == "dehumidify" and room is not None:
+                k["dehum_state"].set_value("除濕＋補熱" if room.dehum_mode else "顯冷／待機",
+                                           "再熱中" if record.reheat_w > 0 else "")
+            else:
+                k["dehum_state"].set_value("—", "")
         k["flow"].set_value(f"{record.mass_flow_kg_s * 1000:.1f}" if on else "—", "g/s" if on else "")
         k["cooling"].set_value(format_power(record.cooling_w), "kW")
         k["heating"].set_value(format_power(record.heating_w), "kW")

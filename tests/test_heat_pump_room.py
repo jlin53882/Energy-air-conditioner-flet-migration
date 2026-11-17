@@ -558,3 +558,48 @@ def test_reference_counts_over_drying_as_discomfort() -> None:
     base = dc_replace(_result("base", 31.0, 0.0, 0.0), humidity_low_pct_h=31.2)
     off = dc_replace(_result("reheat_off", 26.2, 0.0, 0.0), humidity_low_pct_h=3.5)
     assert reference_result([base, off]).strategy == "reheat_off"
+
+
+# ---- 第三輪（§8.12.8）：協調除濕與低濕側門檻 ----
+
+
+def test_absolute_threshold_rejects_over_drying() -> None:
+    """絕對門檻含低濕側：RH<50 % 超標 > 5 %·h 或最低 RH < 45 % 不算達標（D5 的 46 %／全程低於帶即被擋）。
+
+回傳：
+    無。"""
+    ok = replace(_result("a", 30.0, 0.0, 0.0), min_rh=0.52)
+    assert ok.absolute_ok()
+    assert not replace(ok, humidity_low_pct_h=20.0).absolute_ok()
+    assert not replace(ok, min_rh=0.44).absolute_ok()
+    base = replace(ok, humidity_low_pct_h=1.0)
+    assert not replace(ok, humidity_low_pct_h=3.0).comfort_ok(base)
+
+
+def test_coordinated_dehumidification_enters_and_exits() -> None:
+    """協調除濕：含濕量高於上限進入除濕狀態（送風機全開、依室溫補熱、冰水降到下限）；
+    含濕量回到目標帶中間（約 55 %RH）才退出，退出後不再熱；非協調模式不會進入除濕狀態。
+
+回傳：
+    無。"""
+    c = IndoorControlParameters()
+    room = RoomModel(SCENARIOS["humid"], reheat_mode=ReheatMode.COORDINATED, chw_reset=True,
+                     initial_k=celsius(25.8), initial_rh=0.68)
+    room._indoor.chw_setpoint_k = celsius(9.0)
+    room.update_fans(8 * 3600.0, frozenset({"A", "B"}), True)
+    assert room.dehum_mode and room.fans_on == frozenset({"A", "B"})
+    assert room.reheat_request_w(8 * 3600.0, 5000.0) == pytest.approx(c.reheat_gain_w_k * (c.reheat_target_k - celsius(25.8)))
+    room.update_chw_setpoint(8 * 3600.0, True)
+    assert room.chw_setpoint_k == pytest.approx(c.chw_min_k)
+    # 濕度降到 56 %（仍高於退出門檻）：維持除濕
+    room.state = replace(room.state, humidity_ratio=psy.humidity_ratio(celsius(26.0), 0.565))
+    room.update_fans(8 * 3600.0 + c.dehum_min_s, frozenset({"A", "B"}), True)
+    assert room.dehum_mode
+    # 降到 54 %：退出，不再熱
+    room.state = replace(room.state, humidity_ratio=psy.humidity_ratio(celsius(26.0), 0.54))
+    room.update_fans(8 * 3600.0 + 2 * c.dehum_min_s, frozenset({"A", "B"}), True)
+    assert not room.dehum_mode
+    assert room.reheat_request_w(8 * 3600.0 + 2 * c.dehum_min_s, 5000.0) == 0.0
+    demand = RoomModel(SCENARIOS["humid"], reheat_mode=ReheatMode.DEMAND, initial_k=celsius(25.8), initial_rh=0.68)
+    demand.update_fans(8 * 3600.0, frozenset({"A", "B"}), True)
+    assert not demand.dehum_mode

@@ -492,32 +492,34 @@ def test_room_session_and_series(service: HeatPumpSimulationService) -> None:
 
 
 def test_view_room_mode_toggles_controls_and_charts(service: HeatPumpSimulationService) -> None:
-    """切到房間模式：改為冷房並重設、停用暖房／室溫／外氣／再熱滑桿、顯示房間卡片與數值卡；
-    情境與再熱方式變更會重設；播放後畫出室溫與 RH（含舒適帶），時間軸跨度長時改用小時。
+    """冷房切到房間模式：重設、停用室溫／外氣／再熱比例滑桿、顯示房間卡片與數值卡；情境與再熱方式變更會重設；
+    播放後畫出室溫與 RH（含舒適帶），時間軸跨度長時改用小時；暖房時不能用房間模型。
 
 回傳：
     無。"""
     view, _started = _view(service)
     view._on_play(None)
-    view.operation_button.selected = ["heating"]
-    view._on_operation(None)
+    assert view.sim.settings.reheat_fraction == 0.0 and view.reheat_slider.value == 0.0  # 冷房預設不再熱
     view.room_mode_button.selected = ["room"]
     view._on_room_mode(None)
     assert view.sim.room is not None and view.sim.settings.operation is OperationMode.COOLING
-    assert view.operation_button.disabled and view.room_slider.disabled and view.outdoor_slider.disabled
-    assert view.reheat_slider.disabled and view.room_card.visible and view.room_controls.visible
-    assert all(view.kpis[key].visible for key in view._room_tiles)
+    assert view.sim.room.reheat_mode is ReheatMode.OFF  # 冷房＋房間模型：再熱預設關閉
+    assert view.room_slider.disabled and view.outdoor_slider.disabled and view.reheat_slider.disabled
+    assert view.room_card.visible and view.room_controls.visible and view.reheat_mode_button.visible
+    assert not view.kpis["dehum_state"].visible
+    assert all(view.kpis[key].visible for key in view._room_tiles if key != "dehum_state")
     assert "可用" in view.fan_a.label and "已切換為房間" in view.status_text.value
     view.scenario_dropdown.value = "humid"
-    view.reheat_mode_button.selected = [ReheatMode.OFF.value]
+    view.reheat_mode_button.selected = [ReheatMode.DEMAND.value]
     view.chw_reset_box.value = True
     view._on_room_option(None)
     assert view.sim.room.scenario.name.startswith("高濕")
-    assert view.sim.room.reheat_mode is ReheatMode.OFF and view.sim.room.chw_reset
+    assert view.sim.room.reheat_mode is ReheatMode.DEMAND and view.sim.room.chw_reset
     view.speed = 1200
     for _ in range(40):  # 40 × 240 s = 2 h 40 min
         view.tick()
     assert view.kpis["room_t"].value_control.value != "—"
+    assert view.kpis["condensate"].unit_control.value == "kg/h"
     assert len(view.room_temp_chart.data_series) == 3 and len(view.room_rh_chart.data_series) == 3
     assert view.room_temp_chart.min_y == 22 and view.room_temp_chart.max_y == 30
     assert "在室" in view.room_note.value
@@ -526,7 +528,34 @@ def test_view_room_mode_toggles_controls_and_charts(service: HeatPumpSimulationS
         view.tick()
     assert view._axis.unit == "h"
     assert view.room_temp_chart.bottom_axis.title.value == "時刻 (h)"
-    view.room_mode_button.selected = ["fixed"]
-    view._on_room_mode(None)
-    assert view.sim.room is None and not view.room_card.visible and not view.operation_button.disabled
+    view.operation_button.selected = ["heating"]
+    view._on_operation(None)
+    assert view.sim.room is None and view.room_mode_button.disabled and not view.room_card.visible
+    assert view.sim.settings.operation is OperationMode.HEATING
     assert not any(view.kpis[key].visible for key in view._room_tiles)
+
+
+def test_view_dehumidify_mode_uses_room_model_and_coordinated_reheat(service: HeatPumpSimulationService) -> None:
+    """除濕模式：強制房間模型＋協調除濕（再熱方式不可選）、顯示除濕狀態；切回冷房時再熱回到使用者選擇（預設關閉）。
+
+回傳：
+    無。"""
+    view, _started = _view(service)
+    view._on_play(None)
+    view.operation_button.selected = ["dehumidify"]
+    view._on_operation(None)
+    assert view.sim.room is not None and view.sim.room.reheat_mode is ReheatMode.COORDINATED
+    assert view.sim.settings.operation is OperationMode.COOLING and view.sim.settings.reheat_fraction == 0.0
+    assert view.room_mode_button.disabled and view.room_mode_button.selected == ["room"]
+    assert not view.reheat_mode_button.visible and view.kpis["dehum_state"].visible
+    assert "除濕" in view.mode_caption.value and "已切換為除濕" in view.status_text.value
+    view.scenario_dropdown.value = "humid"
+    view._on_room_option(None)
+    view.speed = 1200
+    for _ in range(45):  # 06:00 → 09:00
+        view.tick()
+    assert view.kpis["dehum_state"].value_control.value in ("除濕＋補熱", "顯冷／待機")
+    view.operation_button.selected = ["cooling"]
+    view._on_operation(None)
+    assert view.sim.room is not None and view.sim.room.reheat_mode is ReheatMode.OFF
+    assert not view.room_mode_button.disabled and view.reheat_mode_button.visible

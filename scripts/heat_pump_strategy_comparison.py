@@ -189,7 +189,7 @@ def render(results: list[StrategyResult]) -> str:
             lines.append("> 沒有任何策略通過絕對舒適門檻。☆ 為**條件式**最低用電（只要求不劣於舒適基準與數值檢查），"
                          "只表示「與基準一樣不舒適時誰較省電」，不代表達標。\n")
         lines.append("| 策略 | 全系統 kWh/日 | 相對舒適基準 | 相對現行預設 | 壓縮機／水泵／送風機／室外風扇 | 顯冷／潛冷／再熱 kWh | "
-                     "溫度超標 K·h | RH>60 %·h | RH<50 %·h | 平均室溫／含濕量 | 08:00 室溫 | 室溫範圍 °C | RH 最高 | 達標 | "
+                     "溫度超標 K·h | RH>60 %·h | RH<50 %·h | 平均室溫／含濕量 | 08:00 室溫 | 室溫範圍 °C | RH 範圍 | 達標 | "
                      "主機 COP | 平均冰水設定 | 啟動 次/日（次/h） | 天數 | 日用電全距 | 殘差修正 | 絕對門檻 | 不劣於基準 |")
         lines.append("|" + "---|" * 22)
         for r in rows:
@@ -213,7 +213,7 @@ def render(results: list[StrategyResult]) -> str:
                 f"{r.humidity_high_pct_h:.1f} | {r.humidity_low_pct_h:.1f} | "
                 f"{r.mean_room_k - 273.15:.2f} °C／{r.mean_humidity_ratio * 1000:.1f} g/kg | "
                 f"{r.occupancy_start_k - 273.15:.1f} | "
-                f"{r.min_temperature_k - 273.15:.1f}–{r.max_temperature_k - 273.15:.1f} | {r.max_rh * 100:.0f} % | "
+                f"{r.min_temperature_k - 273.15:.1f}–{r.max_temperature_k - 273.15:.1f} | {r.min_rh * 100:.0f}–{r.max_rh * 100:.0f} % | "
                 f"{_fmt_pulldown(r.pulldown_s)} | {r.chiller_cop or 0:.2f} | {r.mean_chw_setpoint_k - 273.15:.1f} °C | "
                 f"{starts} | {r.days}{'' if r.periodic else '（未收斂）'} | {r.daily_kwh_range:.2f} | "
                 f"{r.storage_correction_kwh:+.2f} | {'是' if r.absolute_ok() else '**否**'} | {rel_ok} |"

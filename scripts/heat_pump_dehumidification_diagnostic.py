@@ -13,6 +13,16 @@
   確認瓶頸是否在按需再熱的濕度閘門。
 - D6：D5 但再熱能力維持原規格，判斷是否需要加大再熱盤管。
 
+D5 能證明「除濕做得到」，但會過度除濕：大再熱讓冷卻盤管一直不必停，持續除水（RH 最高只有 46 %）。
+E 系列改用協調除濕（``ReheatMode.COORDINATED``，§8.12.8）：只在除濕狀態補熱，濕度回到目標帶即退出：
+
+- E1：協調除濕（再熱維持原規格）。
+- E2：E1 ＋ 再熱能力 × 2。
+- E3：E1 ＋ 再熱能力 × 6。
+- E4：E3 ＋ 冰水 5.5 °C。
+
+絕對門檻含低濕側（RH<50 % 超標 ≤ 5 %·h、最低 RH ≥ 45 %）。
+
 用法：
     uv run python scripts/heat_pump_dehumidification_diagnostic.py [--split]
 """
@@ -40,6 +50,10 @@ STEPS = {
     "D4": "＋再熱能力 × 6（近似不受限）",
     "D5": "＋再熱只依室溫開關",
     "D6": "D5 但再熱能力維持原規格（UA 88 W/K）",
+    "E1": "協調除濕（再熱原規格）",
+    "E2": "協調除濕＋再熱能力 × 2",
+    "E3": "協調除濕＋再熱能力 × 6",
+    "E4": "協調除濕＋再熱 × 6＋冰水 5.5 °C",
 }
 _TABLE: CycleTable | None = None
 
@@ -67,6 +81,10 @@ _RELAX = {
     "D4": {"fans", "chw", "reheat_x6"},
     "D5": {"fans", "chw", "reheat_x6", "reheat_by_temperature"},
     "D6": {"fans", "chw", "reheat_by_temperature"},
+    "E1": {"coordinated"},
+    "E2": {"coordinated", "reheat_x2"},
+    "E3": {"coordinated", "reheat_x6"},
+    "E4": {"coordinated", "reheat_x6", "chw"},
 }
 
 
@@ -74,7 +92,7 @@ def control_for(step: str) -> IndoorControlParameters:
     """各診斷步驟的室內控制參數。
 
 參數：
-    step: D0–D6。
+    step: D0–D6、E1–E4。
 
 回傳：
     IndoorControlParameters。"""
@@ -109,7 +127,8 @@ def _job(args: tuple[str, bool]) -> tuple[str, StrategyResult]:
     params = replace(HeatPumpParameters(), electrical=FULL_ELECTRICAL)
     if split:
         params = replace(params, control=replace(params.control, cooling_control_mode=CoolingControlMode.SPLIT))
-    strategy = Strategy(f"dehum_{step}", STEPS[step], reheat_mode=ReheatMode.DEMAND)
+    mode = ReheatMode.COORDINATED if "coordinated" in _RELAX[step] else ReheatMode.DEMAND
+    strategy = Strategy(f"dehum_{step}", STEPS[step], reheat_mode=mode)
     result = run_strategy(_table(), "humid", SCENARIOS["humid"], strategy, params=params, control=control_for(step))
     return step, result
 
@@ -126,12 +145,13 @@ def main() -> None:
     args = parser.parse_args()
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
         rows = list(pool.map(_job, [(step, args.split) for step in args.steps.split(",")]))
-    print("| 步驟 | 內容 | kWh/日 | 顯冷／潛冷／再熱 kWh | 溫度超標 K·h | RH>60 %·h | RH 最高 | 平均室溫／含濕量 | "
-          "冰水桶平均 | 主機 COP | 保護事件 次/日 | 絕對門檻 |")
-    print("|" + "---|" * 12)
+    print("| 步驟 | 內容 | kWh/日 | 顯冷／潛冷／再熱 kWh | 溫度超標 K·h | RH>60 %·h | RH<50 %·h | RH 範圍 | "
+          "平均室溫／含濕量 | 冰水桶平均 | 主機 COP | 保護事件 次/日 | 絕對門檻 |")
+    print("|" + "---|" * 13)
     for step, r in rows:
         print(f"| {step} | {STEPS[step]} | {r.energy_kwh:.2f} | {r.sensible_kwh:.1f}／{r.latent_kwh:.1f}／{r.reheat_kwh:.1f} | "
-              f"{r.temperature_exceed_kh:.2f} | {r.humidity_high_pct_h:.1f} | {r.max_rh * 100:.0f} % | "
+              f"{r.temperature_exceed_kh:.2f} | {r.humidity_high_pct_h:.1f} | {r.humidity_low_pct_h:.1f} | "
+              f"{r.min_rh * 100:.0f}–{r.max_rh * 100:.0f} % | "
               f"{r.mean_room_k - 273.15:.2f} °C／{r.mean_humidity_ratio * 1000:.1f} g/kg | "
               f"{r.cold_tank_mean_k - 273.15:.2f} °C | {r.chiller_cop or 0:.2f} | {r.protection_events} | {'是' if r.absolute_ok() else '否'} |")
 
