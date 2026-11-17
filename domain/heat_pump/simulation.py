@@ -30,7 +30,7 @@ from .control import FrequencyStepper, PidController
 from .cycle_table import CycleTable
 from .parameters import WATER_CP_J_KG_K, HeatPumpParameters, celsius, gpm_to_kg_s
 from .room import RoomModel, SupplyAir
-from .wet_coil import CoilResult, coil_performance
+from .wet_coil import CoilResult, coil_performance, invariant_violations
 
 
 class OperationMode(str, Enum):
@@ -56,8 +56,6 @@ class PumpMode(str, Enum):
 
 OUTDOOR_RANGE_K = (celsius(-10.0), celsius(45.0))
 ROOM_RANGE_K = (celsius(10.0), celsius(35.0))
-# 房間模型＋水泵自動：送風機運轉時冰水泵的最低頻率（§8.4）。
-ROOM_COLD_PUMP_FLOOR_HZ = 40.0
 
 WARNING_HIGH_PRESSURE = "high_pressure"
 WARNING_HP_LIMITING = "hp_limiting"
@@ -261,6 +259,8 @@ class HeatPumpSimulation:
         self._pumps_on = (True, True)
         self._last_reheat_request_w = 0.0
         self._coil_cache: tuple[tuple, list[tuple[str, CoilResult]]] | None = None
+        # 盤管物理不變量違反次數（能量守恆、含濕量範圍、過飽和、收斂；§8.2）。
+        self.coil_check_failures: dict[str, int] = {}
         self.params = params or HeatPumpParameters()
         if table.settings != self.params.cycle:
             raise ValueError("性質表的循環設定與模擬參數不一致。")
@@ -497,8 +497,11 @@ class HeatPumpSimulation:
         results = []
         for name in sorted(fans):
             coil = room.coils[name]
-            results.append((name, coil_performance(coil, room.state.temperature_k, room.state.humidity_ratio,
-                                                   self.cold_water_k, flows.get(name, 0.0))))
+            args = (coil, room.state.temperature_k, room.state.humidity_ratio, self.cold_water_k, flows.get(name, 0.0))
+            result = coil_performance(*args)
+            for problem in invariant_violations(*args, result):
+                self.coil_check_failures[problem] = self.coil_check_failures.get(problem, 0) + 1
+            results.append((name, result))
         self._coil_cache = (key, results)
         return results
 
@@ -598,13 +601,15 @@ class HeatPumpSimulation:
             cold_dt = max(cold_dt, self._fan_coil_load_w() / (self._cold_flow_kg_s() * WATER_CP_J_KG_K))
         cold = self._next_pump_hz(self.params.cold_pump.frequency_steps_hz, self.params.cold_pump.flow_gpm,
                                   ctrl.cold_pump_hz, cold_dt, c.pump_cold_delta_t_k, ctrl.cold_pump_changed_s)
-        if room is not None and cold < ctrl.cold_pump_hz:
-            ic = room.control
-            # 舒適度保護：室溫高於上限或濕度偏高時不降階；送風機運轉中最低 40 Hz。
-            uncomfortable = (room.state.temperature_k > ic.setpoint_k + ic.band_k
-                             or room.relative_humidity > ic.rh_high)
-            floor = ROOM_COLD_PUMP_FLOOR_HZ if room.fans_on else min(self.params.cold_pump.frequency_steps_hz)
-            if uncomfortable or cold < floor:
+        if room is not None and room.fans_on:
+            # 舒適度保護（§8.4）：送風機運轉中，溫濕度（預測）接近上限時升一階（受最短停留限制）；
+            # 只有實際與預測都有餘裕時才允許降階。最低流量即最低階梯，防凍由板式蒸發器保護處理。
+            steps = sorted(self.params.cold_pump.frequency_steps_hz)
+            dwell_ok = self.time_s - ctrl.cold_pump_changed_s >= c.pump_step_dwell_s
+            if room.comfort_tight():
+                higher = [step for step in steps if step > ctrl.cold_pump_hz]
+                cold = higher[0] if higher and dwell_ok else max(cold, ctrl.cold_pump_hz)
+            elif cold < ctrl.cold_pump_hz and not room.comfort_ample():
                 cold = ctrl.cold_pump_hz
         hot = self._next_pump_hz(self.params.hot_pump.frequency_steps_hz, self.params.hot_pump.flow_gpm,
                                  ctrl.hot_pump_hz, hot_dt, c.pump_hot_delta_t_k, ctrl.hot_pump_changed_s)
@@ -680,10 +685,6 @@ class HeatPumpSimulation:
                 ctrl.off_since_s = self.time_s
                 self._event("schedule_stop", "空調排程停用，壓縮機停機")
             room.update_fans(self.time_s, s.fans, enabled)
-            if (s.pump_mode is PumpMode.AUTO and room.fans_on
-                    and ctrl.cold_pump_hz < ROOM_COLD_PUMP_FLOOR_HZ <= max(p.cold_pump.frequency_steps_hz)):
-                # 送風機運轉中冰水泵最低 40 Hz（立即生效，不受最短停留限制）。
-                ctrl.cold_pump_hz, ctrl.cold_pump_changed_s = ROOM_COLD_PUMP_FLOOR_HZ, self.time_s
             room.update_chw_setpoint(self.time_s, enabled)
             self._pumps_on = self._pump_states(enabled)
 

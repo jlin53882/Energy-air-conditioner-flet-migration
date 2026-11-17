@@ -13,12 +13,25 @@ from domain.heat_pump.comparison import (
     ComfortTolerance,
     Strategy,
     StrategyResult,
+    best_relative_only,
     best_strategy,
     reference_result,
 )
 from domain.heat_pump.parameters import FULL_ELECTRICAL, HeatPumpParameters
-from domain.heat_pump.room import DEFAULT_COILS, SCENARIOS, IndoorControlParameters, ReheatMode, RoomModel
-from domain.heat_pump.wet_coil import coil_performance, counterflow_effectiveness, water_side_ua
+from domain.heat_pump.room import (
+    DEFAULT_COILS,
+    SCENARIOS,
+    DailyScenario,
+    IndoorControlParameters,
+    ReheatMode,
+    RoomModel,
+)
+from domain.heat_pump.wet_coil import (
+    coil_performance,
+    counterflow_effectiveness,
+    invariant_violations,
+    water_side_ua,
+)
 from domain.thermodynamics.state_service import ThermodynamicStateService
 from domain.units.converter import CanonicalUnitConverter
 
@@ -101,7 +114,7 @@ def test_counterflow_effectiveness_limits() -> None:
 
 @pytest.mark.parametrize(("air_c", "flow", "measured_kw"), TABLE_8_1_1)
 def test_wet_coil_reproduces_table_8_1_1(air_c: float, flow: float, measured_kw: float) -> None:
-    """盤管 B 對表 8.1.1 每一點的空氣側冷量誤差 ≤ 6 %（擬合點）。
+    """盤管 B 對表 8.1.1 每一點的空氣側冷量誤差 ≤ 6 %（26／27 °C 為擬合點、28 °C 為驗證點）。
 
 參數：
     air_c: 進風溫度。
@@ -125,7 +138,7 @@ def test_lower_water_flow_reduces_coil_capacity_and_dehumidification() -> None:
     low = coil_performance(COIL_B, celsius(27.0), w, celsius(7.0), 0.30)
     assert 0.85 < low.total_w / full.total_w < 0.95
     assert low.latent_w < full.latent_w
-    assert water_side_ua(COIL_B, 0.31) == pytest.approx(COIL_B.water_side_ua_w_k * 0.5 ** 0.5)
+    assert water_side_ua(COIL_B, 0.31) == pytest.approx(COIL_B.water_side_ua_w_k * 0.5 ** COIL_B.water_flow_exponent)
 
 
 def test_warmer_chilled_water_cuts_latent_more_than_sensible() -> None:
@@ -141,7 +154,7 @@ def test_warmer_chilled_water_cuts_latent_more_than_sensible() -> None:
 
 
 def test_coil_energy_balance_and_dry_coil() -> None:
-    """空氣側焓降 = 水側得熱；進水高於露點時為乾盤管（潛冷 0）；無水量時無熱傳。
+    """空氣側焓降 = 水側得熱（≤ 1e-6）；進水高於露點時為全乾（W 不變、凝結 0）；無水量時無熱傳。
 
 回傳：
     無。"""
@@ -149,12 +162,56 @@ def test_coil_energy_balance_and_dry_coil() -> None:
     r = coil_performance(COIL_B, celsius(27.0), w, celsius(7.0), 0.62)
     air_side = COIL_B.air_flow_kg_s * (psy.enthalpy_j_kg(celsius(27.0), w)
                                        - psy.enthalpy_j_kg(r.air_out_k, r.air_out_humidity_ratio))
-    assert air_side == pytest.approx(r.total_w, rel=0.03)
-    assert r.total_w == pytest.approx(0.62 * 4186 * (r.water_out_k - celsius(7.0)), rel=1e-6)
+    assert air_side == pytest.approx(r.total_w, rel=1e-6)
+    assert r.total_w == pytest.approx(0.62 * 4186 * (r.water_out_k - celsius(7.0)), rel=1e-9)
     dry_w = psy.humidity_ratio(celsius(26.0), 0.3)
     dry = coil_performance(COIL_B, celsius(26.0), dry_w, celsius(14.0), 0.62)
-    assert not dry.wet and dry.latent_w == 0.0 and dry.total_w > 0
+    assert not dry.wet and dry.latent_w == 0.0 and dry.total_w > 0 and dry.wet_fraction == 0.0
+    assert dry.air_out_humidity_ratio == dry_w
     assert coil_performance(COIL_B, celsius(27.0), w, celsius(7.0), 0.0).total_w == 0.0
+
+
+def test_coil_invariants_hold_over_operating_grid() -> None:
+    """兩台盤管 × 進風 18–35 °C × RH 15–95 % × 進水 5–20 °C × 水量 0.05–0.62 kg/s：
+    能量守恆、0 ≤ W_out ≤ W_in、RH_out ≤ 100 %、凝結 ≥ 0、迭代收斂全部成立。
+
+回傳：
+    無。"""
+    failures = []
+    for coil in DEFAULT_COILS:
+        for air_c in range(18, 36, 3):
+            for rh in (0.15, 0.35, 0.55, 0.75, 0.95):
+                w = psy.humidity_ratio(celsius(air_c), rh)
+                for water_c in (5.0, 8.0, 11.0, 14.0, 17.0, 20.0):
+                    for flow in (0.05, 0.2, 0.43, 0.62):
+                        result = coil_performance(coil, celsius(air_c), w, celsius(water_c), flow)
+                        problems = invariant_violations(coil, celsius(air_c), w, celsius(water_c), flow, result)
+                        if problems:
+                            failures.append((coil.name, air_c, rh, water_c, flow, problems))
+    assert failures == []
+
+
+def test_part_wet_transition_is_continuous() -> None:
+    """乾→部分濕→全濕的切換連續：進風 RH 每升 1 %，冷量增量不超過全濕區段斜率的 1.5 倍
+    （約 80 W／%RH；舊「取大者」在切換點會跳）。
+
+回傳：
+    無。"""
+    previous = None
+    fractions = []
+    w_hi = psy.humidity_ratio(celsius(26.0), 0.80)
+    w_lo = psy.humidity_ratio(celsius(26.0), 0.70)
+    wet_slope = (coil_performance(COIL_B, celsius(26.0), w_hi, celsius(10.0), 0.62).total_w
+                 - coil_performance(COIL_B, celsius(26.0), w_lo, celsius(10.0), 0.62).total_w) / 10
+    for rh_pct in range(20, 91):
+        w = psy.humidity_ratio(celsius(26.0), rh_pct / 100)
+        result = coil_performance(COIL_B, celsius(26.0), w, celsius(10.0), 0.62)
+        fractions.append(result.wet_fraction)
+        if previous is not None:
+            assert 0.0 <= result.total_w - previous <= 1.5 * wet_slope
+        previous = result.total_w
+    assert fractions[0] == 0.0 and fractions[-1] == 1.0
+    assert any(0.0 < f < 1.0 for f in fractions)  # 中間有部分濕區段
 
 
 # ---- 房間 ----
@@ -171,6 +228,34 @@ def test_room_drifts_toward_outdoor_without_supply() -> None:
         room.step(10 * 3600 + i * 10.0, 10.0, [], 0.0)
     assert room.state.temperature_k > celsius(26.5)
     assert room.state.humidity_ratio > w0
+
+
+def test_scenario_rejects_supersaturated_outdoor_air() -> None:
+    """外氣含濕量超過當日最低溫度的飽和值時拒絕（原高濕情境 0.019 在 24 °C 已過飽和）。
+
+回傳：
+    無。"""
+    with pytest.raises(ValueError, match="飽和"):
+        DailyScenario("x", 25.5, 1.5, 0.0190, 0.0, 0, 0.0)
+    for scenario in SCENARIOS.values():
+        assert scenario.outdoor_humidity(5 * 3600) <= psy.saturation_humidity_ratio(scenario.outdoor_k(5 * 3600))
+
+
+def test_trend_prediction_triggers_staging_before_limit() -> None:
+    """室溫仍在帶內但持續上升時，以預測值提前加開送風機（不等到超標）。
+
+回傳：
+    無。"""
+    room = RoomModel(SCENARIOS["hot"], initial_k=celsius(25.7), initial_rh=0.5)
+    room.update_fans(0.0, frozenset({"A", "B"}), True)
+    assert room.fans_on == frozenset()  # 尚未上升
+    for i in range(60):  # 無送風，高溫情境午後持續升溫 300 s
+        room.step(13 * 3600 + i * 5.0, 5.0, [], 0.0)
+    assert room.state.temperature_k < celsius(26.5)
+    assert room.predicted_temperature_k > room.state.temperature_k
+    assert room.state.temperature_k < celsius(26.2)  # 實際值還沒到開機門檻
+    room.update_fans(13 * 3600 + 600.0, frozenset({"A", "B"}), True)
+    assert room.fans_on  # 預測已接近上限，提前開
 
 
 def test_scenario_schedule_and_profiles() -> None:
@@ -207,7 +292,7 @@ def test_fan_staging_keeps_one_fan_when_humid() -> None:
 
 
 def test_chw_reset_moves_setpoint_with_humidity() -> None:
-    """冰水重設：乾且不熱時每 5 min 升 0.5 K（上限 10 °C）；濕度偏高時降。
+    """冰水重設：溫濕度都有餘裕時每 5 min 升 0.5 K（上限 10 °C）；濕度接近上限時降。
 
 回傳：
     無。"""
@@ -325,21 +410,30 @@ def test_chw_reset_raises_compressor_stop_temperature(table: CycleTable) -> None
 
 回傳：
     無。"""
-    _, _, records = _room_sim(table, scenario="mild", hours=3.0, start_h=8.0, chw_reset=True,
-                              reheat_mode=ReheatMode.OFF)
-    assert max(r.chw_setpoint_k for r in records) > celsius(7.4)
-    later = [r for r in records if r.time_s > 9.5 * 3600]
-    assert min(r.cold_water_k for r in later) > celsius(7.2)
+    sim, _, records = _room_sim(table, scenario="mild", hours=6.0, start_h=8.0, chw_reset=True,
+                                reheat_mode=ReheatMode.OFF)
+    raised = [r for r in records if r.chw_setpoint_k > celsius(7.4)]
+    assert raised
+    stops = {e.time_s for e in sim.events if e.code == "stop"}
+    stop_records = [r for r in records if r.time_s + r.dt_s in stops]
+    # 每次停機時的冰水溫度都在當時設定值附近（不再固定 7 °C），且至少一次在 7.4 °C 以上停機。
+    assert stop_records and all(abs(r.cold_water_k - r.chw_setpoint_k) < 0.3 for r in stop_records)
+    assert any(r.cold_water_k > celsius(7.4) for r in stop_records)
 
 
-def test_auto_pump_respects_comfort_floor(table: CycleTable) -> None:
-    """水泵自動（房間模型）：送風機運轉時冰水泵不低於 40 Hz。
+def test_auto_pump_steps_up_when_comfort_tight(table: CycleTable) -> None:
+    """水泵自動（房間模型）：送風機運轉且溫濕度（預測）接近上限時冰水泵不降階，並逐階升到 60 Hz；
+    不再有固定 40 Hz 下限（只在溫濕度有餘裕時才降階）。
 
 回傳：
     無。"""
-    _, _, records = _room_sim(table, scenario="mild", hours=2.0, start_h=8.0, pump_mode=PumpMode.AUTO,
-                              reheat_mode=ReheatMode.OFF)
-    assert all(r.cold_pump_hz >= 40.0 for r in records if r.fans_running and r.cold_pump_hz > 0)
+    sim, room, records = _room_sim(table, scenario="hot", hours=1.0, start_h=8.0, pump_mode=PumpMode.AUTO,
+                                   reheat_mode=ReheatMode.OFF)
+    tight = [r for r in records if r.fans_running and r.room_k > celsius(26.5)]
+    assert tight and max(r.cold_pump_hz for r in tight) == 60.0
+    for a, b in zip(records, records[1:]):
+        if a.fans_running and a.room_k > celsius(26.5):
+            assert b.cold_pump_hz >= a.cold_pump_hz or b.cold_pump_hz == 0.0
 
 
 def test_room_model_rejects_heating(table: CycleTable) -> None:
@@ -388,6 +482,23 @@ def test_reference_is_more_comfortable_baseline_and_best_respects_comfort() -> N
     assert not rows[2].comfort_ok(rows[1]) and not rows[4].comfort_ok(rows[1], ComfortTolerance())
 
 
+def test_absolute_threshold_and_validity_gate_the_ranking() -> None:
+    """與基準一樣差不算達標：全部超過絕對門檻時沒有 ⭐，只有條件式排名；數值檢查失敗者不列入。
+
+回傳：
+    無。"""
+    hot = [_result("base", 45.0, 9.5, 0.0), _result("reheat_off", 38.0, 0.8, 0.0), _result("combo", 33.0, 0.8, 0.0)]
+    assert best_strategy(hot) is None
+    assert best_relative_only(hot).strategy == "combo"
+    from dataclasses import replace as dc_replace
+
+    broken = dc_replace(_result("combo", 30.0, 0.3, 0.0), coil_check_failures=3)
+    ok = [_result("reheat_off", 38.0, 0.3, 0.0), broken]
+    assert best_strategy(ok).strategy == "reheat_off"
+    unconverged = dc_replace(_result("combo", 30.0, 0.3, 0.0), periodic=False)
+    assert not unconverged.valid
+
+
 def test_single_strategies_inherit_reference_reheat() -> None:
     """單一策略疊在舒適基準的再熱方式上；組合與基準不受影響。
 
@@ -399,3 +510,15 @@ def test_single_strategies_inherit_reference_reheat() -> None:
     assert by_key["pump40"].layered_on(by_key["reheat_off"]).reheat_mode is ReheatMode.OFF
     assert by_key["combo"].layered_on(by_key["base"]).reheat_mode is ReheatMode.DEMAND
     assert Strategy("x", "x").layered_on(by_key["reheat_off"]).reheat_mode is ReheatMode.FIXED
+
+
+def test_reference_counts_over_drying_as_discomfort() -> None:
+    """兩個基準候選溫度都不超標時，過度除濕（RH < 50 %）較多者不當舒適基準。
+
+回傳：
+    無。"""
+    from dataclasses import replace as dc_replace
+
+    base = dc_replace(_result("base", 31.0, 0.0, 0.0), humidity_low_pct_h=31.2)
+    off = dc_replace(_result("reheat_off", 26.2, 0.0, 0.0), humidity_low_pct_h=3.5)
+    assert reference_result([base, off]).strategy == "reheat_off"
