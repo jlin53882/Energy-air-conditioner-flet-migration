@@ -32,6 +32,14 @@ class ReheatMode(str, Enum):
     COORDINATED = "coordinated"
 
 
+class ZoneMode(str, Enum):
+    """區域（一台送風機服務的房間）的運轉模式（§8.12.9）。暖房需要獨立熱水水路，屬第二階段，尚未支援。"""
+
+    COOLING = "cooling"
+    DEHUMIDIFY = "dehumidify"
+    OFF = "off"
+
+
 # 盤管參數（§8.2）：B 以部分乾濕模型對表 8.1.1 的 26／27 °C 兩組 10 點總冷量擬合、28 °C 組驗證
 # （擬合 RMS 2.1 %、驗證 4.8 %）；水量指數 n 固定 0.8（自由擬合會卡在上限，參數不可辨識）。
 # A 依額定冷量比 0.667 等比縮放（假設）。表 8.1.1 的出口溫濕度在物理上不一致，不用於擬合（§8.2）。
@@ -280,6 +288,8 @@ class SupplyAir:
     air_flow_kg_s: float
     temperature_k: float
     humidity_ratio: float
+    # 送風機名稱（多區時用來把送風送回所屬房間；單一房間不使用）。
+    name: str = ""
 
 
 @dataclass
@@ -304,7 +314,8 @@ class RoomModel:
                  control: IndoorControlParameters | None = None, coils: tuple[CoilParameters, ...] = DEFAULT_COILS,
                  reheat_mode: ReheatMode = ReheatMode.FIXED, reheat_fraction: float = 0.2,
                  chw_reset: bool = False, initial_k: float = celsius(29.0), initial_rh: float = 0.65,
-                 water_split: dict[str, float] | None = None) -> None:
+                 water_split: dict[str, float] | None = None, mode: ZoneMode = ZoneMode.COOLING,
+                 name: str = "") -> None:
         """建立房間模型。
 
 參數：
@@ -318,9 +329,17 @@ class RoomModel:
     initial_k: 初始室溫。
     initial_rh: 初始相對濕度。
     water_split: 各盤管分流權重（預設依額定水量比）。
+    mode: 區域模式（多區用；除濕會改用協調除濕，停止則送風機不開、不再熱、不要求冰水）。
+    name: 區域名稱（多區用）。
 
 回傳：
     無。"""
+        self.mode = mode
+        self.name = name
+        if mode is ZoneMode.DEHUMIDIFY:
+            reheat_mode = ReheatMode.COORDINATED
+        elif mode is ZoneMode.OFF:
+            reheat_mode = ReheatMode.OFF
         self.scenario = scenario
         self.params = params or RoomParameters()
         self.control = control or IndoorControlParameters()
@@ -333,6 +352,7 @@ class RoomModel:
         self._indoor = _IndoorState(chw_setpoint_k=self.control.chw_min_k)
         # 房間空氣過飽和而被截去的水量（應為 0；非 0 表示需要處理房間結露）。
         self.condensed_kg = 0.0
+        self.last_reheat_demand_w = 0.0
 
     # ---- 讀值 ----
     @property
@@ -376,7 +396,7 @@ class RoomModel:
 
 回傳：
             bool。"""
-        if not self._indoor.fans_on:
+        if not self._indoor.fans_on or self.mode is ZoneMode.OFF:
             return False
         c = self.control
         return self.predicted_temperature_k > c.tight_t_k or self.predicted_humidity_ratio > c.tight_w
@@ -386,6 +406,8 @@ class RoomModel:
 
 回傳：
             bool。"""
+        if self.mode is ZoneMode.OFF:
+            return True
         c = self.control
         return (max(self.state.temperature_k, self.predicted_temperature_k) <= c.ample_t_k
                 and max(self.state.humidity_ratio, self.predicted_humidity_ratio) <= c.ample_w)
@@ -484,7 +506,7 @@ class RoomModel:
     無。"""
         ind = self._indoor
         self._update_dehum_mode(time_s, enabled)
-        if not enabled:
+        if not enabled or self.mode is ZoneMode.OFF:
             ind.fans_on = set()
             ind.stage1_since_s = None
             return
@@ -589,6 +611,32 @@ class RoomModel:
             return 0.0
         return max(0.0, c.reheat_gain_w_k * (c.reheat_target_k - t))
 
+    def coil_state(self, _name: str) -> RoomState:
+        """某台送風機盤管的入風狀態（單一房間：所有盤管都取房間狀態）。
+
+參數：
+    _name: 送風機名稱。
+
+回傳：
+    RoomState。"""
+        return self.state
+
+    def allocate_reheat(self, time_s: float, loads: dict[str, float], capacities: dict[str, float]) -> dict[str, float]:
+        """各盤管的實際再熱量：需求取自整體盤管冷量，依再熱盤管能力比例分配、不超過總能力。
+
+參數：
+    time_s: 時間。
+    loads: 各盤管冷量（W）。
+    capacities: 各再熱盤管能力（W）。
+
+回傳：
+    名稱 → W。"""
+        demand = self.reheat_request_w(time_s, sum(loads.values()))
+        self.last_reheat_demand_w = demand
+        total = sum(capacities.values())
+        reheat = min(demand, total)
+        return {name: reheat * cap / total if total > 0 else 0.0 for name, cap in capacities.items()}
+
     def reheat_capacity_w(self, coil_air_out_k: float, air_flow_kg_s: float, hot_water_k: float) -> float:
         """再熱盤管能力 ε·ṁ_a·cp·(熱水 − 盤管出風)。
 
@@ -657,3 +705,318 @@ class RoomModel:
         ind.t_slope_k_s += alpha * ((self.state.temperature_k - t) / dt_s - ind.t_slope_k_s)
         ind.w_slope_s += alpha * ((self.state.humidity_ratio - w) / dt_s - ind.w_slope_s)
         return supply_sensible, supply_moisture
+
+
+# ---- 多區（§8.12.9）：A、B 各自服務一個房間，共用冰水 ----
+
+
+@dataclass(frozen=True)
+class ZoneSnapshot:
+    """單一區域在某一步的狀態（記錄用）。"""
+
+    name: str
+    mode: ZoneMode
+    temperature_k: float
+    relative_humidity: float
+    humidity_ratio: float
+    fans_on: frozenset[str]
+    dehum_mode: bool
+    supply_k: float | None = None
+    reheat_w: float = 0.0
+    sensible_w: float = 0.0
+    latent_w: float = 0.0
+    condensate_kg_s: float = 0.0
+
+
+class ZoneGroup:
+    """多個房間（區域）組成的群組，介面與 :class:`RoomModel` 相同，可直接傳給 ``HeatPumpSimulation(room=...)``。
+
+    - 每區有自己的室溫、含濕量、內部負荷與模式（冷房／除濕／停止），只用自己的送風機盤管。
+    - 共用：外氣與排程（取第一區的情境）、冰水桶與水泵。冰水設定取各運轉區要求的最低值；
+      任一運轉區接近上限即為 tight，所有運轉區都有餘裕才為 ample。
+    - 再熱各區獨立（前提：每台送風機的再熱可獨立控制，**假設**）。
+    - ``state``／``relative_humidity`` 為依體積加權的平均，只用於水桶散熱與總覽；舒適度要看各區（``snapshots``）。
+    """
+
+    def __init__(self, zones: tuple[RoomModel, ...]) -> None:
+        """建立群組。
+
+參數：
+    zones: 各區房間模型（名稱不可重複、盤管不可重疊、排程須相同）。
+
+回傳：
+    無。
+
+引發：
+    ValueError：設定不一致時。"""
+        if not zones:
+            raise ValueError("至少需要一個區域。")
+        names = [zone.name for zone in zones]
+        if len(set(names)) != len(names) or not all(names):
+            raise ValueError("區域名稱必須唯一且不得為空。")
+        owner: dict[str, RoomModel] = {}
+        for zone in zones:
+            for coil in zone.coils:
+                if coil in owner:
+                    raise ValueError(f"送風機 {coil} 同時屬於多個區域。")
+                owner[coil] = zone
+        first = zones[0].scenario
+        for zone in zones[1:]:
+            sc = zone.scenario
+            if (sc.occupied_hours, sc.precool_h, sc.outdoor_mean_c, sc.outdoor_amplitude_k,
+                    sc.outdoor_humidity_ratio) != (first.occupied_hours, first.precool_h, first.outdoor_mean_c,
+                                                   first.outdoor_amplitude_k, first.outdoor_humidity_ratio):
+                raise ValueError("各區的外氣與排程必須相同（同一建物）。")
+        self.zones = zones
+        self._owner = owner
+        self.scenario = first
+        self.control = zones[0].control
+        self.params = zones[0].params
+        self.coils = {name: zone.coils[name] for name, zone in owner.items()}
+        self.water_split = {name: zone.water_split[name] for name, zone in owner.items()}
+        self.chw_reset = any(zone.chw_reset for zone in zones)
+        self.snapshots: tuple[ZoneSnapshot, ...] = ()
+        self.last_reheat_demand_w = 0.0
+
+    # ---- 彙總 ----
+    def _active(self) -> list[RoomModel]:
+        """運轉中的區域（模式不是停止）。
+
+回傳：
+    區域清單。"""
+        return [zone for zone in self.zones if zone.mode is not ZoneMode.OFF]
+
+    @property
+    def state(self) -> RoomState:
+        """依體積加權的平均狀態。
+
+回傳：
+            RoomState。"""
+        total = sum(zone.params.volume_m3 for zone in self.zones)
+        t = sum(zone.state.temperature_k * zone.params.volume_m3 for zone in self.zones) / total
+        w = sum(zone.state.humidity_ratio * zone.params.volume_m3 for zone in self.zones) / total
+        return RoomState(t, w)
+
+    @property
+    def relative_humidity(self) -> float:
+        """平均狀態的相對濕度。
+
+回傳：
+            0–1。"""
+        state = self.state
+        return psy.relative_humidity(state.temperature_k, state.humidity_ratio)
+
+    @property
+    def fans_on(self) -> frozenset[str]:
+        """所有區域運轉中的送風機。
+
+回傳：
+            名稱集合。"""
+        return frozenset().union(*(zone.fans_on for zone in self.zones))
+
+    @property
+    def chw_setpoint_k(self) -> float:
+        """共用冰水設定：各運轉區要求的最低值（都停止時取第一區）。
+
+回傳：
+            K。"""
+        active = self._active() or list(self.zones)
+        return min(zone.chw_setpoint_k for zone in active)
+
+    @property
+    def dehum_mode(self) -> bool:
+        """任一區處於除濕狀態。
+
+回傳：
+            bool。"""
+        return any(zone.dehum_mode for zone in self.zones)
+
+    @property
+    def condensed_kg(self) -> float:
+        """各區房間過飽和截去的水量合計。
+
+回傳：
+            kg。"""
+        return sum(zone.condensed_kg for zone in self.zones)
+
+    def comfort_tight(self) -> bool:
+        """任一運轉區接近上限。
+
+回傳：
+            bool。"""
+        return any(zone.comfort_tight() for zone in self._active())
+
+    def comfort_ample(self) -> bool:
+        """所有運轉區都有餘裕。
+
+回傳：
+            bool。"""
+        return all(zone.comfort_ample() for zone in self._active())
+
+    def zone_of(self, coil: str) -> RoomModel:
+        """送風機所屬區域。
+
+參數：
+    coil: 送風機名稱。
+
+回傳：
+    RoomModel。"""
+        return self._owner[coil]
+
+    # ---- 控制 ----
+    def water_flows(self, total_kg_s: float, fans: frozenset[str]) -> dict[str, float]:
+        """總水量依分流權重分配到各盤管（水流經所有可用盤管，與區域模式無關：無盤管水閥）。
+
+參數：
+    total_kg_s: 總水量。
+    fans: 可用送風機。
+
+回傳：
+    名稱 → kg/s。"""
+        weights = {name: self.water_split[name] for name in fans if name in self.water_split}
+        total = sum(weights.values())
+        return {name: total_kg_s * w / total for name, w in weights.items()} if total > 0 else {}
+
+    def update_fans(self, time_s: float, available: frozenset[str], enabled: bool) -> None:
+        """各區依自己的室溫與濕度控制自己的送風機。
+
+參數：
+    time_s: 時間。
+    available: 可用送風機。
+    enabled: 系統是否啟用。
+
+回傳：
+    無。"""
+        for zone in self.zones:
+            zone.update_fans(time_s, available & frozenset(zone.coils), enabled)
+
+    def update_chw_setpoint(self, time_s: float, enabled: bool, compressor_on: bool = False) -> float:
+        """各區更新自己的冰水要求，共用冰水取運轉區的最低值。
+
+參數：
+    time_s: 時間。
+    enabled: 系統是否啟用。
+    compressor_on: 壓縮機是否運轉。
+
+回傳：
+    K。"""
+        for zone in self.zones:
+            zone.update_chw_setpoint(time_s, enabled, compressor_on)
+        return self.chw_setpoint_k
+
+    def coil_state(self, name: str) -> RoomState:
+        """盤管入風狀態 = 所屬區域的室內狀態。
+
+參數：
+    name: 送風機名稱。
+
+回傳：
+    RoomState。"""
+        return self._owner[name].state
+
+    def allocate_reheat(self, time_s: float, loads: dict[str, float], capacities: dict[str, float]) -> dict[str, float]:
+        """各區獨立再熱：每區以自己的盤管冷量與室溫求需求，只分給自己的再熱盤管。
+
+參數：
+    time_s: 時間。
+    loads: 各盤管冷量（W）。
+    capacities: 各再熱盤管能力（W）。
+
+回傳：
+    名稱 → W。"""
+        result: dict[str, float] = {}
+        demand = 0.0
+        for zone in self.zones:
+            own = [name for name in loads if name in zone.coils]
+            result.update(zone.allocate_reheat(time_s, {n: loads[n] for n in own}, {n: capacities[n] for n in own}))
+            demand += zone.last_reheat_demand_w
+        self.last_reheat_demand_w = demand
+        return result
+
+    def reheat_capacity_w(self, coil_air_out_k: float, air_flow_kg_s: float, hot_water_k: float) -> float:
+        """再熱盤管能力（各區參數相同，取第一區的計算）。
+
+參數：
+    coil_air_out_k: 冷卻盤管出風溫度。
+    air_flow_kg_s: 風量。
+    hot_water_k: 熱水溫度。
+
+回傳：
+    W。"""
+        return self.zones[0].reheat_capacity_w(coil_air_out_k, air_flow_kg_s, hot_water_k)
+
+    def reheat_request_w(self, time_s: float, coil_load_w: float) -> float:
+        """最近一次分配時的再熱需求合計（相容 :class:`RoomModel` 介面；實際分配用 :meth:`allocate_reheat`）。
+
+參數：
+    time_s: 時間（未使用）。
+    coil_load_w: 盤管冷量（未使用）。
+
+回傳：
+    W。"""
+        return self.last_reheat_demand_w
+
+    def step(self, time_s: float, dt_s: float, supplies: list[SupplyAir], fan_heat_w: float) -> tuple[float, float]:
+        """各區以自己的送風推進；送風機馬達熱依風量分到各區。
+
+參數：
+    time_s: 時間。
+    dt_s: 步長。
+    supplies: 各送風機送風（需有名稱）。
+    fan_heat_w: 送風機馬達熱合計。
+
+回傳：
+    (送風顯冷 W, 送風除濕 kg/s) 合計。"""
+        total_air = sum(sup.air_flow_kg_s for sup in supplies)
+        sensible = moisture = 0.0
+        for zone in self.zones:
+            own = [sup for sup in supplies if sup.name in zone.coils]
+            air = sum(sup.air_flow_kg_s for sup in own)
+            heat = fan_heat_w * air / total_air if total_air > 0 else 0.0
+            q, m = zone.step(time_s, dt_s, own, heat)
+            sensible += q
+            moisture += m
+        return sensible, moisture
+
+
+# 多區情境（§8.12.9；皆為假設）：兩區同一建物、同一外氣與排程，各約 25 m²；A 用送風機 A、B 用送風機 B。
+HALF_ROOM = RoomParameters(floor_area_m2=25.0, volume_m3=75.0, heat_capacity_j_k=1.5e6, envelope_ua_w_k=60.0,
+                           infiltration_kg_s=0.005, outdoor_air_kg_s=0.02)
+ZONE_SCENARIOS: dict[str, tuple[str, DailyScenario, DailyScenario]] = {
+    # 夏季：A 日曬＋設備發熱（顯熱為主），B 無日曬但人多（潛熱比例高）。
+    "summer": ("夏季：A 日曬設備區／B 人多潮濕區",
+               DailyScenario("A 日曬設備區", 28.5, 2.5, 0.0180, 600.0, 2, 600.0),
+               DailyScenario("B 人多潮濕區", 28.5, 2.5, 0.0180, 100.0, 6, 200.0)),
+    # 梅雨：外氣溫度不高但潮濕，兩區負荷相近。
+    "rainy": ("梅雨：兩區溫度不高但潮濕",
+              DailyScenario("A 梅雨", 25.5, 1.5, 0.0180, 150.0, 3, 300.0),
+              DailyScenario("B 梅雨", 25.5, 1.5, 0.0180, 150.0, 3, 300.0)),
+}
+
+
+def make_zone_group(scenario_key: str, mode_a: ZoneMode, mode_b: ZoneMode, chw_reset: bool = False,
+                    control: IndoorControlParameters | None = None, coils: tuple[CoilParameters, ...] = DEFAULT_COILS,
+                    initial_k: float = celsius(28.5), initial_rh: float = 0.65) -> ZoneGroup:
+    """建立兩區群組：A 區只用送風機 A、B 區只用送風機 B，各自的模式。
+
+參數：
+    scenario_key: ``ZONE_SCENARIOS`` 的鍵。
+    mode_a: A 區模式。
+    mode_b: B 區模式。
+    chw_reset: 是否啟用冰水重設（各區提出要求，共用冰水取最低）。
+    control: 室內控制器參數。
+    coils: 盤管參數（須含 A、B）。
+    initial_k: 起始室溫。
+    initial_rh: 起始相對濕度。
+
+回傳：
+    ZoneGroup。"""
+    _title, scenario_a, scenario_b = ZONE_SCENARIOS[scenario_key]
+    by_name = {coil.name: coil for coil in coils}
+    split = {coil.name: coil.rated_water_flow_kg_s for coil in coils}
+    zones = []
+    for name, scenario, mode in (("A", scenario_a, mode_a), ("B", scenario_b, mode_b)):
+        zones.append(RoomModel(scenario, HALF_ROOM, control, coils=(by_name[name],), chw_reset=chw_reset,
+                               reheat_mode=ReheatMode.OFF, initial_k=initial_k, initial_rh=initial_rh,
+                               water_split={name: split[name]}, mode=mode, name=name))
+    return ZoneGroup(tuple(zones))

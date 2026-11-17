@@ -30,7 +30,7 @@ from . import psychrometrics as psy
 from .control import FrequencyStepper, PidController
 from .cycle_table import CycleTable
 from .parameters import WATER_CP_J_KG_K, CoolingControlMode, HeatPumpParameters, celsius, gpm_to_kg_s
-from .room import RoomModel, SupplyAir
+from .room import RoomModel, SupplyAir, ZoneGroup, ZoneSnapshot
 from .wet_coil import CoilResult, coil_performance, invariant_violations
 
 
@@ -185,6 +185,8 @@ class StepRecord:
     control_target_k: float | None = None
     control_stop_k: float | None = None
     control_restart_k: float | None = None
+    # 多區（§8.12.9）：各區狀態；單一房間時為空。
+    zones: tuple[ZoneSnapshot, ...] = ()
 
     @property
     def net_cooling_w(self) -> float:
@@ -524,14 +526,17 @@ class HeatPumpSimulation:
         assert room is not None
         fans = room.fans_on & self._settings.fans
         flow = self._cold_flow_actual_kg_s()
-        key = (self.cold_water_k, room.state.temperature_k, room.state.humidity_ratio, fans, flow)
+        # 盤管入風 = 所屬房間的狀態（多區時各區不同，§8.12.9）。
+        states = {name: room.coil_state(name) for name in sorted(fans)}
+        key = (self.cold_water_k, tuple((n, st.temperature_k, st.humidity_ratio) for n, st in states.items()), fans, flow)
         if self._coil_cache is not None and self._coil_cache[0] == key:
             return self._coil_cache[1]
         flows = room.water_flows(flow, self._settings.fans)
         results = []
         for name in sorted(fans):
             coil = room.coils[name]
-            args = (coil, room.state.temperature_k, room.state.humidity_ratio, self.cold_water_k, flows.get(name, 0.0))
+            state = states[name]
+            args = (coil, state.temperature_k, state.humidity_ratio, self.cold_water_k, flows.get(name, 0.0))
             result = coil_performance(*args)
             for problem in invariant_violations(*args, result):
                 self.coil_check_failures[problem] = self.coil_check_failures.get(problem, 0) + 1
@@ -776,17 +781,18 @@ class HeatPumpSimulation:
             results = self._coil_results()
             running = {name for name, _ in results}
             fan_power = sum(fan.fan_power_w for fan in p.fan_coils if fan.name in running)
-            reheat_demand = room.reheat_request_w(self.time_s, fan_load)
+            capacities = {name: room.reheat_capacity_w(r.air_out_k, room.coils[name].air_flow_kg_s, self.hot_water_k)
+                          if self._pumps_on[1] else 0.0 for name, r in results}
+            # 單一房間：需求依整體冷量、依能力比例分配；多區：各區獨立（§8.12.9）。
+            shares = room.allocate_reheat(self.time_s, {name: r.total_w for name, r in results}, capacities)
+            reheat_demand = room.last_reheat_demand_w
             self._last_reheat_request_w = reheat_demand
-            capacities = [room.reheat_capacity_w(r.air_out_k, room.coils[name].air_flow_kg_s, self.hot_water_k)
-                          if self._pumps_on[1] else 0.0 for name, r in results]
-            reheat = min(reheat_demand, sum(capacities))
-            total_capacity = sum(capacities)
-            for (name, r), cap in zip(results, capacities):
+            reheat = sum(shares.values())
+            for name, r in results:
                 air = room.coils[name].air_flow_kg_s
-                share = reheat * cap / total_capacity if total_capacity > 0 else 0.0
+                share = shares.get(name, 0.0)
                 supplies.append(SupplyAir(air, r.air_out_k + share / (air * psy.moist_air_cp(r.air_out_humidity_ratio)),
-                                          r.air_out_humidity_ratio))
+                                          r.air_out_humidity_ratio, name))
                 coil_sensible += r.sensible_w
                 coil_latent += r.latent_w
                 condensate += r.condensate_kg_s
@@ -823,9 +829,12 @@ class HeatPumpSimulation:
         standby_power = elec.standby_w if enabled else 0.0
         self._energy_j += (compressor_power + fan_power + pump_power + outdoor_fan_power + standby_power) * dt_s
         room_rh = room_w = supply_k = None
+        zone_snapshots: tuple[ZoneSnapshot, ...] = ()
         if room is not None:
             room.step(self.time_s, dt_s, supplies, fan_power)
             room_rh, room_w = room.relative_humidity, room.state.humidity_ratio
+            if isinstance(room, ZoneGroup):
+                zone_snapshots = self._zone_snapshots(room, supplies, dict(results))
             flow = sum(sup.air_flow_kg_s for sup in supplies)
             supply_k = sum(sup.air_flow_kg_s * sup.temperature_k for sup in supplies) / flow if flow > 0 else None
         self._fan_coil_energy_j += fan_load * dt_s
@@ -903,6 +912,7 @@ class HeatPumpSimulation:
             system_enabled=enabled,
             outdoor_fan_power_w=outdoor_fan_power,
             standby_power_w=standby_power,
+            zones=zone_snapshots,
             pid_request_hz=ctrl.pid_request_hz if ctrl.compressor_on else 0.0,
             pid_integral_hz=self._pid.integral if ctrl.compressor_on else 0.0,
         )
@@ -1153,6 +1163,34 @@ class HeatPumpSimulation:
             return perf
         factor = 1.0 - tau / dt_s * (math.exp(-t0 / tau) - math.exp(-(t0 + dt_s) / tau))
         return replace(perf, cooling_w=perf.cooling_w * factor, heating_w=perf.heating_w * factor)
+
+    @staticmethod
+    def _zone_snapshots(group: ZoneGroup, supplies: list[SupplyAir],
+                        results: dict[str, CoilResult]) -> tuple[ZoneSnapshot, ...]:
+        """各區狀態（房間已推進到本步結束；盤管結果為本步開始時）。
+
+參數：
+    group: 區域群組。
+    supplies: 本步各送風機送風。
+    results: 本步各盤管結果。
+
+回傳：
+    各區 ZoneSnapshot。"""
+        snapshots = []
+        for zone in group.zones:
+            own = [sup for sup in supplies if sup.name in zone.coils]
+            air = sum(sup.air_flow_kg_s for sup in own)
+            coil = [results[name] for name in zone.coils if name in results]
+            reheat = sum(sup.air_flow_kg_s * psy.moist_air_cp(sup.humidity_ratio) * (sup.temperature_k - results[sup.name].air_out_k)
+                         for sup in own if sup.name in results)
+            snapshots.append(ZoneSnapshot(
+                name=zone.name, mode=zone.mode, temperature_k=zone.state.temperature_k,
+                relative_humidity=zone.relative_humidity, humidity_ratio=zone.state.humidity_ratio,
+                fans_on=zone.fans_on, dehum_mode=zone.dehum_mode,
+                supply_k=sum(sup.air_flow_kg_s * sup.temperature_k for sup in own) / air if air > 0 else None,
+                reheat_w=max(0.0, reheat), sensible_w=sum(r.sensible_w for r in coil),
+                latent_w=sum(r.latent_w for r in coil), condensate_kg_s=sum(r.condensate_kg_s for r in coil)))
+        return tuple(snapshots)
 
     def control_thresholds(self) -> tuple[float, float, float]:
         """受控水桶目前的（PID 目標, 停機門檻, 重啟門檻），K。

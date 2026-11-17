@@ -603,3 +603,60 @@ def test_coordinated_dehumidification_enters_and_exits() -> None:
     demand = RoomModel(SCENARIOS["humid"], reheat_mode=ReheatMode.DEMAND, initial_k=celsius(25.8), initial_rh=0.68)
     demand.update_fans(8 * 3600.0, frozenset({"A", "B"}), True)
     assert not demand.dehum_mode
+
+
+# ---- 多區（§8.12.9） ----
+
+
+def test_zone_group_validation_and_aggregation() -> None:
+    """群組驗證（名稱、盤管、外氣與排程）；冰水取運轉區最低、停止區不提要求；tight／ample 只看運轉區。
+
+回傳：
+    無。"""
+    from domain.heat_pump.room import ZONE_SCENARIOS, ZoneGroup, ZoneMode, make_zone_group
+
+    group = make_zone_group("summer", ZoneMode.COOLING, ZoneMode.OFF, chw_reset=True)
+    a, b = group.zones
+    assert set(a.coils) == {"A"} and set(b.coils) == {"B"}
+    assert group.coil_state("B") is b.state
+    a._indoor.chw_setpoint_k = celsius(9.0)
+    b._indoor.chw_setpoint_k = celsius(7.0)
+    assert group.chw_setpoint_k == pytest.approx(celsius(9.0))  # 停止的 B 不拉低冰水
+    group.update_fans(9 * 3600.0, frozenset({"A", "B"}), True)
+    assert "B" not in group.fans_on
+    flows = group.water_flows(1.0, frozenset({"A", "B"}))
+    assert sum(flows.values()) == pytest.approx(1.0) and flows["B"] > flows["A"]
+    with pytest.raises(ValueError):
+        ZoneGroup((a, RoomModel(ZONE_SCENARIOS["rainy"][1], coils=(DEFAULT_COILS[1],), name="X")))
+    with pytest.raises(ValueError):
+        ZoneGroup((a, a))
+
+
+def test_zone_group_simulation_routes_supply_and_reheat_per_zone(table: CycleTable) -> None:
+    """兩區模擬：各區的送風、再熱、凝結水分開記錄；除濕區才再熱，冷房區不再熱；停止區沒有送風。
+
+回傳：
+    無。"""
+    from domain.heat_pump.room import ZoneMode, make_zone_group
+
+    group = make_zone_group("summer", ZoneMode.COOLING, ZoneMode.DEHUMIDIFY, initial_k=celsius(26.0),
+                            initial_rh=0.68)
+    settings = replace(default_settings(OperationMode.COOLING), fans=frozenset({"A", "B"}), reheat_fraction=0.0)
+    sim = HeatPumpSimulation(table, replace(HeatPumpParameters(), electrical=FULL_ELECTRICAL), settings,
+                             initial_cold_k=celsius(8.0), initial_hot_k=celsius(38.0), room=group,
+                             start_time_s=9 * 3600.0)
+    records = sim.run(2 * 3600.0)
+    assert all(len(r.zones) == 2 for r in records)
+    a = [r.zones[0] for r in records]
+    b = [r.zones[1] for r in records]
+    assert all(z.reheat_w == 0.0 for z in a)
+    assert any(z.dehum_mode for z in b)
+    assert sum(z.condensate_kg_s for z in b) > 0
+    assert sum(r.reheat_w for r in records) == pytest.approx(sum(z.reheat_w for z in b), rel=1e-6, abs=1e-6)
+
+    off = make_zone_group("summer", ZoneMode.OFF, ZoneMode.DEHUMIDIFY)
+    sim2 = HeatPumpSimulation(table, replace(HeatPumpParameters(), electrical=FULL_ELECTRICAL), settings,
+                              initial_cold_k=celsius(8.0), initial_hot_k=celsius(38.0), room=off,
+                              start_time_s=9 * 3600.0)
+    records2 = sim2.run(1800.0)
+    assert all(not r.zones[0].fans_on and r.zones[0].supply_k is None for r in records2)

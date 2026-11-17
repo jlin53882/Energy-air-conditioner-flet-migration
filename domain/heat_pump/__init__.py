@@ -38,6 +38,9 @@ from .room import (
     IndoorControlParameters,
     ReheatMode,
     RoomModel,
+    ZoneGroup,
+    ZoneMode,
+    ZoneSnapshot,
     RoomParameters,
 )
 from .simulation import (
@@ -101,6 +104,9 @@ __all__ = [
     "ReheatMode",
     "ReheatParameters",
     "RoomModel",
+    "ZoneGroup",
+    "ZoneMode",
+    "ZoneSnapshot",
     "RoomParameters",
     "SimulationEvent",
     "SimulationSettings",

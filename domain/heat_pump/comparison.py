@@ -29,6 +29,8 @@ from .room import (
     ReheatMode,
     RoomModel,
     RoomParameters,
+    ZoneMode,
+    make_zone_group,
 )
 from .simulation import (
     FrequencyMode,
@@ -611,3 +613,161 @@ __all__ = [
     "reference_result",
     "run_strategy",
 ]
+
+
+# ---- 多區組合（§8.12.9） ----
+
+
+@dataclass(frozen=True)
+class ZoneComfort:
+    """單一區域的在室時段舒適度（每日）。"""
+
+    name: str
+    mode: str
+    temperature_exceed_kh: float
+    humidity_high_pct_h: float
+    humidity_low_pct_h: float
+    min_rh: float
+    max_rh: float
+    max_temperature_k: float
+    mean_temperature_k: float
+    mean_humidity_ratio: float
+    reheat_kwh: float
+    condensate_kg: float
+
+    def absolute_ok(self, limits: AbsoluteComfort | None = None) -> bool:
+        """是否通過絕對門檻（含低濕側）。停止的區域不評估（回傳 True）。
+
+參數：
+    limits: 門檻。
+
+回傳：
+    bool。"""
+        if self.mode == "off":
+            return True
+        limits = limits or AbsoluteComfort()
+        return (self.temperature_exceed_kh <= limits.temperature_kh
+                and self.humidity_high_pct_h <= limits.humidity_high_pct_h
+                and self.max_temperature_k <= limits.max_temperature_k
+                and self.max_rh <= limits.max_rh
+                and self.humidity_low_pct_h <= limits.humidity_low_pct_h
+                and self.min_rh >= limits.min_rh)
+
+
+@dataclass(frozen=True)
+class ZoneComboResult:
+    """一個（情境, A 模式, B 模式）組合的結果（最後 ``window_days`` 天平均）。"""
+
+    scenario: str
+    mode_a: str
+    mode_b: str
+    energy_kwh: float
+    compressor_kwh: float
+    pump_kwh: float
+    fan_kwh: float
+    zones: tuple[ZoneComfort, ...]
+    starts_per_hour: float
+    max_starts_rolling_1h: int
+    mean_cold_tank_k: float
+    mean_hot_tank_k: float
+    smart_cooling_fraction: float
+
+    @property
+    def absolute_ok(self) -> bool:
+        """所有運轉區都通過絕對門檻。
+
+回傳：
+            bool。"""
+        return all(zone.absolute_ok() for zone in self.zones)
+
+
+def evaluate_zones(records: list[StepRecord], events: list, scenario_key: str, mode_a: str, mode_b: str,
+                   control: IndoorControlParameters, window_days: int) -> ZoneComboResult:
+    """彙整多區統計窗。
+
+參數：
+    records: 統計窗記錄。
+    events: 全部事件。
+    scenario_key: 情境。
+    mode_a: A 區模式。
+    mode_b: B 區模式。
+    control: 室內控制器參數（舒適帶）。
+    window_days: 統計窗天數。
+
+回傳：
+    ZoneComboResult。"""
+    kwh = 1.0 / 3.6e6 / window_days
+    per_day_h = HOUR_S * window_days
+    upper, lower = control.setpoint_k + control.band_k, control.setpoint_k - control.band_k
+    occ = [r for r in records if r.occupied]
+    zones = []
+    for i, name in enumerate(("A", "B")):
+        rows = [(r, r.zones[i]) for r in occ]
+        allr = [(r, r.zones[i]) for r in records]
+        mode = rows[0][1].mode.value
+        zones.append(ZoneComfort(
+            name=name, mode=mode,
+            temperature_exceed_kh=sum((max(0.0, z.temperature_k - upper) + max(0.0, lower - z.temperature_k)) * r.dt_s
+                                      for r, z in rows) / per_day_h,
+            humidity_high_pct_h=sum(max(0.0, z.relative_humidity - control.rh_high) * 100 * r.dt_s for r, z in rows)
+            / per_day_h,
+            humidity_low_pct_h=sum(max(0.0, control.rh_low - z.relative_humidity) * 100 * r.dt_s for r, z in rows)
+            / per_day_h,
+            min_rh=min(z.relative_humidity for _, z in rows), max_rh=max(z.relative_humidity for _, z in rows),
+            max_temperature_k=max(z.temperature_k for _, z in rows),
+            mean_temperature_k=sum(z.temperature_k * r.dt_s for r, z in rows) / sum(r.dt_s for r, _ in rows),
+            mean_humidity_ratio=sum(z.humidity_ratio * r.dt_s for r, z in rows) / sum(r.dt_s for r, _ in rows),
+            reheat_kwh=sum(z.reheat_w * r.dt_s for r, z in allr) * kwh,
+            condensate_kg=sum(z.condensate_kg_s * r.dt_s for r, z in allr) / window_days,
+        ))
+    start, end = records[0].time_s, records[-1].time_s + records[-1].dt_s
+    starts = [e.time_s for e in events if e.code == "start" and start <= e.time_s < end]
+    enabled_h = sum(r.dt_s for r in records if r.system_enabled) / HOUR_S
+    on = [r for r in records if r.compressor_on]
+    return ZoneComboResult(
+        scenario=scenario_key, mode_a=mode_a, mode_b=mode_b,
+        energy_kwh=sum(r.total_power_w * r.dt_s for r in records) * kwh,
+        compressor_kwh=sum(r.compressor_power_w * r.dt_s for r in records) * kwh,
+        pump_kwh=sum(r.pump_power_w * r.dt_s for r in records) * kwh,
+        fan_kwh=sum(r.fan_power_w * r.dt_s for r in records) * kwh,
+        zones=tuple(zones),
+        starts_per_hour=len(starts) / max(1e-9, enabled_h),
+        max_starts_rolling_1h=max_in_window(starts),
+        mean_cold_tank_k=sum(r.cold_water_k * r.dt_s for r in records) / sum(r.dt_s for r in records),
+        mean_hot_tank_k=sum(r.hot_water_k * r.dt_s for r in records) / sum(r.dt_s for r in records),
+        smart_cooling_fraction=(sum(r.dt_s for r in on if r.mode.value == "smart_cooling") / sum(r.dt_s for r in on)
+                                if on else 0.0),
+    )
+
+
+def run_zone_combination(table: CycleTable, scenario_key: str, mode_a: ZoneMode, mode_b: ZoneMode,
+                         params: HeatPumpParameters | None = None, settings_overrides: dict | None = None,
+                         chw_reset: bool = False, control: IndoorControlParameters | None = None,
+                         days: int = 5, window_days: int = 2, dt_s: float = 5.0) -> ZoneComboResult:
+    """兩區組合：重複同一日工況 ``days`` 天，統計最後 ``window_days`` 天（不做週期穩態判定，比 §8.6 簡化）。
+
+參數：
+    table: 性質表。
+    scenario_key: ``ZONE_SCENARIOS`` 的鍵。
+    mode_a: A 區模式。
+    mode_b: B 區模式。
+    params: 系統參數（預設全系統耗電口徑）。
+    settings_overrides: 模擬設定覆寫（例如水泵自動）。
+    chw_reset: 冰水重設。
+    control: 室內控制器參數。
+    days: 模擬天數。
+    window_days: 統計天數。
+    dt_s: 時間步長。
+
+回傳：
+    ZoneComboResult。"""
+    params = params or replace(HeatPumpParameters(), electrical=FULL_ELECTRICAL)
+    control = control or IndoorControlParameters()
+    group = make_zone_group(scenario_key, mode_a, mode_b, chw_reset=chw_reset, control=control)
+    settings = replace(default_settings(OperationMode.COOLING), fans=frozenset({"A", "B"}), reheat_fraction=0.0,
+                       **(settings_overrides or {}))
+    sim = HeatPumpSimulation(table, params, settings, initial_cold_k=celsius(12.0), initial_hot_k=celsius(30.0),
+                             room=group, start_time_s=0.0)
+    sim.run((days - window_days) * DAY_S, dt_s)
+    window = sim.run(window_days * DAY_S, dt_s)
+    return evaluate_zones(window, sim.events, scenario_key, mode_a.value, mode_b.value, control, window_days)
