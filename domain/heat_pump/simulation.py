@@ -28,7 +28,7 @@ from .components import (
 from . import psychrometrics as psy
 from .control import FrequencyStepper, PidController
 from .cycle_table import CycleTable
-from .parameters import WATER_CP_J_KG_K, HeatPumpParameters, celsius, gpm_to_kg_s
+from .parameters import WATER_CP_J_KG_K, CoolingControlMode, HeatPumpParameters, celsius, gpm_to_kg_s
 from .room import RoomModel, SupplyAir
 from .wet_coil import CoilResult, coil_performance, invariant_violations
 
@@ -179,6 +179,7 @@ class StepRecord:
     # 控制診斷（§8.12）：PID 未量化的要求頻率與積分項（本步開始時的值；停機時為 0）。
     pid_request_hz: float = 0.0
     pid_integral_hz: float = 0.0
+    chw_target_k: float | None = None
 
     @property
     def net_cooling_w(self) -> float:
@@ -227,6 +228,9 @@ class _ControllerState:
     cold_pump_changed_s: float = -1e9
     hot_pump_changed_s: float = -1e9
     pid_request_hz: float = 0.0
+    # 目標分離模式：本次運轉起點、在最低階且低於停機門檻的持續時間。
+    on_since_s: float | None = None
+    stop_hold_s: float = 0.0
 
 
 class HeatPumpSimulation:
@@ -285,10 +289,15 @@ class HeatPumpSimulation:
         control = self.params.control
         self._ctrl = _ControllerState(frequency_hz=comp.max_frequency_hz, frequency_limit_hz=comp.max_frequency_hz,
                                       freeze_limit_hz=comp.max_frequency_hz)
+        split = control.cooling_control_mode is CoolingControlMode.SPLIT
         self._pid = PidController(
-            kp=control.kp_hz_per_k, ti_s=control.integral_time_s, td_s=control.derivative_time_s,
+            kp=control.kp_hz_per_k,
+            ti_s=control.split_integral_time_s if split else control.integral_time_s,
+            td_s=control.split_derivative_time_s if split else control.derivative_time_s,
             out_min=comp.min_frequency_hz, out_max=comp.max_frequency_hz, bias=comp.min_frequency_hz,
             filter_ratio=control.derivative_filter_ratio,
+            directional_anti_windup=split, derivative_on_measurement=split,
+            integral_min=control.split_integral_min_hz if split else None,
         )
         self._stepper = FrequencyStepper(comp.frequency_steps_hz, control.step_hysteresis_hz, control.step_dwell_s,
                                          current_hz=comp.max_frequency_hz)
@@ -368,7 +377,7 @@ class HeatPumpSimulation:
             self._guess = None
         elif previous.frequency_mode is FrequencyMode.MANUAL and settings.frequency_mode is FrequencyMode.AUTO:
             # 無擾切換：讓 PID 輸出從目前頻率開始。
-            self._pid.preset(ctrl.frequency_hz, self._control_error())
+            self._pid.preset(ctrl.frequency_hz, self._control_error(), measurement=self._pid_measurement())
         if ctrl.compressor_on and not ctrl.tripped and settings.frequency_mode is FrequencyMode.MANUAL:
             ctrl.frequency_hz = self._stepper.start(settings.manual_frequency_hz, ctrl.frequency_limit_hz, self.time_s)
 
@@ -476,6 +485,22 @@ class HeatPumpSimulation:
         if self.room is not None:
             return self.room.chw_setpoint_k
         return self.params.control.cooling_setpoint_k
+
+    def _split_cooling(self) -> bool:
+        """冷房且使用目標分離控制（§8.12）。
+
+回傳：
+            bool。"""
+        return (self._settings.operation is OperationMode.COOLING
+                and self.params.control.cooling_control_mode is CoolingControlMode.SPLIT)
+
+    def _cooling_target_k(self) -> float:
+        """冷房 PID 目標：LEGACY 等於停機設定值；目標分離時為停機設定值 + 偏移。
+
+回傳：
+            K。"""
+        offset = self.params.control.cooling_target_offset_k if self._split_cooling() else 0.0
+        return self._cooling_setpoint_k() + offset
 
     def _cooling_restart_k(self) -> float:
         """冷房重啟溫度 = 停機設定值 + 原始的重啟差（預設 1 K）。
@@ -862,6 +887,7 @@ class HeatPumpSimulation:
             supply_k=supply_k,
             fans_running=frozenset(name for name, _ in self._coil_results()) if room is not None else s.fans,
             chw_setpoint_k=self._cooling_setpoint_k() if cooling else None,
+            chw_target_k=self._cooling_target_k() if cooling else None,
             occupied=room.scenario.occupied(self.time_s) if room is not None else True,
             system_enabled=enabled,
             outdoor_fan_power_w=outdoor_fan_power,
@@ -1003,7 +1029,14 @@ class HeatPumpSimulation:
                 ctrl.freeze_stopped = False
                 ctrl.freeze_timer_s = 0.0
                 self._pid.reset()
+                if self._split_cooling():
+                    # 積分歸零（不帶負荷記憶）：目標分離模式的一般停機發生在「最低階仍持續降溫」，
+                    # 代表負荷低於最低能力；以上一週期平均頻率預設積分會形成正回饋（高頻起步 → 平均高 →
+                    # 下次又高頻起步），實測 B 單台 60 Hz 占 66 %（§8.12）。只初始化微分的前值。
+                    self._pid.preset(self._pid.bias + self._pid.kp * error, error, measurement=controlled)
                 ctrl.off_since_s = None
+                ctrl.on_since_s = self.time_s
+                ctrl.stop_hold_s = 0.0
                 request = (s.manual_frequency_hz if s.frequency_mode is FrequencyMode.MANUAL
                            else max(comp.min_frequency_hz, min(comp.max_frequency_hz, self._pid.output(error))))
                 ctrl.frequency_hz = self._stepper.start(
@@ -1037,8 +1070,24 @@ class HeatPumpSimulation:
             ctrl.freeze_limit_hz = comp.max_frequency_hz
         limit = min(ctrl.frequency_limit_hz, ctrl.freeze_limit_hz)
 
-        if s.frequency_mode is FrequencyMode.AUTO:
+        split = self._split_cooling() and s.frequency_mode is FrequencyMode.AUTO
+        if split:
+            # 目標分離（§8.12）：PID 以 7.5 °C 為目標調載；桶溫 ≤ 停機門檻時強制降到最低階
+            # （FrequencyStepper 高於上限階會立即降階），在最低階持續 hold 秒仍不回升才停機。
+            stop_k = self._cooling_setpoint_k()
+            below = controlled <= stop_k
+            request = self._pid.update(error, dt_s, out_max=limit, measurement=controlled)
+            stepper_limit = comp.min_frequency_hz if below else limit
+            ctrl.frequency_hz = self._stepper.update(request, stepper_limit, self.time_s)
+            at_minimum = ctrl.frequency_hz <= comp.min_frequency_hz + 1e-9
+            ctrl.stop_hold_s = ctrl.stop_hold_s + dt_s if (below and at_minimum) else 0.0
+            on_for = self.time_s - ctrl.on_since_s if ctrl.on_since_s is not None else float("inf")
+            backstop = controlled <= stop_k - c.cooling_stop_backstop_k
+            stop = backstop or (ctrl.stop_hold_s >= c.cooling_stop_hold_s and on_for >= c.split_min_on_time_s)
+            ctrl.pid_request_hz = request
+        elif s.frequency_mode is FrequencyMode.AUTO:
             request = self._pid.update(error, dt_s, out_max=limit)
+            ctrl.pid_request_hz = request
             ctrl.frequency_hz = self._stepper.update(request, limit, self.time_s)
             at_minimum = ctrl.frequency_hz <= comp.min_frequency_hz + 1e-9
             margin = c.auto_stop_margin_k
@@ -1074,6 +1123,15 @@ class HeatPumpSimulation:
             warnings.add(WARNING_FREEZE_LIMITING)
         return frozenset(warnings)
 
+    def _pid_measurement(self) -> float:
+        """與誤差同號的量測值（冷房：冰水溫度；暖房：−熱水溫度），供對量測值微分。
+
+回傳：
+    K。"""
+        if self._settings.operation is OperationMode.COOLING:
+            return self.cold_water_k
+        return -self.hot_water_k
+
     def _control_error(self) -> float:
         """PID 控制誤差：冷房為冰水 − 目標，暖房為目標 − 熱水（正值表示需要更多能力）。
 
@@ -1081,7 +1139,7 @@ class HeatPumpSimulation:
     K。"""
         c = self.params.control
         if self._settings.operation is OperationMode.COOLING:
-            return self.cold_water_k - self._cooling_setpoint_k()
+            return self.cold_water_k - self._cooling_target_k()
         return c.heating_setpoint_k - self.hot_water_k
 
     def run(self, duration_s: float, dt_s: float = 5.0) -> list[StepRecord]:

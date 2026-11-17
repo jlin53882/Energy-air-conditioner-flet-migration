@@ -2,18 +2,20 @@
 
 用法：
     uv run python scripts/heat_pump_strategy_comparison.py [--scenarios hot,humid,mild] [--strategies base,combo3]
-        [--variant <見 VARIANTS>] [--core]
+        [--variant <見 VARIANTS，可用 + 疊加，例如 split+min_off_600>] [--core] [--json out.json]
 
 每個（情境, 策略）重複同一日工況直到週期穩態（dt 5 s），多行程平行執行；輸出 Markdown 表格。
-``--variant`` 做敏感度分析（盤管參數、房間吸放濕緩衝、水泵有效功率、壓縮機最短停機）。
+``--variant`` 做敏感度分析（盤管參數、房間吸放濕緩衝、水泵有效功率、壓縮機最短停機、
+冷房控制架構與頻率階梯；§8.12）。多個變體以 ``+`` 疊加。
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -31,7 +33,7 @@ from domain.heat_pump.comparison import (  # noqa: E402
     run_strategy,
 )
 from domain.heat_pump.cycle_table import CycleTable  # noqa: E402
-from domain.heat_pump.parameters import FULL_ELECTRICAL, HeatPumpParameters  # noqa: E402
+from domain.heat_pump.parameters import FULL_ELECTRICAL, CoolingControlMode, HeatPumpParameters  # noqa: E402
 from domain.heat_pump.room import (  # noqa: E402
     ALTERNATIVE_COILS,
     DEFAULT_COILS,
@@ -52,6 +54,10 @@ VARIANTS = {
     "hot_pump_x05": "熱水泵（無實測）耗電 × 0.5",
     "hot_pump_x15": "熱水泵（無實測）耗電 × 1.5",
     "min_off_600": "壓縮機最短停機 600 s（啟動 ≤ 6 次/h，設備保護）",
+    "split": "冷房目標分離控制：PID 目標 7.5、停機 7.0、重啟 8.0 °C（PI，§8.12）",
+    "split_pid": "目標分離＋微分 Td 30 s（對量測值微分）",
+    "steps_50_60": "壓縮機只用原廠標示 50／60 Hz",
+    "band_15": "冷房重啟差 1.5 K（重啟 = 停機 + 1.5 K）",
 }
 _TABLE: CycleTable | None = None
 
@@ -70,19 +76,24 @@ def _table() -> CycleTable:
     return _TABLE
 
 
-def _job(args: tuple[str, Strategy, str]) -> StrategyResult:
-    """執行一個（情境, 策略, 敏感度變體）。
+def _apply_variant(variant: str, coils, room: RoomParameters, params: HeatPumpParameters):
+    """套用單一敏感度變體。
 
 參數：
-    args: (情境代碼, 策略, 變體)。
+    variant: 變體名稱。
+    coils: 盤管參數。
+    room: 房間參數。
+    params: 系統參數。
 
 回傳：
-    StrategyResult。"""
-    scenario_key, strategy, variant = args
-    params = replace(HeatPumpParameters(), electrical=FULL_ELECTRICAL)
-    coils = DEFAULT_COILS
-    room = RoomParameters()
-    if variant == "coil_n05":
+    (盤管, 房間, 系統參數)。
+
+引發：
+    ValueError：未知變體。"""
+    control = params.control
+    if variant == "default":
+        pass
+    elif variant == "coil_n05":
         coils = ALTERNATIVE_COILS
     elif variant == "moisture_x1":
         room = replace(room, moisture_buffer_factor=1.0)
@@ -99,7 +110,35 @@ def _job(args: tuple[str, Strategy, str]) -> StrategyResult:
         factor = 0.5 if variant == "hot_pump_x05" else 1.5
         params = replace(params, hot_pump=replace(params.hot_pump, power_factor=factor))
     elif variant == "min_off_600":
-        params = replace(params, control=replace(params.control, min_off_time_s=600.0))
+        params = replace(params, control=replace(control, min_off_time_s=600.0))
+    elif variant == "split":
+        params = replace(params, control=replace(control, cooling_control_mode=CoolingControlMode.SPLIT))
+    elif variant == "split_pid":
+        params = replace(params, control=replace(control, cooling_control_mode=CoolingControlMode.SPLIT,
+                                                 split_derivative_time_s=30.0))
+    elif variant == "steps_50_60":
+        params = replace(params, compressor=replace(params.compressor, frequency_steps_hz=(50.0, 60.0)))
+    elif variant == "band_15":
+        params = replace(params, control=replace(control, cooling_restart_k=control.cooling_setpoint_k + 1.5))
+    else:
+        raise ValueError(f"未知的敏感度變體：{variant}")
+    return coils, room, params
+
+
+def _job(args: tuple[str, Strategy, str]) -> StrategyResult:
+    """執行一個（情境, 策略, 敏感度變體）。
+
+參數：
+    args: (情境代碼, 策略, 變體)。
+
+回傳：
+    StrategyResult。"""
+    scenario_key, strategy, variant = args
+    params = replace(HeatPumpParameters(), electrical=FULL_ELECTRICAL)
+    coils = DEFAULT_COILS
+    room = RoomParameters()
+    for name in variant.split("+"):
+        coils, room, params = _apply_variant(name, coils, room, params)
     return run_strategy(_table(), scenario_key, SCENARIOS[scenario_key], strategy, params=params, room_params=room,
                         coils=coils)
 
@@ -175,6 +214,28 @@ def render(results: list[StrategyResult]) -> str:
     return "\n".join(lines)
 
 
+def render_diagnostics(results: list[StrategyResult]) -> str:
+    """控制診斷表（§8.12）：頻率占比、連續運轉時間、滾動一小時啟動、冰水桶範圍。
+
+參數：
+    results: 全部結果。
+
+回傳：
+    Markdown 文字。"""
+    lines = ["\n**控制診斷**\n",
+             "| 情境 | 策略 | 頻率占比（運轉時間） | 連續運轉 min（最短／P10／中位／P90） | 啟動 次/h（平均／滾動 1 h 最多） | "
+             "冰水桶 °C（最低／平均／最高） | 平均 PID 目標 |",
+             "|" + "---|" * 7]
+    for r in results:
+        share = "、".join(f"{hz:.0f} Hz {frac * 100:.0f} %" for hz, frac in r.frequency_share) or "—"
+        lines.append(
+            f"| {r.scenario} | {r.strategy} | {share} | {r.run_min_minutes:.1f}／{r.run_p10_minutes:.1f}／"
+            f"{r.run_median_minutes:.1f}／{r.run_p90_minutes:.1f} | {r.starts_per_hour:.1f}／{r.max_starts_rolling_1h} | "
+            f"{r.cold_tank_min_k - 273.15:.1f}／{r.cold_tank_mean_k - 273.15:.2f}／{r.cold_tank_max_k - 273.15:.1f} | "
+            f"{r.mean_chw_target_k - 273.15:.2f} °C |")
+    return "\n".join(lines)
+
+
 def main() -> None:
     """命令列進入點。
 
@@ -184,9 +245,13 @@ def main() -> None:
     parser.add_argument("--scenarios", default=",".join(SCENARIOS))
     parser.add_argument("--strategies", default=",".join(s.key for s in STRATEGIES))
     parser.add_argument("--core", action="store_true", help="只跑三組核心比較（基準、水泵最佳化、水泵＋冰水重設＋按需再熱）")
-    parser.add_argument("--variant", default="default", choices=sorted(VARIANTS))
+    parser.add_argument("--variant", default="default", help="變體名稱，可用 + 疊加：" + "、".join(sorted(VARIANTS)))
+    parser.add_argument("--json", default=None, help="另存全部結果（JSON）")
     parser.add_argument("--workers", type=int, default=4)
     args = parser.parse_args()
+    unknown = [name for name in args.variant.split("+") if name not in VARIANTS]
+    if unknown:
+        parser.error(f"未知的變體：{unknown}")
     scenarios = args.scenarios.split(",")
     keys = CORE_STRATEGIES if args.core else tuple(args.strategies.split(","))
     wanted = [s for s in STRATEGIES if s.key in keys]
@@ -202,8 +267,12 @@ def main() -> None:
         results += list(pool.map(_job, second))
     order = {s.key: i for i, s in enumerate(STRATEGIES)}
     results.sort(key=lambda r: (scenarios.index(r.scenario), order[r.strategy]))
-    print(f"敏感度變體：{VARIANTS[args.variant]}\n")
+    print("敏感度變體：" + "＋".join(VARIANTS[name] for name in args.variant.split("+")) + "\n")
     print(render(results))
+    print(render_diagnostics(results))
+    if args.json:
+        payload = [dict(asdict(r), variant=args.variant) for r in results]
+        Path(args.json).write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 if __name__ == "__main__":

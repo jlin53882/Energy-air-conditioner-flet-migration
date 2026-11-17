@@ -34,6 +34,8 @@ class PidController:
     filter_ratio: float = 5.0
     directional_anti_windup: bool = False
     derivative_on_measurement: bool = False
+    # 方向性抗飽和時的積分下限（上限為「本步上限 − bias」，避免限頻期間累積）。
+    integral_min: float | None = None
     integral: float = 0.0
     _previous_error: float | None = field(default=None, repr=False)
     _derivative: float = field(default=0.0, repr=False)
@@ -103,6 +105,9 @@ class PidController:
             unwinding = (unclamped >= upper and error < 0) or (unclamped <= self.out_min and error > 0)
             if inside or (self.directional_anti_windup and unwinding):
                 self.integral += self.kp / self.ti_s * error * dt_s
+            if self.directional_anti_windup:
+                low = self.integral_min if self.integral_min is not None else -float("inf")
+                self.integral = max(low, min(self.integral, upper - self.bias))
         value = self.output(error)
         return max(self.out_min, min(upper, value))
 

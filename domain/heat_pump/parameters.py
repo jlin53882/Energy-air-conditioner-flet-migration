@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 
 CELSIUS_OFFSET_K = 273.15
 GALLON_US_M3 = 3.785e-3
@@ -349,6 +350,18 @@ class TankParameters:
         return self.volume_l * WATER_DENSITY_KG_M3 / 1000.0 * WATER_CP_J_KG_K
 
 
+class CoolingControlMode(str, Enum):
+    """冷房壓縮機控制架構（§2.3、§8.12）。
+
+    - ``LEGACY``：PID 目標＝停機點（7 °C），≥ 8 °C 重啟，每次重啟清除 PID（§4 原行為）。
+    - ``SPLIT``：PID 目標、停機門檻、重啟門檻分離（預設 7.5／7.0／8.0 °C）；運轉中允許負誤差降載，
+      只有在最低階仍持續低於停機門檻才停機；重啟時以上一運轉週期的平均頻率預設積分。
+    """
+
+    LEGACY = "legacy"
+    SPLIT = "split"
+
+
 @dataclass(frozen=True)
 class ControlParameters:
     """模式切換、頻率 PID 與保護門檻（§2.2、§2.3）。"""
@@ -397,6 +410,22 @@ class ControlParameters:
     warn_frost_k: float = celsius(0.0)
 
     max_evaporating_k: float = celsius(15.0)
+
+    # 冷房目標分離控制（§8.12；預設 LEGACY，不影響 §4）。三個門檻都以冰水「基準」（停機點，
+    # 房間模型的冰水重設會移動它）加偏移產生：停機 = 基準、PID 目標 = 基準 + target_offset、
+    # 重啟 = 基準 + (cooling_restart_k − cooling_setpoint_k)。
+    cooling_control_mode: CoolingControlMode = CoolingControlMode.LEGACY
+    cooling_target_offset_k: float = 0.5
+    # 已在最低階、桶溫 ≤ 停機門檻持續此時間才停機；低於停機門檻 − backstop 時立即停機。
+    cooling_stop_hold_s: float = 30.0
+    cooling_stop_backstop_k: float = 0.3
+    # 最短運轉時間：只擋一般停機，不擋後備低溫、防凍、跳脫與排程停機。
+    split_min_on_time_s: float = 180.0
+    # 目標分離模式的 PID 參數（預設 PI；微分對量測值）。預設 Ti 300 s 時，積分退回太慢，
+    # 撐不住 ±0.5 K 的帶寬（§8.12），故另設。
+    split_integral_time_s: float = 120.0
+    split_derivative_time_s: float = 0.0
+    split_integral_min_hz: float = -5.0
 
 
 @dataclass(frozen=True)

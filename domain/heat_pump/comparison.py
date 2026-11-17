@@ -154,6 +154,18 @@ class StrategyResult:
     mean_humidity_ratio: float = 0.0
     occupancy_start_k: float = 0.0
     starts_per_hour: float = 0.0
+    # 控制診斷（§8.12）：滾動一小時最多啟動次數、各頻率占運轉時間比例、連續運轉時間（min）、
+    # 啟用時段冰水桶溫度範圍與平均、平均 PID 目標。
+    max_starts_rolling_1h: int = 0
+    frequency_share: tuple[tuple[float, float], ...] = ()
+    run_min_minutes: float = 0.0
+    run_p10_minutes: float = 0.0
+    run_median_minutes: float = 0.0
+    run_p90_minutes: float = 0.0
+    cold_tank_min_k: float = 0.0
+    cold_tank_mean_k: float = 0.0
+    cold_tank_max_k: float = 0.0
+    mean_chw_target_k: float = 0.0
 
     def comfort_ok(self, base: StrategyResult, tol: ComfortTolerance | None = None) -> bool:
         """舒適度是否不劣於基準（溫度超標、濕度高側超標、達標時間）。
@@ -204,6 +216,61 @@ class _DayState:
     hot_k: float
     room_k: float
     room_w: float
+
+
+def max_in_window(times_s: list[float], window_s: float = HOUR_S) -> int:
+    """任一長度 ``window_s`` 的滑動窗內最多事件數（雙指標）。
+
+參數：
+    times_s: 事件時刻。
+    window_s: 窗長。
+
+回傳：
+    次數。"""
+    ordered = sorted(times_s)
+    best = 0
+    i = 0
+    for j, t in enumerate(ordered):
+        while t - ordered[i] >= window_s:
+            i += 1
+        best = max(best, j - i + 1)
+    return best
+
+
+def run_lengths_s(records: list[StepRecord]) -> list[float]:
+    """完整的連續運轉時間（不含統計窗頭尾被截斷的段）。
+
+參數：
+    records: 連續的記錄。
+
+回傳：
+    各段秒數。"""
+    lengths: list[float] = []
+    current: float | None = None
+    for prev, r in zip(records, records[1:]):
+        if r.compressor_on and not prev.compressor_on:
+            current = 0.0
+        if r.compressor_on and current is not None:
+            current += r.dt_s
+        if not r.compressor_on and prev.compressor_on and current is not None:
+            lengths.append(current)
+            current = None
+    return lengths
+
+
+def _percentile(values: list[float], q: float) -> float:
+    """最近秩百分位（空列表回傳 0）。
+
+參數：
+    values: 數值。
+    q: 0–1。
+
+回傳：
+    百分位值。"""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, max(0, round(q * (len(ordered) - 1))))]
 
 
 def _pulldown_s(records: list[StepRecord], control: IndoorControlParameters, start_s: float) -> float | None:
@@ -276,6 +343,15 @@ def evaluate(records: list[StepRecord], events: list, scenario_key: str, strateg
     in_day = [e for e in events if day_start_s <= e.time_s < end_s]
     fan_switches = sum(1 for a, b in zip(records, records[1:]) if a.fans_running != b.fans_running)
     fan_coil = sum(r.fan_coil_load_w * r.dt_s for r in records) * kwh
+    on_records = [r for r in records if r.compressor_on]
+    on_s = sum(r.dt_s for r in on_records)
+    shares: dict[float, float] = {}
+    for r in on_records:
+        shares[r.frequency_hz] = shares.get(r.frequency_hz, 0.0) + r.dt_s
+    runs = [length / 60.0 for length in run_lengths_s(records)]
+    enabled = [r for r in records if r.system_enabled] or records
+    enabled_s = sum(r.dt_s for r in enabled)
+    targets = [r for r in occ if r.chw_target_k is not None]
     return StrategyResult(
         scenario=scenario_key, strategy=strategy.key, name=strategy.name,
         energy_kwh=energy, corrected_energy_kwh=energy + correction, storage_correction_kwh=correction,
@@ -301,6 +377,17 @@ def evaluate(records: list[StepRecord], events: list, scenario_key: str, strateg
         occupancy_start_k=next(r.room_k for r in occ),
         starts_per_hour=(sum(1 for e in in_day if e.code == "start")
                          / max(1e-9, sum(r.dt_s for r in records if r.system_enabled) / HOUR_S)),
+        max_starts_rolling_1h=max_in_window([e.time_s for e in in_day if e.code == "start"]),
+        frequency_share=tuple((hz, sec / on_s) for hz, sec in sorted(shares.items())) if on_s > 0 else (),
+        run_min_minutes=min(runs) if runs else 0.0,
+        run_p10_minutes=_percentile(runs, 0.1),
+        run_median_minutes=_percentile(runs, 0.5),
+        run_p90_minutes=_percentile(runs, 0.9),
+        cold_tank_min_k=min(r.cold_water_k for r in enabled),
+        cold_tank_mean_k=sum(r.cold_water_k * r.dt_s for r in enabled) / enabled_s,
+        cold_tank_max_k=max(r.cold_water_k for r in enabled),
+        mean_chw_target_k=(sum(r.chw_target_k * r.dt_s for r in targets) / sum(r.dt_s for r in targets)
+                           if targets else 0.0),
     )
 
 

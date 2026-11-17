@@ -17,6 +17,7 @@ from .cycle_table import CycleProperties, CycleTable
 from .parameters import (
     CompressorParameters,
     ControlParameters,
+    CoolingControlMode,
     FULL_ELECTRICAL,
     CycleSettings,
     ElectricalParameters,
@@ -75,6 +76,7 @@ __all__ = [
     "CompressorParameters",
     "CompressorPerformance",
     "ControlParameters",
+    "CoolingControlMode",
     "CycleProperties",
     "CycleSettings",
     "CycleTable",
