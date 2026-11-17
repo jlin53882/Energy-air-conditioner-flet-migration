@@ -351,7 +351,8 @@ def schematic_state(record: StepRecord) -> SchematicState:
         valves_open=record.valves_open,
         compressor_on=record.compressor_on,
         outdoor_role=role,
-        fans_on=record.fans,
+        # 房間模式下送風機由室內控制器決定（fans_running）；固定室溫模式 fans_running = 設定的送風機。
+        fans_on=record.fans_running,
         fan_loop_tank="cold_tank" if record.operation is OperationMode.COOLING else "hot_tank",
         cold_color=water_color(record.cold_water_k),
         hot_color=water_color(record.hot_water_k),
@@ -448,7 +449,7 @@ def format_pressure(value_pa: float | None) -> str:
 
 
 def format_clock(seconds: float) -> str:
-    """模擬時間 hh:mm:ss。
+    """模擬時間 hh:mm:ss；超過 24 h 時前面加「第 N 天」（房間模式以時刻呈現）。
 
 參數：
     seconds: 秒。
@@ -456,7 +457,9 @@ def format_clock(seconds: float) -> str:
 回傳：
     文字。"""
     total = int(round(seconds))
-    return f"{total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}"
+    day, rest = divmod(total, 86400)
+    clock = f"{rest // 3600:02d}:{rest % 3600 // 60:02d}:{rest % 60:02d}"
+    return clock if day == 0 else f"第 {day + 1} 天 {clock}"
 
 
 MODE_SHORT_LABELS: dict[RefrigerantMode, str] = {
@@ -684,4 +687,89 @@ def control_band(records: Sequence[StepRecord]) -> ControlBand | None:
         min_y=min_y,
         max_y=max_y,
         clipped=any(a != b for a, b in zip(raw, tank)),
+    )
+
+
+# ---- 時間軸與房間溫濕度圖（§8） ----
+
+
+@dataclass(frozen=True)
+class TimeAxis:
+    """趨勢圖時間軸：x = 秒 ÷ ``divisor``；跨度超過 4 h 改用小時，避免分鐘刻度過密。"""
+
+    divisor: float
+    unit: str
+    min_x: float
+    max_x: float
+    interval: float
+
+
+def time_axis(start_s: float, end_s: float) -> TimeAxis:
+    """依時間跨度選單位與格線間距（最多約 8 格）。
+
+參數：
+    start_s: 起點秒。
+    end_s: 終點秒。
+
+回傳：
+    TimeAxis。"""
+    span_min = max(10.0, (end_s - start_s) / 60)
+    if span_min <= 240:
+        divisor, unit, candidates = 60.0, "min", (5, 10, 15, 30, 60)
+        span = span_min
+    else:
+        divisor, unit, candidates = 3600.0, "h", (1, 2, 3, 4, 6, 12, 24)
+        span = span_min / 60
+    interval = next((step for step in candidates if span / step <= 8), candidates[-1])
+    start = start_s / divisor
+    return TimeAxis(divisor, unit, math.floor(start / interval) * interval,
+                    math.ceil((start + span) / interval) * interval, interval)
+
+
+@dataclass(frozen=True)
+class RoomSeries:
+    """房間溫濕度圖資料（室溫已貼邊到視窗內）。"""
+
+    times_s: tuple[float, ...]
+    room_c: tuple[float, ...]
+    rh_pct: tuple[float, ...]
+    supply_c: tuple[float | None, ...]
+    occupied: tuple[bool, ...]
+    temperature_band_c: tuple[float, float]
+    rh_band_pct: tuple[float, float]
+    min_y: float
+    max_y: float
+    clipped: bool
+
+
+def room_series(records: Sequence[StepRecord], setpoint_c: float = 26.0, band_k: float = 0.5,
+                rh_band: tuple[float, float] = (50.0, 60.0)) -> RoomSeries | None:
+    """房間溫濕度：室溫視窗固定為舒適帶 ± 4 K（偶數邊界），超出的值貼邊；RH 以 % 呈現。
+
+參數：
+    records: 記錄（通常已抽樣）。
+    setpoint_c: 室溫設定值。
+    band_k: 舒適帶半寬。
+    rh_band: RH 舒適帶（%）。
+
+回傳：
+    RoomSeries；沒有房間記錄時為 None。"""
+    rows = [r for r in records if r.room_k is not None and r.room_rh is not None]
+    if not rows:
+        return None
+    low, high = setpoint_c - band_k, setpoint_c + band_k
+    min_y, max_y = 2 * math.floor((low - 3.5) / 2), 2 * math.ceil((high + 3.5) / 2)
+    raw = [r.room_k - 273.15 for r in rows]
+    room = tuple(min(max_y, max(min_y, v)) for v in raw)
+    return RoomSeries(
+        times_s=tuple(r.time_s for r in rows),
+        room_c=room,
+        rh_pct=tuple(r.room_rh * 100 for r in rows),
+        supply_c=tuple(None if r.supply_k is None else r.supply_k - 273.15 for r in rows),
+        occupied=tuple(r.occupied for r in rows),
+        temperature_band_c=(low, high),
+        rh_band_pct=rh_band,
+        min_y=min_y,
+        max_y=max_y,
+        clipped=any(a != b for a, b in zip(raw, room)),
     )

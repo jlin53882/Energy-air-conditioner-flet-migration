@@ -20,11 +20,13 @@ import flet_charts as fch
 
 from application.heat_pump_simulation import HeatPumpSimulationService, SaturationDome
 from domain.heat_pump import (
+    SCENARIOS,
     CoolingControlMode,
     FrequencyMode,
     HeatPumpSimulation,
     OperationMode,
     PumpMode,
+    ReheatMode,
     SimulationEvent,
     StepRecord,
     celsius,
@@ -42,6 +44,8 @@ from ..heat_pump_presentation import (
     TEMPERATURE_LEGEND,
     control_band,
     downsample,
+    room_series,
+    time_axis,
     format_clock,
     format_power,
     format_pressure,
@@ -54,9 +58,14 @@ from ..theme import TOKENS, mono_style, primary_button_style, secondary_button_s
 
 TICK_S = 0.2
 MAX_STEP_S = 5.0
-SPEEDS = (1, 10, 30, 60, 120)
+SPEEDS = (1, 10, 30, 60, 120, 600, 1200)
 DEFAULT_SPEED = 60
 HISTORY_LIMIT_S = 3 * 3600.0
+ROOM_HISTORY_LIMIT_S = 26 * 3600.0  # 房間模式看一整天
+ROOM_COLOR = "#1F7A6D"
+RH_COLOR = "#2F6FB5"
+BAND_COLOR = "#8A9A95"
+REHEAT_MODE_LABELS = {ReheatMode.DEMAND: "按需", ReheatMode.FIXED: "固定 20 %", ReheatMode.OFF: "關閉"}
 TREND_POINTS = 360
 EVENT_ROWS = 30
 COLD_COLOR = "#1F4E89"
@@ -293,6 +302,11 @@ class HeatPumpSimulationView(ft.Column):
         self._event_count = 0
         self._settings = default_settings(OperationMode.COOLING)
         self._control_mode = self.service.params.control.cooling_control_mode
+        self._room_mode = False
+        self._axis = time_axis(0.0, 600.0)
+        self._scenario = "hot"
+        self._reheat_mode = ReheatMode.DEMAND
+        self._chw_reset = False
 
         self.status_text = ft.Text("尚未載入", size=TOKENS.caption, color=TOKENS.text_muted)
         self.clock_text = ft.Text("00:00:00", style=mono_style(size=TOKENS.metric, weight=ft.FontWeight.W_700,
@@ -309,6 +323,8 @@ class HeatPumpSimulationView(ft.Column):
             value=str(DEFAULT_SPEED), on_select=self._on_speed, expand=True,
         ))
         self.operation_button = _segmented([("cooling", "冷房"), ("heating", "暖房")], "cooling", self._on_operation)
+        self.operation_label = ft.Text("運轉方式（兩台送風機統一切換）", size=TOKENS.caption,
+                                       color=TOKENS.text_secondary)
         self.fan_a = ft.Checkbox(label="送風機 A（3.5 kW）", value=True, on_change=self._on_fans)
         self.fan_b = ft.Checkbox(label="送風機 B（5.3 kW）", value=True, on_change=self._on_fans)
         params = self.service.params
@@ -331,6 +347,28 @@ class HeatPumpSimulationView(ft.Column):
         self.hot_pump = _StepSelector(
             "熱水泵頻率", params.hot_pump.frequency_steps_hz, 60.0,
             lambda hz: f"{params.hot_pump.flow_gpm(hz):.2f} GPM · {params.hot_pump.power_w(hz):.0f} W", self._on_pumps)
+        self.room_mode_button = _segmented([("fixed", "固定室溫"), ("room", "房間溫濕度（§8）")], "fixed",
+                                           self._on_room_mode)
+        self.scenario_dropdown = style_dropdown(ft.Dropdown(
+            options=[ft.dropdown.Option(key, f"{sc.name}（外氣 {sc.outdoor_mean_c - sc.outdoor_amplitude_k:g}–"
+                                             f"{sc.outdoor_mean_c + sc.outdoor_amplitude_k:g} °C）")
+                     for key, sc in SCENARIOS.items()],
+            value=self._scenario, on_select=self._on_room_option, expand=True,
+        ))
+        self.reheat_mode_button = _segmented([(m.value, label) for m, label in REHEAT_MODE_LABELS.items()],
+                                             self._reheat_mode.value, self._on_room_option)
+        self.chw_reset_box = ft.Checkbox(label="冰水溫度重設 7–10 °C（快降慢升）", value=False,
+                                         on_change=self._on_room_option)
+        self.room_controls = ft.Column([
+            ft.Text("日負載情境", size=TOKENS.caption, color=TOKENS.text_secondary),
+            ft.Row([self.scenario_dropdown]),
+            ft.Text("除濕後再熱方式", size=TOKENS.caption, color=TOKENS.text_secondary),
+            self.reheat_mode_button,
+            self.chw_reset_box,
+            ft.Text("在室 08–18 時、07:00 起預冷，其餘時段系統停機；室溫、外氣、送風機台數與再熱由情境和室內控制器決定。"
+                    "起始 06:00、室內 28.5 °C／65 %、冰水 12 °C，不是週期穩態，第一天數字只供觀察（比較結果見 §8.7）。"
+                    "改這些選項會重設模擬。", size=TOKENS.caption, color=TOKENS.text_muted),
+        ], spacing=TOKENS.spacing_sm, visible=False)
         self.reheat_slider = _LabeledSlider("除濕後再熱（占盤管負荷）", "%", 0, params.reheat.max_fraction * 100,
                                             self._settings.reheat_fraction * 100, 12, 0, self._on_reheat)
         self.room_slider = _LabeledSlider("室溫", "°C", 10, 35, 27, 50, 1, self._on_environment)
@@ -347,8 +385,13 @@ class HeatPumpSimulationView(ft.Column):
                 ("total_power", "總耗電（含水泵）"), ("cop", "累計系統 COP"), ("discharge", "排氣溫度"),
                 ("flow", "冷媒流量"), ("pr", "壓縮比"), ("aux", "送風機＋水泵"),
                 ("reheat", "再熱熱量"), ("net_cooling", "淨冷卻量（扣再熱）"),
+                ("room_t", "室溫"), ("room_rh", "室內 RH"), ("room_w", "室內含濕量"),
+                ("coil_split", "盤管顯冷／潛冷"), ("outdoor", "外氣"), ("chw_set", "冰水設定（停機）"),
             )
         }
+        self._room_tiles = ("room_t", "room_rh", "room_w", "coil_split", "outdoor", "chw_set")
+        for key in self._room_tiles:
+            self.kpis[key].visible = False
         self.warning_row = ft.Row(wrap=True, spacing=TOKENS.spacing_xs)
         self.event_list = ft.ListView(height=160, spacing=2)
         self.trend_chart = self._make_trend_chart()
@@ -363,6 +406,13 @@ class HeatPumpSimulationView(ft.Column):
         self.control_legend = ft.Row(spacing=TOKENS.spacing_md, wrap=True)
         self.control_note = ft.Text("", size=TOKENS.caption, color=TOKENS.text_muted)
         self.pid_legend = self._legend_item(PID_REQUEST_COLOR, "PID 要求頻率 Hz（量化前）")
+        self.room_temp_chart = self._make_trend_chart(max_y=30, title="°C")
+        self.room_temp_chart.min_y = 22
+        self.room_temp_chart.height = 220
+        self.room_rh_chart = self._make_trend_chart(max_y=90, title="%RH")
+        self.room_rh_chart.min_y = 30
+        self.room_rh_chart.height = 220
+        self.room_note = ft.Text("", size=TOKENS.caption, color=TOKENS.text_muted)
         self._dome: SaturationDome | None = None
 
         legend = ft.Row([
@@ -387,7 +437,11 @@ class HeatPumpSimulationView(ft.Column):
                 ft.Text("播放速度", size=TOKENS.caption, color=TOKENS.text_secondary),
                 ft.Row([self.speed_dropdown]),
                 ft.Divider(height=8, color=TOKENS.border),
-                ft.Text("運轉方式（兩台送風機統一切換）", size=TOKENS.caption, color=TOKENS.text_secondary),
+                ft.Text("室溫模型", size=TOKENS.caption, color=TOKENS.text_secondary),
+                self.room_mode_button,
+                self.room_controls,
+                ft.Divider(height=8, color=TOKENS.border),
+                self.operation_label,
                 self.operation_button,
                 ft.Row([self.fan_a, self.fan_b], wrap=True),
                 ft.Text("壓縮機頻率（日立 E505DH-49A2W，變頻器階梯）", size=TOKENS.caption,
@@ -419,6 +473,21 @@ class HeatPumpSimulationView(ft.Column):
             icon=ft.Icons.ACCOUNT_TREE_OUTLINED,
         )
         schematic_card.col = {"xs": 12, "lg": 8, "xl": 9}
+        room_temp_box = ft.Column([
+            self.room_temp_chart,
+            ft.Row([self._legend_item(ROOM_COLOR, "室溫 °C"), self._legend_item(BAND_COLOR, "舒適帶 25.5–26.5 °C")],
+                   spacing=TOKENS.spacing_md, wrap=True),
+        ], col={"xs": 12, "md": 6})
+        room_rh_box = ft.Column([
+            self.room_rh_chart,
+            ft.Row([self._legend_item(RH_COLOR, "室內 RH %"), self._legend_item(BAND_COLOR, "50–60 %RH")],
+                   spacing=TOKENS.spacing_md, wrap=True),
+        ], col={"xs": 12, "md": 6})
+        self.room_card = EngineeringCard("室內溫濕度（§8 房間模型）", ft.Column([
+            ft.ResponsiveRow([room_temp_box, room_rh_box], spacing=TOKENS.spacing_md),
+            self.room_note,
+        ]), subtitle="50 m² 假設房間；在室時段才計入舒適度", icon=ft.Icons.WATER_DROP_OUTLINED)
+        self.room_card.visible = False
         self.control_card = EngineeringCard("受控水桶與啟停門檻", ft.Column([
             self.control_chart, self.control_legend, self.control_note,
         ]), subtitle="縱軸放大到門檻附近；趨勢圖的 0–65 刻度看不出 0.5 K 的差異", icon=ft.Icons.THERMOSTAT)
@@ -450,6 +519,7 @@ class HeatPumpSimulationView(ft.Column):
                 ft.ResponsiveRow([controls_card, schematic_card], spacing=TOKENS.spacing_md,
                                  run_spacing=TOKENS.spacing_md),
                 ft.ResponsiveRow(list(self.kpis.values()), spacing=TOKENS.spacing_sm, run_spacing=TOKENS.spacing_sm),
+                self.room_card,
                 self.control_card,
                 ft.ResponsiveRow([trend_card, response_card], spacing=TOKENS.spacing_md,
                                  run_spacing=TOKENS.spacing_md),
@@ -578,7 +648,12 @@ class HeatPumpSimulationView(ft.Column):
 
 回傳：
     無。"""
-        self.sim = self.service.new_session(self._settings, cooling_control_mode=self._control_mode)
+        if self._room_mode:
+            self.sim = self.service.new_room_session(
+                self._settings, self._scenario, reheat_mode=self._reheat_mode, chw_reset=self._chw_reset,
+                cooling_control_mode=self._control_mode)
+        else:
+            self.sim = self.service.new_session(self._settings, cooling_control_mode=self._control_mode)
         self.records = []
         self._event_count = 0
         self.event_list.controls = []
@@ -639,7 +714,7 @@ class HeatPumpSimulationView(ft.Column):
             self.status_text.value = f"模擬停止：{error}"
             self._safe_update()
             return
-        cutoff = self.records[-1].time_s - HISTORY_LIMIT_S
+        cutoff = self.records[-1].time_s - (ROOM_HISTORY_LIMIT_S if self._room_mode else HISTORY_LIMIT_S)
         if self.records[0].time_s < cutoff:
             self.records = [r for r in self.records if r.time_s >= cutoff]
         self.latest = self.records[-1]
@@ -738,6 +813,77 @@ class HeatPumpSimulationView(ft.Column):
         self._apply_settings(replace(self._settings, frequency_mode=mode,
                                      manual_frequency_hz=self.freq_step.value))
 
+    def _restart_paused(self, message: str) -> None:
+        """以目前選項重建模擬並暫停（房間模式選項、控制架構切換共用）。
+
+參數：
+    message: 狀態列訊息。
+
+回傳：
+    無。"""
+        if self.sim is not None:
+            self.running = False
+            self.play_button.content = "播放"
+            self.play_button.icon = ft.Icons.PLAY_ARROW
+            self.status_text.value = message
+            self._new_session()
+        self._safe_update()
+
+    def _sync_room_controls(self) -> None:
+        """依室溫模型啟用／停用相關控制項。
+
+回傳：
+    無。"""
+        room = self._room_mode
+        self.room_controls.visible = room
+        self.room_card.visible = room
+        for key in self._room_tiles:
+            self.kpis[key].visible = room
+        # 房間模式：只支援冷房；室溫、外氣由情境決定；再熱由再熱方式決定；送風機勾選改為「可用」。
+        self.operation_button.disabled = room
+        self.room_slider.disabled = room
+        self.outdoor_slider.disabled = room
+        self.reheat_slider.disabled = room or self._settings.operation is OperationMode.HEATING
+        self.operation_label.value = ("運轉方式（房間模式只支援冷房）" if room
+                                      else "運轉方式（兩台送風機統一切換）")
+        self.fan_a.label = "可用：送風機 A（3.5 kW）" if room else "送風機 A（3.5 kW）"
+        self.fan_b.label = "可用：送風機 B（5.3 kW）" if room else "送風機 B（5.3 kW）"
+
+    def _on_room_mode(self, _event: ft.ControlEvent) -> None:
+        """固定室溫／房間溫濕度模型（§8）。切到房間模式時改為冷房，並重設模擬。
+
+參數：
+    _event: 事件。
+
+回傳：
+    無。"""
+        room = _selected(self.room_mode_button) == "room"
+        if room == self._room_mode:
+            return
+        self._room_mode = room
+        if room and self._settings.operation is not OperationMode.COOLING:
+            defaults = default_settings(OperationMode.COOLING)
+            self.operation_button.selected = ["cooling"]
+            self._settings = replace(self._settings, operation=OperationMode.COOLING, room_k=defaults.room_k,
+                                     outdoor_k=defaults.outdoor_k)
+            self.control_mode_text.value = self._control_mode_caption()
+        self._sync_room_controls()
+        self._restart_paused("已切換為房間溫濕度模型，模擬已重設" if room else "已切換為固定室溫，模擬已重設")
+
+    def _on_room_option(self, _event: ft.ControlEvent) -> None:
+        """情境、再熱方式、冰水重設：房間模型建立時決定，所以變更會重設模擬。
+
+參數：
+    _event: 事件。
+
+回傳：
+    無。"""
+        self._scenario = self.scenario_dropdown.value or self._scenario
+        self._reheat_mode = ReheatMode(_selected(self.reheat_mode_button))
+        self._chw_reset = bool(self.chw_reset_box.value)
+        if self._room_mode:
+            self._restart_paused("已變更房間情境設定，模擬已重設")
+
     def _control_mode_caption(self) -> str:
         """控制架構說明（暖房時註明不影響）。
 
@@ -761,13 +907,7 @@ class HeatPumpSimulationView(ft.Column):
             return
         self._control_mode = mode
         self.control_mode_text.value = self._control_mode_caption()
-        if self.sim is not None:
-            self.running = False
-            self.play_button.content = "播放"
-            self.play_button.icon = ft.Icons.PLAY_ARROW
-            self.status_text.value = "已切換冷房控制架構，模擬已重設"
-            self._new_session()
-        self._safe_update()
+        self._restart_paused("已切換冷房控制架構，模擬已重設")
 
     def _on_manual_freq(self, value: float) -> None:
         """手動頻率。
@@ -864,8 +1004,8 @@ class HeatPumpSimulationView(ft.Column):
 
 回傳：
     無。"""
-        self.schematic.render(record, self._refrigerant_phase, self._water_phase, self._rotor_angle,
-                              self._settings.outdoor_k)
+        outdoor_k = record.outdoor_k if record is not None and record.outdoor_k is not None else self._settings.outdoor_k
+        self.schematic.render(record, self._refrigerant_phase, self._water_phase, self._rotor_angle, outdoor_k)
         self.clock_text.value = format_clock(self.sim.time_s if self.sim else 0.0)
         k = self.kpis
         if record is None:
@@ -890,6 +1030,13 @@ class HeatPumpSimulationView(ft.Column):
         k["aux"].set_value(format_power(record.fan_power_w + record.pump_power_w), "kW")
         k["reheat"].set_value(format_power(record.reheat_w), "kW")
         k["net_cooling"].set_value(format_power(record.net_cooling_w), "kW")
+        if record.room_k is not None:
+            k["room_t"].set_value(format_temperature(record.room_k), "°C")
+            k["room_rh"].set_value(f"{(record.room_rh or 0) * 100:.0f}", "%")
+            k["room_w"].set_value(f"{(record.room_humidity_ratio or 0) * 1000:.1f}", "g/kg")
+            k["coil_split"].set_value(f"{record.coil_sensible_w / 1000:.2f}／{record.coil_latent_w / 1000:.2f}", "kW")
+            k["outdoor"].set_value(format_temperature(record.outdoor_k), "°C")
+            k["chw_set"].set_value(format_temperature(record.chw_setpoint_k), "°C")
         k["flow"].set_value(f"{record.mass_flow_kg_s * 1000:.1f}" if on else "—", "g/s" if on else "")
         k["cooling"].set_value(format_power(record.cooling_w), "kW")
         k["heating"].set_value(format_power(record.heating_w), "kW")
@@ -943,16 +1090,18 @@ class HeatPumpSimulationView(ft.Column):
     無。"""
         samples = downsample(self.records, TREND_POINTS)
         if samples:
-            start_min = samples[0].time_s / 60
-            span_min = max(10.0, samples[-1].time_s / 60 - start_min)
-            interval = next(step for step in (5, 10, 15, 30, 60) if span_min / step <= 8)
-            self.trend_chart.min_x = math.floor(start_min / interval) * interval
-            self.trend_chart.max_x = math.ceil((start_min + span_min) / interval) * interval
+            # 跨度超過 4 h（房間模式看一整天）改用小時，避免分鐘刻度過密。
+            axis = time_axis(samples[0].time_s, samples[-1].time_s)
+            self._axis = axis
+            interval = axis.interval
+            self.trend_chart.min_x = axis.min_x
+            self.trend_chart.max_x = axis.max_x
             self.trend_chart.vertical_grid_lines = fch.ChartGridLines(interval=interval, color=TOKENS.border, width=0.6)
+            title = "時刻 (h)" if self._room_mode and axis.unit == "h" else f"模擬時間 ({axis.unit})"
 
             def series(values, color):
                 return fch.LineChartData(
-                    points=[fch.LineChartDataPoint(r.time_s / 60, v) for r, v in zip(samples, values)],
+                    points=[fch.LineChartDataPoint(r.time_s / axis.divisor, v) for r, v in zip(samples, values)],
                     color=color, stroke_width=2, curved=False,
                 )
 
@@ -961,20 +1110,22 @@ class HeatPumpSimulationView(ft.Column):
             self.pid_legend.visible = show_pid
             self.trend_chart.data_series = (
                 [fch.LineChartData(
-                    points=[fch.LineChartDataPoint(r.time_s / 60, r.pid_request_hz) for r in samples],
+                    points=[fch.LineChartDataPoint(r.time_s / axis.divisor, r.pid_request_hz) for r in samples],
                     color=PID_REQUEST_COLOR, stroke_width=1.5, curved=False)] if show_pid else []
             ) + [
                 series([r.cold_water_k - 273.15 for r in samples], COLD_COLOR),
                 series([r.hot_water_k - 273.15 for r in samples], HOT_COLOR),
                 series([r.frequency_hz for r in samples], FREQ_COLOR),
             ]
-            for chart in (self.trend_chart, self.response_chart, self.control_chart):
+            charts = (self.trend_chart, self.response_chart, self.control_chart, self.room_temp_chart, self.room_rh_chart)
+            for chart in charts:
                 # 橫軸標籤與格線同間距（否則全寬的門檻圖會每 0.5 min 一個標籤）。
                 chart.bottom_axis.label_spacing = interval
-            for attr in ("min_x", "max_x", "vertical_grid_lines"):
-                setattr(self.response_chart, attr, getattr(self.trend_chart, attr))
-                setattr(self.control_chart, attr, getattr(self.trend_chart, attr))
+                chart.bottom_axis.title = ft.Text(title, size=TOKENS.caption)
+                for attr in ("min_x", "max_x", "vertical_grid_lines"):
+                    setattr(chart, attr, getattr(self.trend_chart, attr))
             self._update_control_chart(samples)
+            self._update_room_charts(samples)
             cops = [instant_cop(r) or 0.0 for r in samples]
             # 縱軸隨資料放大：Flet 圖表不裁切超出 max_y 的線，起始降溫時熱量可超過 20 kW，會畫到卡片標題上。
             peak = max(max(r.cooling_w, r.heating_w, r.total_power_w, r.reheat_w) for r in samples) / 1000
@@ -1065,7 +1216,8 @@ class HeatPumpSimulationView(ft.Column):
         self.control_chart.max_y = band.max_y
         self.control_chart.horizontal_grid_lines = fch.ChartGridLines(interval=1, color=TOKENS.border, width=0.6)
         self.control_chart.left_axis.label_spacing = 2
-        start, end = band.times_min[0], band.times_min[-1]
+        scale = 60.0 / self._axis.divisor  # band 以分鐘給時間
+        start, end = band.times_min[0] * scale, band.times_min[-1] * scale
         # 門檻線用細實線（不用虛線或漸層：部分桌面客戶端遇到特殊畫筆會中斷繪製）。
         series = [
             fch.LineChartData(points=[fch.LineChartDataPoint(start, line.value_c), fch.LineChartDataPoint(end, line.value_c)],
@@ -1073,7 +1225,7 @@ class HeatPumpSimulationView(ft.Column):
             for line in band.lines
         ]
         series.append(fch.LineChartData(
-            points=[fch.LineChartDataPoint(t, v) for t, v in zip(band.times_min, band.tank_c)],
+            points=[fch.LineChartDataPoint(t * scale, v) for t, v in zip(band.times_min, band.tank_c)],
             color=COLD_COLOR if band.tank_label.startswith("冰水") else HOT_COLOR, stroke_width=2, curved=False))
         self.control_chart.data_series = series
         self.control_legend.controls = [self._legend_item(COLD_COLOR if band.tank_label.startswith("冰水") else HOT_COLOR,
@@ -1085,6 +1237,47 @@ class HeatPumpSimulationView(ft.Column):
         if len(band.lines) < 3:
             notes.append("舊控制的 PID 目標與停機門檻相同，桶溫一到目標就停機，所以只有兩條線")
         self.control_note.value = "；".join(notes)
+
+    def _update_room_charts(self, samples: list[StepRecord]) -> None:
+        """房間溫濕度圖（§8）：室溫＋舒適帶、RH＋50–60 % 帶；只在房間模式顯示。
+
+參數：
+    samples: 抽樣後記錄。
+
+回傳：
+    無。"""
+        data = room_series(samples) if self._room_mode else None
+        if data is None:
+            self.room_temp_chart.data_series = []
+            self.room_rh_chart.data_series = []
+            self.room_note.value = ""
+            return
+        d = self._axis.divisor
+        xs = [t / d for t in data.times_s]
+        x0, x1 = xs[0], xs[-1]
+
+        def flat(value: float) -> fch.LineChartData:
+            return fch.LineChartData(points=[fch.LineChartDataPoint(x0, value), fch.LineChartDataPoint(x1, value)],
+                                     color=BAND_COLOR, stroke_width=1.5, curved=False)
+
+        self.room_temp_chart.min_y, self.room_temp_chart.max_y = data.min_y, data.max_y
+        self.room_temp_chart.left_axis.label_spacing = 1
+        self.room_temp_chart.horizontal_grid_lines = fch.ChartGridLines(interval=1, color=TOKENS.border, width=0.6)
+        self.room_temp_chart.data_series = [flat(v) for v in data.temperature_band_c] + [
+            fch.LineChartData(points=[fch.LineChartDataPoint(x, v) for x, v in zip(xs, data.room_c)],
+                              color=ROOM_COLOR, stroke_width=2, curved=False)]
+        rh = [min(90.0, max(30.0, v)) for v in data.rh_pct]
+        self.room_rh_chart.left_axis.label_spacing = 10
+        self.room_rh_chart.horizontal_grid_lines = fch.ChartGridLines(interval=10, color=TOKENS.border, width=0.6)
+        self.room_rh_chart.data_series = [flat(v) for v in data.rh_band_pct] + [
+            fch.LineChartData(points=[fch.LineChartDataPoint(x, v) for x, v in zip(xs, rh)],
+                              color=RH_COLOR, stroke_width=2, curved=False)]
+        latest = samples[-1]
+        state = ("在室" if latest.occupied else "非在室") + ("、空調啟用" if latest.system_enabled else "、空調停用")
+        notes = [f"目前：{state}（在室 08–18 時，07:00 起預冷）"]
+        if data.clipped:
+            notes.append(f"室溫超出 {data.min_y:g}–{data.max_y:g} °C 的部分貼在圖框邊緣")
+        self.room_note.value = "；".join(notes)
 
     def _safe_update(self) -> None:
         """已掛載時才更新畫面。

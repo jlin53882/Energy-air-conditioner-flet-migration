@@ -10,9 +10,13 @@ import threading
 from dataclasses import dataclass, replace
 
 from domain.heat_pump import (
+    FULL_ELECTRICAL,
+    SCENARIOS,
     CoolingControlMode,
     CycleTable,
     HeatPumpParameters,
+    ReheatMode,
+    RoomModel,
     HeatPumpSimulation,
     OperationMode,
     SimulationSettings,
@@ -138,3 +142,42 @@ class HeatPumpSimulationService:
             initial_cold_k=initial_cold_k,
             initial_hot_k=initial_hot_k,
         )
+
+    def new_room_session(
+        self,
+        settings: SimulationSettings,
+        scenario_key: str,
+        reheat_mode: ReheatMode = ReheatMode.DEMAND,
+        chw_reset: bool = False,
+        cooling_control_mode: CoolingControlMode | None = None,
+        start_h: float = 6.0,
+        initial_room_k: float = celsius(28.5),
+        initial_room_rh: float = 0.65,
+    ) -> HeatPumpSimulation:
+        """建立含房間溫濕度模型的冷房 session（§8；全系統耗電口徑 ``FULL_ELECTRICAL``，與 §8 比較一致）。
+
+        ``settings.fans`` 為「可用送風機」，實際運轉台數由室內控制器決定；室溫、外氣與再熱由情境與房間模型決定。
+        起始狀態為 UI 用的簡化值（不是 §8.6 的週期穩態），第一天的數字只供觀察，不能當比較結果。
+
+參數：
+    settings: 設定（運轉方式須為冷房）。
+    scenario_key: ``SCENARIOS`` 的鍵（hot／humid／mild）。
+    reheat_mode: 再熱方式。
+    chw_reset: 是否啟用冰水溫度重設。
+    cooling_control_mode: 冷房控制架構（None 沿用 ``params``）。
+    start_h: 起始時刻（時）。
+    initial_room_k: 起始室溫。
+    initial_room_rh: 起始室內相對濕度。
+
+回傳：
+    HeatPumpSimulation。
+
+引發：
+    KeyError：未知情境。ValueError：設定不是冷房時。"""
+        params = replace(self.params, electrical=FULL_ELECTRICAL)
+        if cooling_control_mode is not None:
+            params = replace(params, control=replace(params.control, cooling_control_mode=cooling_control_mode))
+        room = RoomModel(SCENARIOS[scenario_key], reheat_mode=reheat_mode, chw_reset=chw_reset,
+                         initial_k=initial_room_k, initial_rh=initial_room_rh)
+        return HeatPumpSimulation(self.table(), params, settings, initial_cold_k=celsius(12.0),
+                                  initial_hot_k=celsius(30.0), room=room, start_time_s=start_h * 3600.0)

@@ -13,6 +13,7 @@ from domain.heat_pump import (
     OperationMode,
     PumpMode,
     RefrigerantMode,
+    ReheatMode,
     celsius,
     default_settings,
 )
@@ -452,3 +453,80 @@ def test_view_control_mode_switch_resets_and_draws_thresholds(service: HeatPumpS
     view.operation_button.selected = ["heating"]
     view._on_operation(None)
     assert "暖房不受影響" in view.control_mode_text.value
+
+
+# ---- 房間溫濕度模型（§8） ----
+
+
+def test_time_axis_switches_to_hours_for_long_spans() -> None:
+    """跨度 ≤ 4 h 用分鐘、超過改用小時，格線最多約 8 格。
+
+回傳：
+    無。"""
+    short = hp.time_axis(0.0, 3 * 3600.0)
+    assert short.unit == "min" and short.interval == 30
+    day = hp.time_axis(6 * 3600.0, 30 * 3600.0)
+    assert day.unit == "h" and day.interval == 3 and (day.min_x, day.max_x) == (6, 30)
+    assert hp.format_clock(3600.0) == "01:00:00"
+    assert hp.format_clock(86400.0 + 7 * 3600.0) == "第 2 天 07:00:00"
+
+
+def test_room_session_and_series(service: HeatPumpSimulationService) -> None:
+    """房間 session 從 06:00 起、用全系統耗電口徑；室溫視窗為舒適帶 ± 約 4 K（偶數邊界）；
+    示意圖的送風機取室內控制器實際開的台數。
+
+回傳：
+    無。"""
+    sim = service.new_room_session(default_settings(OperationMode.COOLING), "hot")
+    assert sim.time_s == pytest.approx(6 * 3600.0)
+    assert sim.params.electrical.standby_w > 0
+    records = sim.run(2.5 * 3600.0)
+    assert not records[0].system_enabled and records[-1].system_enabled
+    series = hp.room_series(records)
+    assert series is not None and (series.min_y, series.max_y) == (22, 30)
+    assert series.temperature_band_c == pytest.approx((25.5, 26.5))
+    assert all(30.0 < v < 90.0 for v in series.rh_pct)
+    off = records[0]
+    assert off.fans_running == frozenset() and hp.schematic_state(off).fans_on == frozenset()
+    assert hp.room_series([r for r in records if False]) is None
+
+
+def test_view_room_mode_toggles_controls_and_charts(service: HeatPumpSimulationService) -> None:
+    """切到房間模式：改為冷房並重設、停用暖房／室溫／外氣／再熱滑桿、顯示房間卡片與數值卡；
+    情境與再熱方式變更會重設；播放後畫出室溫與 RH（含舒適帶），時間軸跨度長時改用小時。
+
+回傳：
+    無。"""
+    view, _started = _view(service)
+    view._on_play(None)
+    view.operation_button.selected = ["heating"]
+    view._on_operation(None)
+    view.room_mode_button.selected = ["room"]
+    view._on_room_mode(None)
+    assert view.sim.room is not None and view.sim.settings.operation is OperationMode.COOLING
+    assert view.operation_button.disabled and view.room_slider.disabled and view.outdoor_slider.disabled
+    assert view.reheat_slider.disabled and view.room_card.visible and view.room_controls.visible
+    assert all(view.kpis[key].visible for key in view._room_tiles)
+    assert "可用" in view.fan_a.label and "已切換為房間" in view.status_text.value
+    view.scenario_dropdown.value = "humid"
+    view.reheat_mode_button.selected = [ReheatMode.OFF.value]
+    view.chw_reset_box.value = True
+    view._on_room_option(None)
+    assert view.sim.room.scenario.name.startswith("高濕")
+    assert view.sim.room.reheat_mode is ReheatMode.OFF and view.sim.room.chw_reset
+    view.speed = 1200
+    for _ in range(40):  # 40 × 240 s = 2 h 40 min
+        view.tick()
+    assert view.kpis["room_t"].value_control.value != "—"
+    assert len(view.room_temp_chart.data_series) == 3 and len(view.room_rh_chart.data_series) == 3
+    assert view.room_temp_chart.min_y == 22 and view.room_temp_chart.max_y == 30
+    assert "在室" in view.room_note.value
+    assert view._axis.unit == "min"
+    for _ in range(30):  # 再 2 h：跨度 > 4 h 改用小時
+        view.tick()
+    assert view._axis.unit == "h"
+    assert view.room_temp_chart.bottom_axis.title.value == "時刻 (h)"
+    view.room_mode_button.selected = ["fixed"]
+    view._on_room_mode(None)
+    assert view.sim.room is None and not view.room_card.visible and not view.operation_button.disabled
+    assert not any(view.kpis[key].visible for key in view._room_tiles)
