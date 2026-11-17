@@ -557,4 +557,3 @@ class RoomModel:
         ind.t_slope_k_s += alpha * ((self.state.temperature_k - t) / dt_s - ind.t_slope_k_s)
         ind.rh_slope_s += alpha * ((self.relative_humidity - rh_before) / dt_s - ind.rh_slope_s)
         return supply_sensible, supply_moisture
-
