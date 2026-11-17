@@ -198,9 +198,12 @@ Invalid request shape、known property 不足、invalid fluid/policy 與 unknown
 - 室外換熱器以原廠資料（報告表 2.1.5）的有效熱導 G = Q ÷ (T_冷媒平均 − T_設計進風) 計算；設計進風溫度（35 °C）為假設值。
 - 房間溫濕度模型（選用，只支援冷房；`simulation-model.md` §8）：`HeatPumpSimulation(..., room=RoomModel(...), start_time_s=...)`。有房間模型時：
   - 室溫、含濕量是狀態（`RoomModel.state`），外氣取日負載情境（`DailyScenario`），`settings.room_k`／`outdoor_k`／`reheat_fraction` 不使用；`settings.fans` 改為「可用送風機」，實際運轉由室內控制器分級（`StepRecord.fans_running`）。
-  - 送風機盤管改為濕盤管（`wet_coil.coil_performance`，Braun 焓基 ε-NTU，乾／濕取大者）：冷量隨冰水溫度、**冰水流量**與室內溫濕度變化，分顯熱／潛熱（`coil_sensible_w`／`coil_latent_w`），盤管進水為冰水桶、回水再進板式蒸發器（串聯不變）。
+  - 送風機盤管改為部分乾／部分濕的焓基 ε-NTU 盤管（`wet_coil.coil_performance`，依 EnergyPlus「Coil:Cooling:Water」詳細模式，逆流；交界處表面溫度 = 進風露點）：冷量隨冰水溫度、**冰水流量**與室內溫濕度變化，分顯熱／潛熱（`coil_sensible_w`／`coil_latent_w`），盤管進水為冰水桶、回水再進板式蒸發器（串聯不變）。
+  - 盤管每次計算都以 `wet_coil.invariant_violations()` 檢查：空氣側焓降 = 水側得熱、0 ≤ W_out ≤ W_in、RH_out ≤ 100 %、凝結 ≥ 0、迭代收斂；違反次數累計在 `HeatPumpSimulation.coil_check_failures`。
   - 再熱由 `ReheatMode`（`OFF`／`FIXED`／`DEMAND`）決定，再熱量從熱水桶扣除**並加回送風顯熱**（`supply_k`）。
   - 冷房冰水停機溫度可由冰水溫度重設改變（`chw_setpoint_k`；重啟 = 設定值 + 1 K）。
-  - 排程外（`DailyScenario.system_enabled` 為假）壓縮機、水泵、送風機都停。`settings.idle_pump_off` 啟用非必要迴路停泵。水泵自動時，送風機運轉中冰水泵最低 40 Hz，且室溫或濕度超出上限時不降階。
+  - 排程外（`DailyScenario.system_enabled` 為假）壓縮機、水泵、送風機都停。`settings.idle_pump_off` 啟用非必要迴路停泵。
+  - 室內控制器以 EWMA 斜率預測 10 min 後的室溫與 RH（`RoomModel.predicted_temperature_k`／`predicted_rh`）：送風機分級、冰水重設與水泵自動都看預測值。水泵自動時，送風機運轉中若溫濕度接近上限（`comfort_tight()`）就升一階，只有實際與預測都有餘裕（`comfort_ample()`）才允許降階；沒有固定頻率下限。
+  - `DailyScenario` 建構時檢查外氣含濕量不超過當日最低外氣溫度的飽和值，否則 `ValueError`。
 - 耗電口徑：`HeatPumpParameters.electrical`（`ElectricalParameters`）預設全為 0／1，維持既有口徑；`FULL_ELECTRICAL` 另計室外風扇 200 W（室外換熱器在流路且壓縮機運轉時）、變頻器效率 96 %、待機 30 W（假設值）。`StepRecord.total_power_w` 含 `outdoor_fan_power_w` 與 `standby_power_w`。
-- 策略比較（`domain/heat_pump/comparison.py`、`scripts/heat_pump_strategy_comparison.py`）：每策略自相同初始狀態連跑兩天，第一天量達標時間、第二天統計；以主機冷房 COP 修正冰水桶與房間儲能差；只在舒適度不劣於舒適基準（`ComfortTolerance`）者中選修正後用電最低者。
+- 策略比較（`domain/heat_pump/comparison.py`、`scripts/heat_pump_strategy_comparison.py`）：每策略自相同初始狀態開始，第一天量達標時間；之後重複同一日工況直到週期穩態（相隔兩天的狀態與用電接近，`PeriodicTolerance`），以最後兩天平均統計。殘留儲能差以主機 COP 換算列出，但不計入用電。列入比較須同時通過數值檢查（`StrategyResult.valid`）、絕對門檻（`AbsoluteComfort`）與不劣於舒適基準（`ComfortTolerance`）；沒有方案通過絕對門檻時，只提供條件式排名（`best_relative_only`）。
