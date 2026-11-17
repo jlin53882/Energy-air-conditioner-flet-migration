@@ -14,6 +14,7 @@ from domain.heat_pump import (
     PumpMode,
     RefrigerantMode,
     ReheatMode,
+    ZoneMode,
     celsius,
     default_settings,
 )
@@ -559,3 +560,32 @@ def test_view_dehumidify_mode_uses_room_model_and_coordinated_reheat(service: He
     view._on_operation(None)
     assert view.sim.room is not None and view.sim.room.reheat_mode is ReheatMode.OFF
     assert not view.room_mode_button.disabled and view.reheat_mode_button.visible
+
+
+def test_view_zoned_mode_draws_each_zone(service: HeatPumpSimulationService) -> None:
+    """分區：勾選後每區各選模式、建立兩區模型；溫濕度圖每區一條線（不畫平均）、數值卡以「A｜B」並列。
+
+回傳：
+    無。"""
+    view, _started = _view(service)
+    view._on_play(None)
+    view.room_mode_button.selected = ["room"]
+    view._on_room_mode(None)
+    view.zoned_box.value = True
+    view.zone_buttons["A"].selected = [ZoneMode.COOLING.value]
+    view.zone_buttons["B"].selected = [ZoneMode.DEHUMIDIFY.value]
+    view._on_zone_option(None)
+    assert view.zone_controls.visible and not view.single_room_controls.visible
+    zones = view.sim.room.zones
+    assert [z.mode for z in zones] == [ZoneMode.COOLING, ZoneMode.DEHUMIDIFY]
+    assert "分區" in view.mode_caption.value and view.kpis["dehum_state"].visible
+    view.speed = 1200
+    for _ in range(25):  # 06:00 → 07:40
+        view.tick()
+    assert len(view.room_temp_chart.data_series) == 4  # 兩條舒適帶＋A、B
+    assert "A｜B" in view.kpis["room_t"].unit_control.value
+    assert view.kpis["dehum_state"].unit_control.value == "A｜B"
+    assert any("B 區" in str(item.controls[1].value) for item in view.room_temp_legend.controls)
+    view.zone_buttons["A"].selected = [ZoneMode.OFF.value]
+    view._on_zone_option(None)
+    assert view.sim.room.zones[0].mode is ZoneMode.OFF

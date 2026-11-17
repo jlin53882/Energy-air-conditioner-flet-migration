@@ -773,3 +773,35 @@ def room_series(records: Sequence[StepRecord], setpoint_c: float = 26.0, band_k:
         max_y=max_y,
         clipped=any(a != b for a, b in zip(raw, room)),
     )
+
+
+@dataclass(frozen=True)
+class ZoneLine:
+    """一區的室溫與 RH 序列（室溫已貼邊到視窗）。"""
+
+    name: str
+    mode: str
+    room_c: tuple[float, ...]
+    rh_pct: tuple[float, ...]
+
+
+def zone_lines(records: Sequence[StepRecord], min_y: float, max_y: float) -> tuple[tuple[float, ...], tuple[ZoneLine, ...]]:
+    """多區記錄（``StepRecord.zones``）轉成各區的室溫與 RH 序列。
+
+參數：
+    records: 記錄。
+    min_y: 室溫視窗下限。
+    max_y: 室溫視窗上限。
+
+回傳：
+    (時間秒, 各區序列)；沒有分區記錄時兩者皆為空。"""
+    rows = [r for r in records if r.zones]
+    if not rows:
+        return (), ()
+    lines = []
+    for i, zone in enumerate(rows[-1].zones):
+        lines.append(ZoneLine(
+            name=zone.name, mode=zone.mode.value,
+            room_c=tuple(min(max_y, max(min_y, r.zones[i].temperature_k - 273.15)) for r in rows),
+            rh_pct=tuple(r.zones[i].relative_humidity * 100 for r in rows)))
+    return tuple(r.time_s for r in rows), tuple(lines)

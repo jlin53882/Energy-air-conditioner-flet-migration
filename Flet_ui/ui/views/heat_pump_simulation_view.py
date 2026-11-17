@@ -19,6 +19,7 @@ import flet as ft
 import flet_charts as fch
 
 from application.heat_pump_simulation import HeatPumpSimulationService, SaturationDome
+from domain.heat_pump.room import ZONE_SCENARIOS
 from domain.heat_pump import (
     SCENARIOS,
     CoolingControlMode,
@@ -28,6 +29,7 @@ from domain.heat_pump import (
     PumpMode,
     ReheatMode,
     SimulationEvent,
+    ZoneMode,
     StepRecord,
     celsius,
     default_settings,
@@ -46,6 +48,7 @@ from ..heat_pump_presentation import (
     downsample,
     room_series,
     time_axis,
+    zone_lines,
     format_clock,
     format_power,
     format_pressure,
@@ -68,6 +71,8 @@ BAND_COLOR = "#8A9A95"
 # 冷房模式可選的再熱方式（預設關閉）；協調除濕屬於除濕模式，不在此列。
 REHEAT_MODE_LABELS = {ReheatMode.OFF: "關閉", ReheatMode.DEMAND: "按需", ReheatMode.FIXED: "固定 20 %"}
 MODE_NAMES = {"cooling": "冷房", "heating": "暖房", "dehumidify": "除濕"}
+ZONE_MODE_LABELS = {ZoneMode.COOLING: "冷房", ZoneMode.DEHUMIDIFY: "除濕", ZoneMode.OFF: "停止"}
+ZONE_COLORS = {"A": "#C2410C", "B": "#1F4E89"}
 MODE_CAPTIONS = {
     "cooling": "冷房：維持室溫；冰水盤管冷卻，再熱預設關閉（過程中仍會自然除濕）",
     "heating": "暖房：維持室溫；熱水供暖房盤管，再熱支路關閉（目前為固定室溫模型）",
@@ -317,6 +322,9 @@ class HeatPumpSimulationView(ft.Column):
         self._scenario = "hot"
         self._reheat_mode = ReheatMode.OFF
         self._chw_reset = False
+        self._zoned = False
+        self._zone_scenario = "summer"
+        self._zone_modes = {"A": ZoneMode.COOLING, "B": ZoneMode.DEHUMIDIFY}
 
         self.status_text = ft.Text("尚未載入", size=TOKENS.caption, color=TOKENS.text_muted)
         self.clock_text = ft.Text("00:00:00", style=mono_style(size=TOKENS.metric, weight=ft.FontWeight.W_700,
@@ -371,16 +379,43 @@ class HeatPumpSimulationView(ft.Column):
         self.reheat_mode_label = ft.Text("除濕後再熱方式（冷房）", size=TOKENS.caption, color=TOKENS.text_secondary)
         self.chw_reset_box = ft.Checkbox(label="冰水溫度重設 7–10 °C（快降慢升）", value=False,
                                          on_change=self._on_room_option)
+        self.zoned_box = ft.Checkbox(label="A、B 各自房間（分區，各選模式）", value=False, on_change=self._on_zone_option)
+        self.zone_scenario_dropdown = style_dropdown(ft.Dropdown(
+            options=[ft.dropdown.Option(key, title) for key, (title, _a, _b) in ZONE_SCENARIOS.items()],
+            value=self._zone_scenario, on_select=self._on_zone_option, expand=True,
+        ))
+        self.zone_buttons = {
+            name: _segmented([(m.value, label) for m, label in ZONE_MODE_LABELS.items()], self._zone_modes[name].value,
+                             self._on_zone_option)
+            for name in ("A", "B")
+        }
+        self.zone_controls = ft.Column([
+            ft.Text("分區情境", size=TOKENS.caption, color=TOKENS.text_secondary),
+            ft.Row([self.zone_scenario_dropdown]),
+            ft.Text("A 區（送風機 A）模式", size=TOKENS.caption, color=TOKENS.text_secondary),
+            self.zone_buttons["A"],
+            ft.Text("B 區（送風機 B）模式", size=TOKENS.caption, color=TOKENS.text_secondary),
+            self.zone_buttons["B"],
+            ft.Text("兩區共用冰水（冰水設定取運轉區的最低要求），再熱各區獨立（假設）。"
+                    "暖房／冷房、暖房／除濕需要每台能獨立選冰水或熱水，目前水路兩台統一切換，屬第二階段，尚未提供。",
+                    size=TOKENS.caption, color=TOKENS.text_muted),
+        ], spacing=TOKENS.spacing_sm, visible=False)
+        self.single_room_controls = ft.Column(spacing=TOKENS.spacing_sm)
         self.room_controls = ft.Column([
-            ft.Text("日負載情境", size=TOKENS.caption, color=TOKENS.text_secondary),
-            ft.Row([self.scenario_dropdown]),
-            self.reheat_mode_label,
-            self.reheat_mode_button,
+            self.zoned_box,
+            self.zone_controls,
+            self.single_room_controls,
             self.chw_reset_box,
             ft.Text("在室 08–18 時、07:00 起預冷，其餘時段系統停機；室溫、外氣、送風機台數與再熱由情境和室內控制器決定。"
                     "起始 06:00、室內 28.5 °C／65 %、冰水 12 °C，不是週期穩態，第一天數字只供觀察（比較結果見 §8.7）。"
                     "改這些選項會重設模擬。", size=TOKENS.caption, color=TOKENS.text_muted),
         ], spacing=TOKENS.spacing_sm, visible=False)
+        self.single_room_controls.controls = [
+            ft.Text("日負載情境", size=TOKENS.caption, color=TOKENS.text_secondary),
+            ft.Row([self.scenario_dropdown]),
+            self.reheat_mode_label,
+            self.reheat_mode_button,
+        ]
         self.reheat_slider = _LabeledSlider("除濕後再熱（占盤管負荷）", "%", 0, params.reheat.max_fraction * 100,
                                             self._settings.reheat_fraction * 100, 12, 0, self._on_reheat)
         self.room_slider = _LabeledSlider("室溫", "°C", 10, 35, 27, 50, 1, self._on_environment)
@@ -489,16 +524,10 @@ class HeatPumpSimulationView(ft.Column):
             icon=ft.Icons.ACCOUNT_TREE_OUTLINED,
         )
         schematic_card.col = {"xs": 12, "lg": 8, "xl": 9}
-        room_temp_box = ft.Column([
-            self.room_temp_chart,
-            ft.Row([self._legend_item(ROOM_COLOR, "室溫 °C"), self._legend_item(BAND_COLOR, "舒適帶 25.5–26.5 °C")],
-                   spacing=TOKENS.spacing_md, wrap=True),
-        ], col={"xs": 12, "md": 6})
-        room_rh_box = ft.Column([
-            self.room_rh_chart,
-            ft.Row([self._legend_item(RH_COLOR, "室內 RH %"), self._legend_item(BAND_COLOR, "50–60 %RH")],
-                   spacing=TOKENS.spacing_md, wrap=True),
-        ], col={"xs": 12, "md": 6})
+        self.room_temp_legend = ft.Row(spacing=TOKENS.spacing_md, wrap=True)
+        self.room_rh_legend = ft.Row(spacing=TOKENS.spacing_md, wrap=True)
+        room_temp_box = ft.Column([self.room_temp_chart, self.room_temp_legend], col={"xs": 12, "md": 6})
+        room_rh_box = ft.Column([self.room_rh_chart, self.room_rh_legend], col={"xs": 12, "md": 6})
         self.room_card = EngineeringCard("室內溫濕度（§8 房間模型）", ft.Column([
             ft.ResponsiveRow([room_temp_box, room_rh_box], spacing=TOKENS.spacing_md),
             self.room_note,
@@ -664,7 +693,11 @@ class HeatPumpSimulationView(ft.Column):
 
 回傳：
     無。"""
-        if self._room_mode:
+        if self._room_mode and self._zoned:
+            self.sim = self.service.new_zone_session(
+                self._settings, self._zone_scenario, self._zone_modes["A"], self._zone_modes["B"],
+                chw_reset=self._chw_reset, cooling_control_mode=self._control_mode)
+        elif self._room_mode:
             self.sim = self.service.new_room_session(
                 self._settings, self._scenario, reheat_mode=self._room_reheat_mode(), chw_reset=self._chw_reset,
                 cooling_control_mode=self._control_mode)
@@ -883,15 +916,39 @@ class HeatPumpSimulationView(ft.Column):
         self.room_card.visible = room
         for key in self._room_tiles:
             self.kpis[key].visible = room
-        self.kpis["dehum_state"].visible = room and mode == "dehumidify"
+        self.kpis["dehum_state"].visible = room and (mode == "dehumidify" or self._zoned)
         # 再熱方式只在冷房＋房間模型可選；除濕固定為協調除濕。
         self.reheat_mode_label.visible = self.reheat_mode_button.visible = mode == "cooling"
+        zoned = room and self._zoned
+        self.zone_controls.visible = zoned
+        self.single_room_controls.visible = not zoned
+        # 分區時各區自選模式，上方「冷房／除濕」不再決定室內控制（暖房仍可切換，會離開分區）。
+        if zoned:
+            self.mode_caption.value = "分區：A、B 各自依所選模式控制自己的房間；共用冰水水路"
         # 室溫、外氣由情境決定；固定比例再熱只在固定室溫的冷房有意義；送風機勾選改為「可用」。
         self.room_slider.disabled = room
         self.outdoor_slider.disabled = room
         self.reheat_slider.disabled = room or mode != "cooling"
         self.fan_a.label = "可用：送風機 A（3.5 kW）" if room else "送風機 A（3.5 kW）"
         self.fan_b.label = "可用：送風機 B（5.3 kW）" if room else "送風機 B（5.3 kW）"
+
+    def _on_zone_option(self, _event: ft.ControlEvent) -> None:
+        """分區開關、分區情境與各區模式：在建立模型時決定，變更會重設模擬。
+
+參數：
+    _event: 事件。
+
+回傳：
+    無。"""
+        self._zoned = bool(self.zoned_box.value)
+        self._zone_scenario = self.zone_scenario_dropdown.value or self._zone_scenario
+        for name, button in self.zone_buttons.items():
+            self._zone_modes[name] = ZoneMode(_selected(button))
+        self._sync_room_controls()
+        if self._room_mode:
+            self._restart_paused("已變更分區設定，模擬已重設")
+        else:
+            self._safe_update()
 
     def _room_reheat_mode(self) -> ReheatMode:
         """房間模型使用的再熱方式：除濕模式為協調除濕，冷房為使用者選擇（預設關閉）。
@@ -1075,17 +1132,28 @@ class HeatPumpSimulationView(ft.Column):
         k["aux"].set_value(format_power(record.fan_power_w + record.pump_power_w), "kW")
         k["reheat"].set_value(format_power(record.reheat_w), "kW")
         k["net_cooling"].set_value(format_power(record.net_cooling_w), "kW")
-        if record.room_k is not None:
+        if record.zones:
+            # 分區：「A｜B」並列，不顯示平均（平均不代表任何一區）。
+            zs = record.zones
+            k["room_t"].set_value("｜".join(f"{z.temperature_k - 273.15:.1f}" for z in zs), "°C（A｜B）")
+            k["room_rh"].set_value("｜".join(f"{z.relative_humidity * 100:.0f}" for z in zs), "%（A｜B）")
+            k["room_w"].set_value("｜".join(f"{z.humidity_ratio * 1000:.1f}" for z in zs), "g/kg（A｜B）")
+        elif record.room_k is not None:
             k["room_t"].set_value(format_temperature(record.room_k), "°C")
             k["room_rh"].set_value(f"{(record.room_rh or 0) * 100:.0f}", "%")
             k["room_w"].set_value(f"{(record.room_humidity_ratio or 0) * 1000:.1f}", "g/kg")
+        if record.room_k is not None:
             k["coil_split"].set_value(f"{record.coil_sensible_w / 1000:.2f}／{record.coil_latent_w / 1000:.2f}", "kW")
             k["outdoor"].set_value(format_temperature(record.outdoor_k), "°C")
             k["chw_set"].set_value(format_temperature(record.chw_setpoint_k), "°C")
             k["supply"].set_value(format_temperature(record.supply_k), "°C" if record.supply_k is not None else "")
             k["condensate"].set_value(f"{record.condensate_kg_s * 3600:.2f}", "kg/h")
             room = self.sim.room if self.sim is not None else None
-            if self._mode == "dehumidify" and room is not None:
+            if record.zones:
+                k["dehum_state"].set_value("｜".join(
+                    "停止" if z.mode is ZoneMode.OFF else ("除濕" if z.dehum_mode else "顯冷") for z in record.zones),
+                    "A｜B")
+            elif self._mode == "dehumidify" and room is not None:
                 k["dehum_state"].set_value("除濕＋補熱" if room.dehum_mode else "顯冷／待機",
                                            "再熱中" if record.reheat_w > 0 else "")
             else:
@@ -1316,15 +1384,35 @@ class HeatPumpSimulationView(ft.Column):
         self.room_temp_chart.min_y, self.room_temp_chart.max_y = data.min_y, data.max_y
         self.room_temp_chart.left_axis.label_spacing = 1
         self.room_temp_chart.horizontal_grid_lines = fch.ChartGridLines(interval=1, color=TOKENS.border, width=0.6)
-        self.room_temp_chart.data_series = [flat(v) for v in data.temperature_band_c] + [
-            fch.LineChartData(points=[fch.LineChartDataPoint(x, v) for x, v in zip(xs, data.room_c)],
-                              color=ROOM_COLOR, stroke_width=2, curved=False)]
-        rh = [min(90.0, max(30.0, v)) for v in data.rh_pct]
         self.room_rh_chart.left_axis.label_spacing = 10
         self.room_rh_chart.horizontal_grid_lines = fch.ChartGridLines(interval=10, color=TOKENS.border, width=0.6)
-        self.room_rh_chart.data_series = [flat(v) for v in data.rh_band_pct] + [
-            fch.LineChartData(points=[fch.LineChartDataPoint(x, v) for x, v in zip(xs, rh)],
-                              color=RH_COLOR, stroke_width=2, curved=False)]
+
+        def line(points_x, values, color):
+            return fch.LineChartData(points=[fch.LineChartDataPoint(x, v) for x, v in zip(points_x, values)],
+                                     color=color, stroke_width=2, curved=False)
+
+        zone_times, zones = zone_lines(samples, data.min_y, data.max_y)
+        band_t = self._legend_item(BAND_COLOR, "舒適帶 25.5–26.5 °C")
+        band_rh = self._legend_item(BAND_COLOR, "50–60 %RH")
+        if zones:
+            # 分區：各區一條線（A 橘、B 藍），平均值不畫，避免誤讀為某一區的狀態。
+            zx = [t / d for t in zone_times]
+            self.room_temp_chart.data_series = [flat(v) for v in data.temperature_band_c] + [
+                line(zx, z.room_c, ZONE_COLORS.get(z.name, ROOM_COLOR)) for z in zones]
+            self.room_rh_chart.data_series = [flat(v) for v in data.rh_band_pct] + [
+                line(zx, [min(90.0, max(30.0, v)) for v in z.rh_pct], ZONE_COLORS.get(z.name, RH_COLOR)) for z in zones]
+            labels = [self._legend_item(ZONE_COLORS.get(z.name, ROOM_COLOR),
+                                        f"{z.name} 區（{ZONE_MODE_LABELS[ZoneMode(z.mode)]}）") for z in zones]
+            self.room_temp_legend.controls = labels + [band_t]
+            self.room_rh_legend.controls = [self._legend_item(ZONE_COLORS.get(z.name, RH_COLOR),
+                                                              f"{z.name} 區 RH") for z in zones] + [band_rh]
+        else:
+            self.room_temp_chart.data_series = [flat(v) for v in data.temperature_band_c] + [
+                line(xs, data.room_c, ROOM_COLOR)]
+            self.room_rh_chart.data_series = [flat(v) for v in data.rh_band_pct] + [
+                line(xs, [min(90.0, max(30.0, v)) for v in data.rh_pct], RH_COLOR)]
+            self.room_temp_legend.controls = [self._legend_item(ROOM_COLOR, "室溫 °C"), band_t]
+            self.room_rh_legend.controls = [self._legend_item(RH_COLOR, "室內 RH %"), band_rh]
         latest = samples[-1]
         state = ("在室" if latest.occupied else "非在室") + ("、空調啟用" if latest.system_enabled else "、空調停用")
         notes = [f"目前：{state}（在室 08–18 時，07:00 起預冷）"]

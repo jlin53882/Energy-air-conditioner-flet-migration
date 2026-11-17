@@ -17,6 +17,7 @@ from domain.heat_pump import (
     HeatPumpParameters,
     ReheatMode,
     RoomModel,
+    ZoneMode,
     HeatPumpSimulation,
     OperationMode,
     SimulationSettings,
@@ -181,3 +182,36 @@ class HeatPumpSimulationService:
                          initial_k=initial_room_k, initial_rh=initial_room_rh)
         return HeatPumpSimulation(self.table(), params, settings, initial_cold_k=celsius(12.0),
                                   initial_hot_k=celsius(30.0), room=room, start_time_s=start_h * 3600.0)
+
+    def new_zone_session(
+        self,
+        settings: SimulationSettings,
+        scenario_key: str,
+        mode_a: ZoneMode,
+        mode_b: ZoneMode,
+        chw_reset: bool = False,
+        cooling_control_mode: CoolingControlMode | None = None,
+        start_h: float = 6.0,
+    ) -> HeatPumpSimulation:
+        """建立 A、B 兩區各自模式的 session（§8.12.9；共用冰水，再熱各區獨立為假設）。
+
+參數：
+    settings: 設定（冷房水路）。
+    scenario_key: ``ZONE_SCENARIOS`` 的鍵（summer／rainy）。
+    mode_a: A 區模式。
+    mode_b: B 區模式。
+    chw_reset: 冰水重設。
+    cooling_control_mode: 冷房控制架構。
+    start_h: 起始時刻。
+
+回傳：
+    HeatPumpSimulation。"""
+        from domain.heat_pump.room import make_zone_group
+
+        params = replace(self.params, electrical=FULL_ELECTRICAL)
+        if cooling_control_mode is not None:
+            params = replace(params, control=replace(params.control, cooling_control_mode=cooling_control_mode))
+        group = make_zone_group(scenario_key, mode_a, mode_b, chw_reset=chw_reset)
+        return HeatPumpSimulation(self.table(), params, replace(settings, operation=OperationMode.COOLING),
+                                  initial_cold_k=celsius(12.0), initial_hot_k=celsius(30.0), room=group,
+                                  start_time_s=start_h * 3600.0)
