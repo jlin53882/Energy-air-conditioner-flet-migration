@@ -1146,7 +1146,8 @@ class HeatPumpSimulation:
         return frozenset(warnings)
 
     def _apply_startup_loss(self, perf: CompressorPerformance, dt_s: float) -> CompressorPerformance:
-        """啟停損失：啟動後冷量與熱量以 1 − e^(−t/τ) 爬升（本步取時間平均），耗電不變（§8.12.7）。
+        """啟停損失：啟動後有效冷量以 1 − e^(−t/τ) 爬升（本步取時間平均），耗電不變；
+冷凝熱以能量平衡重算（= 有效冷量 + 耗電），不另設設備儲熱項（§8.12.7）。
 
 參數：
     perf: 穩態運轉點。
@@ -1162,7 +1163,8 @@ class HeatPumpSimulation:
         if t0 > 10 * tau:
             return perf
         factor = 1.0 - tau / dt_s * (math.exp(-t0 / tau) - math.exp(-(t0 + dt_s) / tau))
-        return replace(perf, cooling_w=perf.cooling_w * factor, heating_w=perf.heating_w * factor)
+        cooling = perf.cooling_w * factor
+        return replace(perf, cooling_w=cooling, heating_w=cooling + perf.power_w)
 
     @staticmethod
     def _zone_snapshots(group: ZoneGroup, supplies: list[SupplyAir],

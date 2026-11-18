@@ -211,3 +211,23 @@ def test_startup_loss_ramps_capacity_and_costs_tau_seconds(table: CycleTable) ->
         sim.time_s += 5.0
     sim.time_s = t
     assert lost == pytest.approx(60.0, rel=1e-3)
+
+
+def test_startup_loss_closes_refrigerant_energy_balance(table: CycleTable) -> None:
+    """啟停損失只降低有效冷量；冷凝熱以能量平衡重算（= 冷量 + 耗電），沒有未交代去向的能量。
+
+回傳：
+    無。"""
+    params = HeatPumpParameters()
+    params = replace(params, control=replace(params.control, startup_capacity_tau_s=60.0))
+    settings = replace(default_settings(OperationMode.COOLING), fans=frozenset({"A"}))
+    sim = HeatPumpSimulation(table, params, settings, initial_cold_k=celsius(30.0), initial_hot_k=celsius(30.0))
+    perf = sim._solver.solve(sim._conditions(60.0))
+    sim._ctrl.on_since_s = sim.time_s
+    early = sim._apply_startup_loss(perf, 5.0)
+    assert early.cooling_w < 0.1 * perf.cooling_w
+    assert early.power_w == pytest.approx(perf.power_w)
+    assert early.heating_w == pytest.approx(early.cooling_w + early.power_w)
+    sim.time_s += 20 * 60.0
+    late = sim._apply_startup_loss(perf, 5.0)
+    assert late.heating_w == pytest.approx(perf.heating_w)  # 10 τ 後回到穩態

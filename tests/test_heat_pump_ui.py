@@ -589,3 +589,24 @@ def test_view_zoned_mode_draws_each_zone(service: HeatPumpSimulationService) -> 
     view.zone_buttons["A"].selected = [ZoneMode.OFF.value]
     view._on_zone_option(None)
     assert view.sim.room.zones[0].mode is ZoneMode.OFF
+
+
+def test_view_reset_clears_room_charts(service: HeatPumpSimulationService) -> None:
+    """房間模式播放後按重設：室溫、RH 圖與圖例、狀態說明一併清空，不殘留上一段模擬。
+
+回傳：
+    無。"""
+    view, _started = _view(service)
+    view._on_play(None)
+    view.room_mode_button.selected = ["room"]
+    view._on_room_mode(None)
+    view._on_play(None)
+    view.speed = 1200
+    for _ in range(10):
+        view.tick()
+    assert view.room_temp_chart.data_series and view.room_rh_chart.data_series
+    view._on_reset(None)
+    assert view.records == []
+    assert view.room_temp_chart.data_series == [] and view.room_rh_chart.data_series == []
+    assert view.room_temp_legend.controls == [] and view.room_rh_legend.controls == []
+    assert view.room_note.value == ""

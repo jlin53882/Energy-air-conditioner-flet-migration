@@ -289,7 +289,7 @@ def _percentile(values: list[float], q: float) -> float:
 
 
 def _pulldown_s(records: list[StepRecord], control: IndoorControlParameters, start_s: float) -> float | None:
-    """達標時間：自系統啟用起，室溫進入設定帶且 RH ≤ 上限並維持 5 min 所需時間。
+    """達標時間：自系統啟用起，室溫進入設定帶且 RH 進入目標帶（下限 ≤ RH ≤ 上限）並維持 5 min 所需時間。
 
 參數：
     records: 第一天記錄。
@@ -302,7 +302,8 @@ def _pulldown_s(records: list[StepRecord], control: IndoorControlParameters, sta
     for r in records:
         if r.time_s < start_s or r.room_k is None or r.room_rh is None:
             continue
-        ok = abs(r.room_k - control.setpoint_k) <= control.band_k and r.room_rh <= control.rh_high
+        ok = (abs(r.room_k - control.setpoint_k) <= control.band_k
+              and control.rh_low <= r.room_rh <= control.rh_high)
         held = held + r.dt_s if ok else 0.0
         if held >= 300.0:
             return r.time_s + r.dt_s - 300.0 - start_s

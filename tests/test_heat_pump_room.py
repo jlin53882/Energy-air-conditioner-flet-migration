@@ -660,3 +660,47 @@ def test_zone_group_simulation_routes_supply_and_reheat_per_zone(table: CycleTab
                               start_time_s=9 * 3600.0)
     records2 = sim2.run(1800.0)
     assert all(not r.zones[0].fans_on and r.zones[0].supply_k is None for r in records2)
+
+
+def test_zone_cooling_is_temperature_only_while_single_room_keeps_humidity_hold() -> None:
+    """分區「冷房」只依室溫：室溫低於舒適帶（25.3 °C）、RH 75 % 時不為除濕強制開送風機，
+    濕度也不拉低冰水設定；§8 單區歷史行為（humidity_control 預設 True）仍保留一台。
+
+回傳：
+    無。"""
+    from domain.heat_pump.room import ZoneMode, make_zone_group
+
+    group = make_zone_group("summer", ZoneMode.COOLING, ZoneMode.OFF, chw_reset=True,
+                            initial_k=celsius(25.3), initial_rh=0.75)
+    a = group.zones[0]
+    assert not a.humidity_control and not a.needs_dehumidification()
+    a._indoor.chw_setpoint_k = celsius(9.0)
+    group.update_fans(9 * 3600.0, frozenset({"A", "B"}), True)
+    assert not group.fans_on
+    a.update_chw_setpoint(9 * 3600.0, True)
+    assert a.chw_setpoint_k >= celsius(9.0) - 1e-9  # 濕度不把冰水拉到下限
+    assert make_zone_group("summer", ZoneMode.DEHUMIDIFY, ZoneMode.OFF).zones[0].humidity_control
+
+    single = RoomModel(SCENARIOS["hot"], reheat_mode=ReheatMode.OFF, initial_k=celsius(25.3), initial_rh=0.75)
+    assert single.humidity_control and single.needs_dehumidification()
+    single.update_fans(9 * 3600.0, frozenset({"A", "B"}), True)
+    assert len(single.fans_on) == 1
+
+
+def test_pulldown_requires_rh_inside_target_band() -> None:
+    """達標時間要溫度與 RH 都進入目標帶：26 °C、30 %RH 持續不算達標；50–60 % 才算。
+
+回傳：
+    無。"""
+    from types import SimpleNamespace
+
+    from domain.heat_pump.comparison import _pulldown_s
+
+    control = IndoorControlParameters()
+
+    def rows(rh: float) -> list:
+        return [SimpleNamespace(time_s=5.0 * i, dt_s=5.0, room_k=celsius(26.0), room_rh=rh) for i in range(120)]
+
+    assert _pulldown_s(rows(0.30), control, 0.0) is None
+    assert _pulldown_s(rows(0.70), control, 0.0) is None
+    assert _pulldown_s(rows(0.55), control, 0.0) == pytest.approx(0.0)

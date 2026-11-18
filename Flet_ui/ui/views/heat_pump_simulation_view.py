@@ -1269,6 +1269,7 @@ class HeatPumpSimulationView(ft.Column):
             self.trend_chart.data_series = []
             self.response_chart.data_series = []
             self._update_control_chart([])
+            self._update_room_charts([])
 
         series = []
         max_bar = self.ph_chart.max_y
@@ -1374,8 +1375,11 @@ class HeatPumpSimulationView(ft.Column):
     無。"""
         data = room_series(samples) if self._room_mode else None
         if data is None:
+            # 重設或切換情境後記錄清空：圖、圖例與狀態說明一併清除，避免殘留上一段模擬。
             self.room_temp_chart.data_series = []
             self.room_rh_chart.data_series = []
+            self.room_temp_legend.controls = []
+            self.room_rh_legend.controls = []
             self.room_note.value = ""
             return
         d = self._axis.divisor

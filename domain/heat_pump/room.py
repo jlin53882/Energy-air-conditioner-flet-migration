@@ -315,7 +315,7 @@ class RoomModel:
                  reheat_mode: ReheatMode = ReheatMode.FIXED, reheat_fraction: float = 0.2,
                  chw_reset: bool = False, initial_k: float = celsius(29.0), initial_rh: float = 0.65,
                  water_split: dict[str, float] | None = None, mode: ZoneMode = ZoneMode.COOLING,
-                 name: str = "") -> None:
+                 name: str = "", humidity_control: bool = True) -> None:
         """建立房間模型。
 
 參數：
@@ -331,10 +331,13 @@ class RoomModel:
     water_split: 各盤管分流權重（預設依額定水量比）。
     mode: 區域模式（多區用；除濕會改用協調除濕，停止則送風機不開、不再熱、不要求冰水）。
     name: 區域名稱（多區用）。
+    humidity_control: 濕度是否參與控制（送風機保留、冰水重設、tight／ample）。預設 True 為 §8 單區歷史行為；
+        分區的「冷房」區設 False，只依室溫控制（§8.12.9）。除濕與停止模式忽略此設定。
 
 回傳：
     無。"""
         self.mode = mode
+        self.humidity_control = humidity_control or mode is ZoneMode.DEHUMIDIFY
         self.name = name
         if mode is ZoneMode.DEHUMIDIFY:
             reheat_mode = ReheatMode.COORDINATED
@@ -399,6 +402,8 @@ class RoomModel:
         if not self._indoor.fans_on or self.mode is ZoneMode.OFF:
             return False
         c = self.control
+        if not self.humidity_control:
+            return self.predicted_temperature_k > c.tight_t_k
         return self.predicted_temperature_k > c.tight_t_k or self.predicted_humidity_ratio > c.tight_w
 
     def comfort_ample(self) -> bool:
@@ -409,14 +414,18 @@ class RoomModel:
         if self.mode is ZoneMode.OFF:
             return True
         c = self.control
-        return (max(self.state.temperature_k, self.predicted_temperature_k) <= c.ample_t_k
-                and max(self.state.humidity_ratio, self.predicted_humidity_ratio) <= c.ample_w)
+        warm_ok = max(self.state.temperature_k, self.predicted_temperature_k) <= c.ample_t_k
+        if not self.humidity_control:
+            return warm_ok
+        return warm_ok and max(self.state.humidity_ratio, self.predicted_humidity_ratio) <= c.ample_w
 
     def needs_dehumidification(self) -> bool:
-        """含濕量高於上限（或預測將高於接近門檻），且室溫高於過冷下限。
+        """含濕量高於上限（或預測將高於接近門檻），且室溫高於過冷下限；只依室溫控制的區域恆為 False。
 
 回傳：
             bool。"""
+        if not self.humidity_control:
+            return False
         c = self.control
         humid = self.state.humidity_ratio > c.humid_w or self.predicted_humidity_ratio > c.tight_w
         return humid and self.state.temperature_k > c.overcool_floor_k
@@ -492,7 +501,8 @@ class RoomModel:
 
     # ---- 控制 ----
     def update_fans(self, time_s: float, available: frozenset[str], enabled: bool) -> None:
-        """送風機啟停與分級（B 優先；需要除濕時至少保留一台，但室溫低於過冷下限時不保留）。
+        """送風機啟停與分級（B 優先；需要除濕時至少保留一台，但室溫低於過冷下限時不保留；
+``humidity_control`` 為 False 的冷房區只依室溫）。
 
 第一段（開 B）看實際室溫加 2 min 提前量；第二段（加開 A）看 10 min 預測，且 B 已運轉 ≥ 3 min
 （避免送風機剛停時的升溫斜率被誤判為能力不足）。
@@ -1018,5 +1028,6 @@ def make_zone_group(scenario_key: str, mode_a: ZoneMode, mode_b: ZoneMode, chw_r
     for name, scenario, mode in (("A", scenario_a, mode_a), ("B", scenario_b, mode_b)):
         zones.append(RoomModel(scenario, HALF_ROOM, control, coils=(by_name[name],), chw_reset=chw_reset,
                                reheat_mode=ReheatMode.OFF, initial_k=initial_k, initial_rh=initial_rh,
-                               water_split={name: split[name]}, mode=mode, name=name))
+                               water_split={name: split[name]}, mode=mode, name=name,
+                               humidity_control=mode is not ZoneMode.COOLING))
     return ZoneGroup(tuple(zones))
