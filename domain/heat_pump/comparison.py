@@ -1,0 +1,774 @@
+"""節能策略比較：相同日負載、通風與舒適度條件下比較全系統用電（``docs/simulation-model.md`` §8.6–§8.7）。
+
+做法：
+- 每個策略從相同初始狀態（0 時，室內 29 °C／65 %RH、冰水桶 12 °C、熱水桶 30 °C）開始，第一天量「達標時間」；
+  之後**重複同一日工況，直到週期穩態**，以**最後四天的平均**統計（用電、超標量、啟動次數都是每日平均），
+  並列出這四天單日用電的全距（水桶相位與 24 h 可能是準週期，不只一天或兩天循環）。
+  兩個水桶在啟停遲滯帶內循環，停機時的相位每天不同，有時形成兩天一循環（例如熱水桶相位決定隔天再熱量），
+  所以收斂判定比較「相隔兩天」的狀態：室溫、含濕量接近，水桶溫差在遲滯帶寬度內，且相隔兩天的單日用電差 ≤ 1 %。
+  殘留影響以「殘差修正」與「日用電全距」兩欄量化，策略間差距小於全距時不視為有意義。
+  這取代「跑兩天＋以平均 COP 換算儲能差」：COP 換算只能粗估，房間溫差也會改變整天外殼負荷。
+  最後一天的殘留儲能差仍以主機 COP 換算列出（診斷用，不計入排名）。
+- 舒適度判定分兩層：**絕對門檻**（``AbsoluteComfort``）與**不劣於舒適基準**（``ComfortTolerance``）。
+  舒適基準取「現行預設（固定 20 % 再熱）」與「現行預設但再熱關閉」中舒適度較好者。
+- 只在兩層都通過、盤管不變量檢查無違反的策略中，選全系統用電最低者；沒有任何策略通過絕對門檻時，明確標示。
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
+
+from .cycle_table import CycleTable
+from .parameters import FULL_ELECTRICAL, HeatPumpParameters, celsius
+from .room import (
+    DEFAULT_COILS,
+    HOUR_S,
+    DailyScenario,
+    IndoorControlParameters,
+    ReheatMode,
+    RoomModel,
+    RoomParameters,
+    ZoneMode,
+    make_zone_group,
+)
+from .simulation import (
+    FrequencyMode,
+    HeatPumpSimulation,
+    OperationMode,
+    PumpMode,
+    SimulationSettings,
+    StepRecord,
+    default_settings,
+)
+from .wet_coil import CoilParameters
+
+DAY_S = 24 * HOUR_S
+
+
+@dataclass(frozen=True)
+class Strategy:
+    """一組控制策略（相對於預設設定的覆寫）。"""
+
+    key: str
+    name: str
+    settings: dict = field(default_factory=dict)
+    reheat_mode: ReheatMode = ReheatMode.FIXED
+    reheat_fraction: float = 0.2
+    chw_reset: bool = False
+    # 單一策略的再熱方式沿用該情境的舒適基準（見 ``layered_on``），才是同條件比較。
+    inherit_reheat: bool = False
+
+    def layered_on(self, reference: Strategy) -> Strategy:
+        """把單一策略疊在舒適基準的再熱方式上。
+
+參數：
+    reference: 舒適基準策略。
+
+回傳：
+    Strategy（``inherit_reheat`` 為假時原樣回傳）。"""
+        if not self.inherit_reheat:
+            return self
+        return replace(self, reheat_mode=reference.reheat_mode, reheat_fraction=reference.reheat_fraction)
+
+
+STRATEGIES: tuple[Strategy, ...] = (
+    Strategy("base", "現行預設：水泵 60 Hz、冰水 7 °C、固定 20 % 再熱、壓縮機 PID"),
+    Strategy("reheat_off", "現行預設但再熱關閉", reheat_mode=ReheatMode.OFF),
+    Strategy("reheat_demand", "按需再熱", reheat_mode=ReheatMode.DEMAND),
+    Strategy("pump50", "水泵 50 Hz", {"cold_pump_hz": 50.0, "hot_pump_hz": 50.0}, inherit_reheat=True),
+    Strategy("pump40", "水泵 40 Hz", {"cold_pump_hz": 40.0, "hot_pump_hz": 40.0}, inherit_reheat=True),
+    Strategy("pump_auto", "水泵最佳化：依需求調速（舒適度餘裕控制）", {"pump_mode": PumpMode.AUTO}, inherit_reheat=True),
+    Strategy("chw_reset", "冰水溫度重設 7–10 °C", chw_reset=True, inherit_reheat=True),
+    Strategy("idle_pump_off", "非必要迴路停泵", {"idle_pump_off": True}, inherit_reheat=True),
+    Strategy("comp_fixed60", "壓縮機固定 60 Hz 啟停", {"frequency_mode": FrequencyMode.MANUAL,
+                                                     "manual_frequency_hz": 60.0}, inherit_reheat=True),
+    Strategy("combo3", "水泵＋冰水重設＋按需再熱", {"pump_mode": PumpMode.AUTO},
+             reheat_mode=ReheatMode.DEMAND, chw_reset=True),
+    Strategy("combo", "水泵＋冰水重設＋按需再熱＋停泵",
+             {"pump_mode": PumpMode.AUTO, "idle_pump_off": True}, reheat_mode=ReheatMode.DEMAND, chw_reset=True),
+    # 第三輪（§8.12.8）：協調除濕取代按需再熱。
+    Strategy("coord", "協調除濕（除濕＋補熱／顯冷，達標退出）", reheat_mode=ReheatMode.COORDINATED),
+    Strategy("combo_coord", "水泵＋冰水重設＋協調除濕＋停泵",
+             {"pump_mode": PumpMode.AUTO, "idle_pump_off": True}, reheat_mode=ReheatMode.COORDINATED, chw_reset=True),
+)
+
+# Codex 建議的三組核心比較：基準、水泵最佳化、水泵＋冰水重設＋按需再熱。
+CORE_STRATEGIES: tuple[str, ...] = ("base", "reheat_off", "pump_auto", "combo3")
+
+
+@dataclass(frozen=True)
+class ComfortTolerance:
+    """「不劣於舒適基準」的容許值。達標時間容許 max(3 min, 5 %)：它量自第一天的任意初始狀態，1 min 太嚴。"""
+
+    temperature_kh: float = 0.1
+    humidity_high_pct_h: float = 1.0
+    pulldown_s: float = 180.0
+    pulldown_fraction: float = 0.05
+
+
+@dataclass(frozen=True)
+class AbsoluteComfort:
+    """絕對舒適門檻（在室時段，一天；假設值，待業主確認）。與基準一樣差並不算達標。"""
+
+    temperature_kh: float = 0.5
+    humidity_high_pct_h: float = 5.0
+    max_temperature_k: float = celsius(27.0)
+    max_rh: float = 0.65
+    # 第三輪補上低濕側（§8.12.8）：原規則只擋濕度過高，D5 最高 RH 46 %（全程低於 50–60 % 目標帶）仍判「通過」。
+    humidity_low_pct_h: float = 5.0
+    min_rh: float = 0.45
+
+
+@dataclass(frozen=True)
+class StrategyResult:
+    """單一策略、單一情境的結果（週期穩態的最後一天，除達標時間外）。"""
+
+    scenario: str
+    strategy: str
+    name: str
+    energy_kwh: float
+    corrected_energy_kwh: float
+    storage_correction_kwh: float
+    compressor_kwh: float
+    pump_kwh: float
+    fan_kwh: float
+    outdoor_fan_kwh: float
+    other_kwh: float
+    sensible_kwh: float
+    latent_kwh: float
+    reheat_kwh: float
+    temperature_exceed_kh: float
+    humidity_high_pct_h: float
+    humidity_low_pct_h: float
+    max_temperature_k: float
+    min_temperature_k: float
+    max_rh: float
+    pulldown_s: float | None
+    compressor_starts: int
+    fan_switches: int
+    protection_events: int
+    chiller_cop: float | None
+    system_cop: float | None
+    mean_chw_setpoint_k: float
+    days: int = 2
+    periodic: bool = True
+    drift_room_k: float = 0.0
+    drift_cold_k: float = 0.0
+    drift_hot_k: float = 0.0
+    coil_check_failures: int = 0
+    room_condensed_kg: float = 0.0
+    daily_kwh_range: float = 0.0
+    mean_room_k: float = 0.0
+    mean_humidity_ratio: float = 0.0
+    occupancy_start_k: float = 0.0
+    starts_per_hour: float = 0.0
+    # 控制診斷（§8.12）：滾動一小時最多啟動次數、各頻率占運轉時間比例、連續運轉時間（min）、
+    # 啟用時段冰水桶溫度範圍與平均、平均 PID 目標。
+    max_starts_rolling_1h: int = 0
+    frequency_share: tuple[tuple[float, float], ...] = ()
+    run_min_minutes: float = 0.0
+    run_p10_minutes: float = 0.0
+    run_median_minutes: float = 0.0
+    run_p90_minutes: float = 0.0
+    cold_tank_min_k: float = 0.0
+    cold_tank_mean_k: float = 0.0
+    cold_tank_max_k: float = 0.0
+    mean_chw_target_k: float = 0.0
+    # 在室時段最低 RH（evaluate 一定會填；預設 0.5 只為相容手動建立的結果）。
+    min_rh: float = 0.5
+
+    def comfort_ok(self, base: StrategyResult, tol: ComfortTolerance | None = None) -> bool:
+        """舒適度是否不劣於基準（溫度超標、濕度高側與低側超標、達標時間）。
+
+參數：
+    base: 基準結果。
+    tol: 容許值。
+
+回傳：
+    bool。"""
+        tol = tol or ComfortTolerance()
+        if self.temperature_exceed_kh > base.temperature_exceed_kh + tol.temperature_kh:
+            return False
+        if self.humidity_high_pct_h > base.humidity_high_pct_h + tol.humidity_high_pct_h:
+            return False
+        if self.humidity_low_pct_h > base.humidity_low_pct_h + tol.humidity_high_pct_h:
+            return False
+        if base.pulldown_s is not None:
+            allowed = max(tol.pulldown_s, tol.pulldown_fraction * base.pulldown_s)
+            if self.pulldown_s is None or self.pulldown_s > base.pulldown_s + allowed:
+                return False
+        return True
+
+    def absolute_ok(self, limits: AbsoluteComfort | None = None) -> bool:
+        """是否通過絕對舒適門檻。
+
+參數：
+    limits: 門檻。
+
+回傳：
+    bool。"""
+        limits = limits or AbsoluteComfort()
+        return (self.temperature_exceed_kh <= limits.temperature_kh
+                and self.humidity_high_pct_h <= limits.humidity_high_pct_h
+                and self.max_temperature_k <= limits.max_temperature_k
+                and self.max_rh <= limits.max_rh
+                and self.humidity_low_pct_h <= limits.humidity_low_pct_h
+                and self.min_rh >= limits.min_rh)
+
+    @property
+    def valid(self) -> bool:
+        """數值檢查：盤管不變量無違反、週期穩態收斂、房間無過飽和截斷。
+
+回傳：
+            bool。"""
+        return self.coil_check_failures == 0 and self.periodic and self.room_condensed_kg < 1e-3
+
+
+@dataclass(frozen=True)
+class _DayState:
+    cold_k: float
+    hot_k: float
+    room_k: float
+    room_w: float
+
+
+def max_in_window(times_s: list[float], window_s: float = HOUR_S) -> int:
+    """任一長度 ``window_s`` 的滑動窗內最多事件數（雙指標）。
+
+參數：
+    times_s: 事件時刻。
+    window_s: 窗長。
+
+回傳：
+    次數。"""
+    ordered = sorted(times_s)
+    best = 0
+    i = 0
+    for j, t in enumerate(ordered):
+        while t - ordered[i] >= window_s:
+            i += 1
+        best = max(best, j - i + 1)
+    return best
+
+
+def run_lengths_s(records: list[StepRecord]) -> list[float]:
+    """完整的連續運轉時間（不含統計窗頭尾被截斷的段）。
+
+參數：
+    records: 連續的記錄。
+
+回傳：
+    各段秒數。"""
+    lengths: list[float] = []
+    current: float | None = None
+    for prev, r in zip(records, records[1:]):
+        if r.compressor_on and not prev.compressor_on:
+            current = 0.0
+        if r.compressor_on and current is not None:
+            current += r.dt_s
+        if not r.compressor_on and prev.compressor_on and current is not None:
+            lengths.append(current)
+            current = None
+    return lengths
+
+
+def _percentile(values: list[float], q: float) -> float:
+    """最近秩百分位（空列表回傳 0）。
+
+參數：
+    values: 數值。
+    q: 0–1。
+
+回傳：
+    百分位值。"""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, max(0, round(q * (len(ordered) - 1))))]
+
+
+def _pulldown_s(records: list[StepRecord], control: IndoorControlParameters, start_s: float) -> float | None:
+    """達標時間：自系統啟用起，室溫進入設定帶且 RH 進入目標帶（下限 ≤ RH ≤ 上限）並維持 5 min 所需時間。
+
+參數：
+    records: 第一天記錄。
+    control: 室內控制器參數。
+    start_s: 系統啟用時刻。
+
+回傳：
+    s；當天未達標為 None。"""
+    held = 0.0
+    for r in records:
+        if r.time_s < start_s or r.room_k is None or r.room_rh is None:
+            continue
+        ok = (abs(r.room_k - control.setpoint_k) <= control.band_k
+              and control.rh_low <= r.room_rh <= control.rh_high)
+        held = held + r.dt_s if ok else 0.0
+        if held >= 300.0:
+            return r.time_s + r.dt_s - 300.0 - start_s
+    return None
+
+
+def evaluate(records: list[StepRecord], events: list, scenario_key: str, strategy: Strategy, room: RoomModel,
+             params: HeatPumpParameters, day_start_s: float, pulldown_s: float | None,
+             start_state: tuple[float, float, float, float], days: int = 2, periodic: bool = True,
+             coil_check_failures: int = 0, window_days: int = 1) -> StrategyResult:
+    """彙整統計日的指標。
+
+參數：
+    records: 統計日記錄。
+    events: 全部事件。
+    scenario_key: 情境代碼。
+    strategy: 策略。
+    room: 房間模型（取參數）。
+    params: 系統參數。
+    day_start_s: 統計日起始時刻。
+    pulldown_s: 第一天的達標時間。
+    start_state: 統計窗開始時的（冰水桶 K, 熱水桶 K, 室溫 K, 室內含濕量）。
+    days: 模擬天數。
+    periodic: 是否達到週期穩態。
+    coil_check_failures: 盤管不變量違反次數。
+    window_days: 統計窗的天數（累計量除以此值成為每日平均）。
+
+回傳：
+    StrategyResult。"""
+    c = room.control
+    kwh = 1.0 / 3.6e6 / window_days
+    occ = [r for r in records if r.occupied]
+    energy = sum(r.total_power_w * r.dt_s for r in records) * kwh
+    compressor = sum(r.compressor_power_w * r.dt_s for r in records) * kwh
+    pumps = sum(r.pump_power_w * r.dt_s for r in records) * kwh
+    fans = sum(r.fan_power_w * r.dt_s for r in records) * kwh
+    outdoor = sum(r.outdoor_fan_power_w * r.dt_s for r in records) * kwh
+    other = sum(r.standby_power_w * r.dt_s for r in records) * kwh
+    evap = sum(r.cooling_w * r.dt_s for r in records if r.mode.value != "smart_heating") * kwh
+    chiller_cop = evap / compressor if compressor > 0 else None
+    end = records[-1]
+    # 熱水桶：冷房時其熱量是要排掉的廢熱，不是有用儲能，只列漂移（drift_hot_k）不換算。
+    owed_j = (params.cold_tank.heat_capacity_j_k * (end.cold_water_k - start_state[0])
+              + room.params.heat_capacity_j_k * (end.room_k - start_state[2])
+              + room.params.moisture_capacity_kg * (end.room_humidity_ratio - start_state[3]) * 2.501e6)
+    correction = owed_j * kwh / chiller_cop if chiller_cop else 0.0
+    upper, lower = c.setpoint_k + c.band_k, c.setpoint_k - c.band_k
+    per_day_h = HOUR_S * window_days
+    t_exceed = sum((max(0.0, r.room_k - upper) + max(0.0, lower - r.room_k)) * r.dt_s for r in occ) / per_day_h
+    rh_high = sum(max(0.0, r.room_rh - c.rh_high) * 100 * r.dt_s for r in occ) / per_day_h
+    rh_low = sum(max(0.0, c.rh_low - r.room_rh) * 100 * r.dt_s for r in occ) / per_day_h
+    end_s = day_start_s + DAY_S * window_days
+    in_day = [e for e in events if day_start_s <= e.time_s < end_s]
+    fan_switches = sum(1 for a, b in zip(records, records[1:]) if a.fans_running != b.fans_running)
+    fan_coil = sum(r.fan_coil_load_w * r.dt_s for r in records) * kwh
+    on_records = [r for r in records if r.compressor_on]
+    on_s = sum(r.dt_s for r in on_records)
+    shares: dict[float, float] = {}
+    for r in on_records:
+        shares[r.frequency_hz] = shares.get(r.frequency_hz, 0.0) + r.dt_s
+    runs = [length / 60.0 for length in run_lengths_s(records)]
+    enabled = [r for r in records if r.system_enabled] or records
+    enabled_s = sum(r.dt_s for r in enabled)
+    targets = [r for r in occ if r.chw_target_k is not None]
+    return StrategyResult(
+        scenario=scenario_key, strategy=strategy.key, name=strategy.name,
+        energy_kwh=energy, corrected_energy_kwh=energy + correction, storage_correction_kwh=correction,
+        compressor_kwh=compressor, pump_kwh=pumps, fan_kwh=fans, outdoor_fan_kwh=outdoor, other_kwh=other,
+        sensible_kwh=sum(r.coil_sensible_w * r.dt_s for r in records) * kwh,
+        latent_kwh=sum(r.coil_latent_w * r.dt_s for r in records) * kwh,
+        reheat_kwh=sum(r.reheat_w * r.dt_s for r in records) * kwh,
+        temperature_exceed_kh=t_exceed, humidity_high_pct_h=rh_high, humidity_low_pct_h=rh_low,
+        max_temperature_k=max(r.room_k for r in occ), min_temperature_k=min(r.room_k for r in occ),
+        max_rh=max(r.room_rh for r in occ), min_rh=min(r.room_rh for r in occ), pulldown_s=pulldown_s,
+        compressor_starts=round(sum(1 for e in in_day if e.code == "start") / window_days),
+        fan_switches=round(fan_switches / window_days),
+        protection_events=round(sum(1 for e in in_day if e.code in {"trip", "freeze_stop", "hp_preempt"}) / window_days),
+        chiller_cop=chiller_cop,
+        system_cop=fan_coil / energy if energy > 0 else None,
+        mean_chw_setpoint_k=sum(r.chw_setpoint_k * r.dt_s for r in occ) / sum(r.dt_s for r in occ),
+        days=days, periodic=periodic,
+        drift_room_k=end.room_k - start_state[2], drift_cold_k=end.cold_water_k - start_state[0],
+        drift_hot_k=end.hot_water_k - start_state[1],
+        coil_check_failures=coil_check_failures, room_condensed_kg=room.condensed_kg,
+        mean_room_k=sum(r.room_k * r.dt_s for r in occ) / sum(r.dt_s for r in occ),
+        mean_humidity_ratio=sum(r.room_humidity_ratio * r.dt_s for r in occ) / sum(r.dt_s for r in occ),
+        occupancy_start_k=next(r.room_k for r in occ),
+        starts_per_hour=(sum(1 for e in in_day if e.code == "start")
+                         / max(1e-9, sum(r.dt_s for r in records if r.system_enabled) / HOUR_S)),
+        max_starts_rolling_1h=max_in_window([e.time_s for e in in_day if e.code == "start"]),
+        frequency_share=tuple((hz, sec / on_s) for hz, sec in sorted(shares.items())) if on_s > 0 else (),
+        run_min_minutes=min(runs) if runs else 0.0,
+        run_p10_minutes=_percentile(runs, 0.1),
+        run_median_minutes=_percentile(runs, 0.5),
+        run_p90_minutes=_percentile(runs, 0.9),
+        cold_tank_min_k=min(r.cold_water_k for r in enabled),
+        cold_tank_mean_k=sum(r.cold_water_k * r.dt_s for r in enabled) / enabled_s,
+        cold_tank_max_k=max(r.cold_water_k for r in enabled),
+        mean_chw_target_k=(sum(r.chw_target_k * r.dt_s for r in targets) / sum(r.dt_s for r in targets)
+                           if targets else 0.0),
+    )
+
+
+@dataclass(frozen=True)
+class PeriodicTolerance:
+    """週期穩態判定：統計日開始與結束的狀態差，以及相鄰兩天的用電差。
+
+    水桶在啟停遲滯帶內循環（冰水約 1 K、熱水約 2 K 寬），容許值取遲滯帶寬度。
+    """
+
+    room_k: float = 0.05
+    room_humidity_ratio: float = 5e-5
+    cold_tank_k: float = 1.0
+    hot_tank_k: float = 2.5
+    energy_fraction: float = 0.01
+    min_days: int = 5
+    max_days: int = 9
+    window_days: int = 4
+
+
+def _state(sim: HeatPumpSimulation, room: RoomModel) -> _DayState:
+    """目前狀態快照。
+
+參數：
+    sim: 模擬器。
+    room: 房間。
+
+回傳：
+    _DayState。"""
+    return _DayState(sim.cold_water_k, sim.hot_water_k, room.state.temperature_k, room.state.humidity_ratio)
+
+
+def _periodic(a: _DayState, b: _DayState, tol: PeriodicTolerance) -> bool:
+    """兩個同時刻狀態是否在容許差內。
+
+參數：
+    a: 開始。
+    b: 結束。
+    tol: 容許值。
+
+回傳：
+    bool。"""
+    return (abs(a.room_k - b.room_k) <= tol.room_k and abs(a.room_w - b.room_w) <= tol.room_humidity_ratio
+            and abs(a.cold_k - b.cold_k) <= tol.cold_tank_k and abs(a.hot_k - b.hot_k) <= tol.hot_tank_k)
+
+
+def run_strategy(table: CycleTable, scenario_key: str, scenario: DailyScenario, strategy: Strategy,
+                 params: HeatPumpParameters | None = None, room_params: RoomParameters | None = None,
+                 control: IndoorControlParameters | None = None, fans: frozenset[str] = frozenset({"A", "B"}),
+                 dt_s: float = 5.0, progress: Callable[[float], None] | None = None,
+                 coils: tuple[CoilParameters, ...] = DEFAULT_COILS,
+                 periodic: PeriodicTolerance | None = None) -> StrategyResult:
+    """執行一個策略直到週期穩態，回傳最後一天的結果。
+
+參數：
+    table: 性質表。
+    scenario_key: 情境代碼。
+    scenario: 日負載情境。
+    strategy: 策略。
+    params: 系統參數（預設為 ``FULL_ELECTRICAL`` 全系統耗電口徑）。
+    room_params: 房間參數。
+    control: 室內控制器參數。
+    fans: 可用送風機。
+    dt_s: 時間步長。
+    progress: 進度回呼（已完成天數）。
+    coils: 盤管參數（敏感度分析用）。
+    periodic: 週期穩態判定。
+
+回傳：
+    StrategyResult。"""
+    params = params or replace(HeatPumpParameters(), electrical=FULL_ELECTRICAL)
+    periodic = periodic or PeriodicTolerance()
+    room = RoomModel(scenario, room_params, control, coils=coils, reheat_mode=strategy.reheat_mode,
+                     reheat_fraction=strategy.reheat_fraction, chw_reset=strategy.chw_reset,
+                     initial_k=celsius(29.0), initial_rh=0.65)
+    settings: SimulationSettings = replace(default_settings(OperationMode.COOLING), fans=fans, **strategy.settings)
+    sim = HeatPumpSimulation(table, params, settings, initial_cold_k=celsius(12.0), initial_hot_k=celsius(30.0),
+                             room=room, start_time_s=0.0)
+    day1 = sim.run(DAY_S, dt_s)
+    enable_s = (scenario.occupied_hours[0] - scenario.precool_h) * HOUR_S
+    pulldown = _pulldown_s(day1, room.control, enable_s)
+    days = 1
+    states = [_state(sim, room)]
+    day_records: list[list[StepRecord]] = []
+    day_starts: list[float] = []
+    day_kwh: list[float] = []
+    converged = False
+    while True:
+        day_starts.append(sim.time_s)
+        records = sim.run(DAY_S, dt_s)
+        day_records = (day_records + [records])[-periodic.window_days:]  # 只保留統計窗，避免記憶體佔滿
+        day_kwh.append(sum(r.total_power_w * r.dt_s for r in records) / 3.6e6)
+        states.append(_state(sim, room))
+        days += 1
+        if progress:
+            progress(days)
+        if len(day_kwh) >= 3:
+            # 相隔兩天比較（涵蓋一天與兩天週期）。
+            steady_energy = abs(day_kwh[-1] - day_kwh[-3]) <= periodic.energy_fraction * day_kwh[-1]
+            converged = steady_energy and _periodic(states[-3], states[-1], periodic)
+        if (converged and days >= periodic.min_days) or days >= periodic.max_days:
+            break
+    failures = sum(sim.coil_check_failures.values())
+    n = min(periodic.window_days, len(day_records))
+    window = [r for day in day_records[-n:] for r in day]
+    start = states[-(n + 1)]
+    result = evaluate(window, sim.events, scenario_key, strategy, room, params, day_starts[-n], pulldown,
+                      (start.cold_k, start.hot_k, start.room_k, start.room_w), days=days, periodic=converged,
+                      coil_check_failures=failures, window_days=n)
+    return replace(result, daily_kwh_range=max(day_kwh[-n:]) - min(day_kwh[-n:]))
+
+
+REFERENCE_CANDIDATES = ("base", "reheat_off")
+
+
+def comfort_score(result: StrategyResult) -> float:
+    """舒適度綜合分數（溫度超標 K·h ＋ (RH 高側 ＋ RH 低側超標 %·h) ÷ 10；越小越好），用來挑舒適基準。
+
+過度除濕（RH < 50 %）也算舒適度問題，否則兩個候選溫度都不超標時會選到過乾的那個。
+
+參數：
+    result: 結果。
+
+回傳：
+    分數。"""
+    return result.temperature_exceed_kh + (result.humidity_high_pct_h + result.humidity_low_pct_h) / 10.0
+
+
+def reference_result(results: list[StrategyResult]) -> StrategyResult | None:
+    """舒適基準：「現行預設」與「現行預設但再熱關閉」兩者中舒適度較好者（依情境而定）。
+
+參數：
+    results: 同一情境的結果。
+
+回傳：
+    StrategyResult；兩者都沒有時為 None。"""
+    candidates = [r for r in results if r.strategy in REFERENCE_CANDIDATES]
+    return min(candidates, key=comfort_score) if candidates else None
+
+
+def acceptable(result: StrategyResult, base: StrategyResult, tol: ComfortTolerance | None = None,
+               limits: AbsoluteComfort | None = None) -> bool:
+    """可列入比較：數值檢查通過、絕對門檻通過、且不劣於舒適基準。
+
+參數：
+    result: 結果。
+    base: 舒適基準。
+    tol: 相對容許值。
+    limits: 絕對門檻。
+
+回傳：
+    bool。"""
+    return result.valid and result.absolute_ok(limits) and (result is base or result.comfort_ok(base, tol))
+
+
+def best_relative_only(results: list[StrategyResult], tol: ComfortTolerance | None = None) -> StrategyResult | None:
+    """**條件式**排名：只要求數值檢查與不劣於舒適基準（不看絕對門檻）。
+
+只在沒有任何策略通過絕對門檻時參考（例如房間負荷超過設備能力，所有方案都會在尖峰超標）；
+結果必須標示「絕對門檻未達成」。
+
+參數：
+    results: 同一情境的結果。
+    tol: 相對容許值。
+
+回傳：
+    StrategyResult 或 None。"""
+    base = reference_result(results)
+    if base is None:
+        return None
+    candidates = [r for r in results if r.valid and (r is base or r.comfort_ok(base, tol))]
+    return min(candidates, key=lambda r: r.energy_kwh) if candidates else None
+
+
+def best_strategy(results: list[StrategyResult], tol: ComfortTolerance | None = None,
+                  limits: AbsoluteComfort | None = None) -> StrategyResult | None:
+    """可列入比較的策略中全系統用電最低者。
+
+參數：
+    results: 同一情境的結果（須含 ``base`` 或 ``reheat_off``）。
+    tol: 相對容許值。
+    limits: 絕對門檻。
+
+回傳：
+    StrategyResult；沒有舒適基準或沒有任何策略可列入時為 None。"""
+    base = reference_result(results)
+    if base is None:
+        return None
+    candidates = [r for r in results if acceptable(r, base, tol, limits)]
+    return min(candidates, key=lambda r: r.energy_kwh) if candidates else None
+
+
+__all__ = [
+    "CORE_STRATEGIES",
+    "DAY_S",
+    "REFERENCE_CANDIDATES",
+    "STRATEGIES",
+    "AbsoluteComfort",
+    "ComfortTolerance",
+    "PeriodicTolerance",
+    "Strategy",
+    "StrategyResult",
+    "acceptable",
+    "best_relative_only",
+    "best_strategy",
+    "comfort_score",
+    "evaluate",
+    "reference_result",
+    "run_strategy",
+]
+
+
+# ---- 多區組合（§8.12.9） ----
+
+
+@dataclass(frozen=True)
+class ZoneComfort:
+    """單一區域的在室時段舒適度（每日）。"""
+
+    name: str
+    mode: str
+    temperature_exceed_kh: float
+    humidity_high_pct_h: float
+    humidity_low_pct_h: float
+    min_rh: float
+    max_rh: float
+    max_temperature_k: float
+    mean_temperature_k: float
+    mean_humidity_ratio: float
+    reheat_kwh: float
+    condensate_kg: float
+
+    def absolute_ok(self, limits: AbsoluteComfort | None = None) -> bool:
+        """是否通過絕對門檻（含低濕側）。停止的區域不評估（回傳 True）。
+
+參數：
+    limits: 門檻。
+
+回傳：
+    bool。"""
+        if self.mode == "off":
+            return True
+        limits = limits or AbsoluteComfort()
+        return (self.temperature_exceed_kh <= limits.temperature_kh
+                and self.humidity_high_pct_h <= limits.humidity_high_pct_h
+                and self.max_temperature_k <= limits.max_temperature_k
+                and self.max_rh <= limits.max_rh
+                and self.humidity_low_pct_h <= limits.humidity_low_pct_h
+                and self.min_rh >= limits.min_rh)
+
+
+@dataclass(frozen=True)
+class ZoneComboResult:
+    """一個（情境, A 模式, B 模式）組合的結果（最後 ``window_days`` 天平均）。"""
+
+    scenario: str
+    mode_a: str
+    mode_b: str
+    energy_kwh: float
+    compressor_kwh: float
+    pump_kwh: float
+    fan_kwh: float
+    zones: tuple[ZoneComfort, ...]
+    starts_per_hour: float
+    max_starts_rolling_1h: int
+    mean_cold_tank_k: float
+    mean_hot_tank_k: float
+    smart_cooling_fraction: float
+
+    @property
+    def absolute_ok(self) -> bool:
+        """所有運轉區都通過絕對門檻。
+
+回傳：
+            bool。"""
+        return all(zone.absolute_ok() for zone in self.zones)
+
+
+def evaluate_zones(records: list[StepRecord], events: list, scenario_key: str, mode_a: str, mode_b: str,
+                   control: IndoorControlParameters, window_days: int) -> ZoneComboResult:
+    """彙整多區統計窗。
+
+參數：
+    records: 統計窗記錄。
+    events: 全部事件。
+    scenario_key: 情境。
+    mode_a: A 區模式。
+    mode_b: B 區模式。
+    control: 室內控制器參數（舒適帶）。
+    window_days: 統計窗天數。
+
+回傳：
+    ZoneComboResult。"""
+    kwh = 1.0 / 3.6e6 / window_days
+    per_day_h = HOUR_S * window_days
+    upper, lower = control.setpoint_k + control.band_k, control.setpoint_k - control.band_k
+    occ = [r for r in records if r.occupied]
+    zones = []
+    for i, name in enumerate(("A", "B")):
+        rows = [(r, r.zones[i]) for r in occ]
+        allr = [(r, r.zones[i]) for r in records]
+        mode = rows[0][1].mode.value
+        zones.append(ZoneComfort(
+            name=name, mode=mode,
+            temperature_exceed_kh=sum((max(0.0, z.temperature_k - upper) + max(0.0, lower - z.temperature_k)) * r.dt_s
+                                      for r, z in rows) / per_day_h,
+            humidity_high_pct_h=sum(max(0.0, z.relative_humidity - control.rh_high) * 100 * r.dt_s for r, z in rows)
+            / per_day_h,
+            humidity_low_pct_h=sum(max(0.0, control.rh_low - z.relative_humidity) * 100 * r.dt_s for r, z in rows)
+            / per_day_h,
+            min_rh=min(z.relative_humidity for _, z in rows), max_rh=max(z.relative_humidity for _, z in rows),
+            max_temperature_k=max(z.temperature_k for _, z in rows),
+            mean_temperature_k=sum(z.temperature_k * r.dt_s for r, z in rows) / sum(r.dt_s for r, _ in rows),
+            mean_humidity_ratio=sum(z.humidity_ratio * r.dt_s for r, z in rows) / sum(r.dt_s for r, _ in rows),
+            reheat_kwh=sum(z.reheat_w * r.dt_s for r, z in allr) * kwh,
+            condensate_kg=sum(z.condensate_kg_s * r.dt_s for r, z in allr) / window_days,
+        ))
+    start, end = records[0].time_s, records[-1].time_s + records[-1].dt_s
+    starts = [e.time_s for e in events if e.code == "start" and start <= e.time_s < end]
+    enabled_h = sum(r.dt_s for r in records if r.system_enabled) / HOUR_S
+    on = [r for r in records if r.compressor_on]
+    return ZoneComboResult(
+        scenario=scenario_key, mode_a=mode_a, mode_b=mode_b,
+        energy_kwh=sum(r.total_power_w * r.dt_s for r in records) * kwh,
+        compressor_kwh=sum(r.compressor_power_w * r.dt_s for r in records) * kwh,
+        pump_kwh=sum(r.pump_power_w * r.dt_s for r in records) * kwh,
+        fan_kwh=sum(r.fan_power_w * r.dt_s for r in records) * kwh,
+        zones=tuple(zones),
+        starts_per_hour=len(starts) / max(1e-9, enabled_h),
+        max_starts_rolling_1h=max_in_window(starts),
+        mean_cold_tank_k=sum(r.cold_water_k * r.dt_s for r in records) / sum(r.dt_s for r in records),
+        mean_hot_tank_k=sum(r.hot_water_k * r.dt_s for r in records) / sum(r.dt_s for r in records),
+        smart_cooling_fraction=(sum(r.dt_s for r in on if r.mode.value == "smart_cooling") / sum(r.dt_s for r in on)
+                                if on else 0.0),
+    )
+
+
+def run_zone_combination(table: CycleTable, scenario_key: str, mode_a: ZoneMode, mode_b: ZoneMode,
+                         params: HeatPumpParameters | None = None, settings_overrides: dict | None = None,
+                         chw_reset: bool = False, control: IndoorControlParameters | None = None,
+                         days: int = 5, window_days: int = 2, dt_s: float = 5.0) -> ZoneComboResult:
+    """兩區組合：重複同一日工況 ``days`` 天，統計最後 ``window_days`` 天（不做週期穩態判定，比 §8.6 簡化）。
+
+參數：
+    table: 性質表。
+    scenario_key: ``ZONE_SCENARIOS`` 的鍵。
+    mode_a: A 區模式。
+    mode_b: B 區模式。
+    params: 系統參數（預設全系統耗電口徑）。
+    settings_overrides: 模擬設定覆寫（例如水泵自動）。
+    chw_reset: 冰水重設。
+    control: 室內控制器參數。
+    days: 模擬天數。
+    window_days: 統計天數。
+    dt_s: 時間步長。
+
+回傳：
+    ZoneComboResult。"""
+    params = params or replace(HeatPumpParameters(), electrical=FULL_ELECTRICAL)
+    control = control or IndoorControlParameters()
+    group = make_zone_group(scenario_key, mode_a, mode_b, chw_reset=chw_reset, control=control)
+    settings = replace(default_settings(OperationMode.COOLING), fans=frozenset({"A", "B"}), reheat_fraction=0.0,
+                       **(settings_overrides or {}))
+    sim = HeatPumpSimulation(table, params, settings, initial_cold_k=celsius(12.0), initial_hot_k=celsius(30.0),
+                             room=group, start_time_s=0.0)
+    sim.run((days - window_days) * DAY_S, dt_s)
+    window = sim.run(window_days * DAY_S, dt_s)
+    return evaluate_zones(window, sim.events, scenario_key, mode_a.value, mode_b.value, control, window_days)

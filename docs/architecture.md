@@ -33,7 +33,7 @@ channel adapters / entrypoints
 
 負責規範性的物理量、單位定義、熱力學計算、HVAC 方程式、濕空氣中立結果模型，以及程序全域的參考狀態政策。它不知道 Flet 控制項、Telegram 更新或顯示格式。
 
-`domain/refrigeration/` 負責蒸氣壓縮循環、飽和性質、過熱度／過冷度判讀與冷凝器能量／熵／㶲平衡，透過 `ThermodynamicStateProvider` 協定取得 canonical SI 狀態；`domain/psychrometrics/processes.py` 負責空氣處理過程的質量／能量平衡。`domain/state_points/` 定義跨工具共用的 `ThermoStatePoint`／`AirStatePoint`、基準防護與序列化（契約見 `docs/domain-contracts.md` §10）；`domain/schema.py` 提供可保存文件共用的 schema 種類與版本檢查。`domain/batch.py` 是與計算無關的批次引擎（參數掃描、類別維度比較、單因子敏感度），只處理「輸入 dict → 計算函式 → 數值指標」（契約見 `docs/domain-contracts.md` §13）。
+`domain/refrigeration/` 負責蒸氣壓縮循環、飽和性質、過熱度／過冷度判讀與冷凝器能量／熵／㶲平衡，透過 `ThermodynamicStateProvider` 協定取得 canonical SI 狀態；`domain/psychrometrics/processes.py` 負責空氣處理過程的質量／能量平衡。`domain/state_points/` 定義跨工具共用的 `ThermoStatePoint`／`AirStatePoint`、基準防護與序列化（契約見 `docs/domain-contracts.md` §10）；`domain/schema.py` 提供可保存文件共用的 schema 種類與版本檢查。`domain/heat_pump/` 是多元取熱雙效熱泵的時間步進模擬引擎：啟動時透過 `ThermodynamicStateProvider` 建立冷媒性質表，模擬時只做內插（契約見 `docs/domain-contracts.md` §14，模型見 `docs/simulation-model.md`）。`domain/batch.py` 是與計算無關的批次引擎（參數掃描、類別維度比較、單因子敏感度），只處理「輸入 dict → 計算函式 → 數值指標」（契約見 `docs/domain-contracts.md` §13）。
 
 ### `application/`
 

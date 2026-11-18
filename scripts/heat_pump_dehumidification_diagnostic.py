@@ -1,0 +1,160 @@
+"""高濕情境的除濕能力診斷（``docs/simulation-model.md`` §8.12）。
+
+§8.7 把「水泵 60 Hz、冰水 7 °C、不再熱」稱為全力方案，但它仍受送風機分級與 25 °C 過冷下限約束：
+室溫偏低時送風機會停，除濕跟著停，所以不是最大持續除濕能力測試。本腳本在高濕情境逐項放寬，
+看是哪一個環節讓濕度守不住：
+
+- D0：按需再熱（§8.7 已跑過的現行控制）。
+- D1：D0 ＋ 室溫 > 25 °C 時兩台送風機都開（除濕風量最大），按需再熱把室溫拉回 26 °C 附近。
+- D2：D1 ＋ 冰水 5.5 °C（低水溫；板式出水會接近 4 °C 防凍限頻，另列保護事件次數）。
+- D3：D2 ＋ 再熱盤管 UA × 2、再熱增益 × 2。
+- D4：D2 ＋ 再熱盤管 UA × 6、再熱增益 × 3（近似「再熱不受限」，確認瓶頸是否在再熱能力）。
+- D5：D4 ＋ 再熱只依室溫開關（室溫 < 26 °C 開、≥ 26.4 °C 關，不再因含濕量 < 11.6 g/kg 關閉），
+  確認瓶頸是否在按需再熱的濕度閘門。
+- D6：D5 但再熱能力維持原規格，判斷是否需要加大再熱盤管。
+
+D5 能證明「除濕做得到」，但會過度除濕：大再熱讓冷卻盤管一直不必停，持續除水（RH 最高只有 46 %）。
+E 系列改用協調除濕（``ReheatMode.COORDINATED``，§8.12.8）：只在除濕狀態補熱，濕度回到目標帶即退出：
+
+- E1：協調除濕（再熱維持原規格）。
+- E2：E1 ＋ 再熱能力 × 2。
+- E3：E1 ＋ 再熱能力 × 6。
+- E4：E3 ＋ 冰水 5.5 °C。
+
+絕對門檻含低濕側（RH<50 % 超標 ≤ 5 %·h、最低 RH ≥ 45 %）。
+
+用法：
+    uv run python scripts/heat_pump_dehumidification_diagnostic.py [--split]
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import replace
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from domain.heat_pump.comparison import Strategy, StrategyResult, run_strategy  # noqa: E402
+from domain.heat_pump.cycle_table import CycleTable  # noqa: E402
+from domain.heat_pump.parameters import FULL_ELECTRICAL, CoolingControlMode, HeatPumpParameters, celsius  # noqa: E402
+from domain.heat_pump.room import SCENARIOS, IndoorControlParameters, ReheatMode  # noqa: E402
+
+STEPS = {
+    "D0": "按需再熱（現行控制）",
+    "D1": "＋兩台送風機（室溫 > 25 °C 時全開）",
+    "D2": "＋冰水 5.5 °C",
+    "D3": "＋再熱能力 × 2",
+    "D4": "＋再熱能力 × 6（近似不受限）",
+    "D5": "＋再熱只依室溫開關",
+    "D6": "D5 但再熱能力維持原規格（UA 88 W/K）",
+    "E1": "協調除濕（再熱原規格）",
+    "E2": "協調除濕＋再熱能力 × 2",
+    "E3": "協調除濕＋再熱能力 × 6",
+    "E4": "協調除濕＋再熱 × 6＋冰水 5.5 °C",
+}
+_TABLE: CycleTable | None = None
+
+
+def _table() -> CycleTable:
+    """每個行程建一次性質表。
+
+回傳：
+    CycleTable。"""
+    global _TABLE
+    if _TABLE is None:
+        from domain.thermodynamics.state_service import ThermodynamicStateService
+        from domain.units.converter import CanonicalUnitConverter
+
+        _TABLE = CycleTable.build(ThermodynamicStateService(CanonicalUnitConverter()))
+    return _TABLE
+
+
+# 各步驟套用的放寬項目（逐項累加；D6 為「D5 但再熱能力維持原規格」，用來判斷是否需要加大再熱盤管）。
+_RELAX = {
+    "D0": set(),
+    "D1": {"fans"},
+    "D2": {"fans", "chw"},
+    "D3": {"fans", "chw", "reheat_x2"},
+    "D4": {"fans", "chw", "reheat_x6"},
+    "D5": {"fans", "chw", "reheat_x6", "reheat_by_temperature"},
+    "D6": {"fans", "chw", "reheat_by_temperature"},
+    "E1": {"coordinated"},
+    "E2": {"coordinated", "reheat_x2"},
+    "E3": {"coordinated", "reheat_x6"},
+    "E4": {"coordinated", "reheat_x6", "chw"},
+}
+
+
+def control_for(step: str) -> IndoorControlParameters:
+    """各診斷步驟的室內控制參數。
+
+參數：
+    step: D0–D6、E1–E4。
+
+回傳：
+    IndoorControlParameters。"""
+    c = IndoorControlParameters()
+    relax = _RELAX[step]
+    if "fans" in relax:
+        # 室溫 > 25 °C（舒適帶下限 25.5 再留 0.5 K）時兩台送風機都開，除濕風量最大；室溫降到 25 °C 才減台，
+        # 避免把房間壓到舒適帶以下（第一版門檻壓到 20 °C，室溫被拉到約 20 °C，再熱補不回來，結果無效）。
+        c = replace(c, stage1_on_k=celsius(25.2), stage2_on_k=celsius(25.3), stage2_off_k=celsius(25.1),
+                    stage1_off_k=celsius(25.0), overcool_floor_k=celsius(25.0), stage2_after_s=0.0)
+    if "chw" in relax:
+        c = replace(c, chw_min_k=celsius(5.5), chw_max_k=celsius(5.5))
+    if "reheat_x2" in relax:
+        c = replace(c, reheat_ua_w_k=2 * c.reheat_ua_w_k, reheat_gain_w_k=2 * c.reheat_gain_w_k)
+    if "reheat_x6" in relax:
+        c = replace(c, reheat_ua_w_k=6 * c.reheat_ua_w_k, reheat_gain_w_k=3 * c.reheat_gain_w_k)
+    if "reheat_by_temperature" in relax:
+        # 含濕量門檻歸零：再熱只看室溫；「需除濕」恆成立，送風機至少保留一台。
+        c = replace(c, humid_w=0.0, tight_w=0.0, ample_w=0.0)
+    return c
+
+
+def _job(args: tuple[str, bool]) -> tuple[str, StrategyResult]:
+    """執行一個診斷步驟。
+
+參數：
+    args: (步驟, 是否用目標分離控制)。
+
+回傳：
+    (步驟, 結果)。"""
+    step, split = args
+    params = replace(HeatPumpParameters(), electrical=FULL_ELECTRICAL)
+    if split:
+        params = replace(params, control=replace(params.control, cooling_control_mode=CoolingControlMode.SPLIT))
+    mode = ReheatMode.COORDINATED if "coordinated" in _RELAX[step] else ReheatMode.DEMAND
+    strategy = Strategy(f"dehum_{step}", STEPS[step], reheat_mode=mode)
+    result = run_strategy(_table(), "humid", SCENARIOS["humid"], strategy, params=params, control=control_for(step))
+    return step, result
+
+
+def main() -> None:
+    """命令列進入點。
+
+回傳：
+    無。"""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--split", action="store_true", help="壓縮機用目標分離控制")
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--steps", default=",".join(STEPS), help="只跑指定步驟，例如 D4")
+    args = parser.parse_args()
+    with ProcessPoolExecutor(max_workers=args.workers) as pool:
+        rows = list(pool.map(_job, [(step, args.split) for step in args.steps.split(",")]))
+    print("| 步驟 | 內容 | kWh/日 | 顯冷／潛冷／再熱 kWh | 溫度超標 K·h | RH>60 %·h | RH<50 %·h | RH 範圍 | "
+          "平均室溫／含濕量 | 冰水桶平均 | 主機 COP | 保護事件 次/日 | 絕對門檻 |")
+    print("|" + "---|" * 13)
+    for step, r in rows:
+        print(f"| {step} | {STEPS[step]} | {r.energy_kwh:.2f} | {r.sensible_kwh:.1f}／{r.latent_kwh:.1f}／{r.reheat_kwh:.1f} | "
+              f"{r.temperature_exceed_kh:.2f} | {r.humidity_high_pct_h:.1f} | {r.humidity_low_pct_h:.1f} | "
+              f"{r.min_rh * 100:.0f}–{r.max_rh * 100:.0f} % | "
+              f"{r.mean_room_k - 273.15:.2f} °C／{r.mean_humidity_ratio * 1000:.1f} g/kg | "
+              f"{r.cold_tank_mean_k - 273.15:.2f} °C | {r.chiller_cop or 0:.2f} | {r.protection_events} | {'是' if r.absolute_ok() else '否'} |")
+
+
+if __name__ == "__main__":
+    main()

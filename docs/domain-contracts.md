@@ -175,3 +175,35 @@ Invalid request shape、known property 不足、invalid fluid/policy 與 unknown
 - 冷媒清單：空白項目（例如「R32, , R290」或結尾逗號）是輸入錯誤；UI 讀取清單時與 application 驗證相同，不會默默略過空白項目。
 - 冷凝器等效傳熱邊界溫度：`boundary_at_dead_state` 為真（整體排熱至環境）時，每一點以該點的 T0 作為 T_b，T_b 不列為輸入，也不能單獨掃描或變動。
 - 冷凝器壓力：批次頁的冷凝器壓力只接受絕對壓力（與 application 契約相同）；錶壓輸入只在單次計算的冷凝器 Exergy 頁提供。
+
+## 14. Heat pump simulation contract
+
+`domain/heat_pump/` 是多元取熱雙效熱泵的動態模擬引擎，模型規格與參數來源見 [`simulation-model.md`](simulation-model.md)。
+
+- 單位：所有參數、狀態與記錄為 canonical SI（溫度 K、功率 W、熱導 W/K、流率 kg/s、壓力 Pa）；只有水泵流量以 US GPM 表示（`gpm_to_kg_s()` 換算，水密度 1000 kg/m³）。
+- 物性：`CycleTable.build()` 透過 `ThermodynamicStateProvider` 以 (蒸發溫度, 冷凝溫度) 網格預先建表，模擬時只做內插；`heat_pump` 套件不得直接匯入 CoolProp（由 `tests/characterization/test_phase9_architecture_guardrails.py` 檢查）。性質表綁定冷媒設定與壓縮機總效率，與模擬參數不一致時 `HeatPumpSimulation` 以 `ValueError` 拒絕。預設表範圍為蒸發 −30～20 °C、冷凝 10～70 °C，超出時夾在邊界。
+- 焓值的 reference state 由 `CycleSettings.reference_state` 指定（預設 ASHRAE），記錄中的焓供 P-h 圖使用，必須沿用同一基準。
+- 時間步進：`HeatPumpSimulation.step(dt)` 以本步開始時的運轉點計算熱量，顯式 Euler 更新水溫，之後切換冷媒模式與更新壓縮機；`dt` 必須介於 0 與 10 秒。`StepRecord` 的水溫為本步結束後的值，其餘為本步運轉點。
+- 設定：`SimulationSettings` 可在步與步之間以 `update_settings()` 變更；未知送風機、非正 GPM、手動頻率超出 30～60 Hz 以 `ValueError` 拒絕。切換冷房／暖房時冷媒模式回到雙效、PI 積分歸零。
+- 安全停機（冷凝溫度或排氣溫度超過上限）會保持到呼叫 `reset_trip()`。
+- 壓縮機啟停：冷房冰水 ≤ `cooling_setpoint_k`（7 °C）立即停機（自動與手動皆同，不要求先降到最低頻率、無裕度）；冰水 ≥ `cooling_restart_k`（8 °C）且已停 ≥ `min_off_time_s`（180 s）才重啟（另須預測最低頻率出水不低於防凍設定）。暖房：自動為最低頻率且熱水 ≥ 設定值 + `auto_stop_margin_k`（46 °C）停機，手動為 ≥ 45 °C；≤ `heating_restart_k`（42 °C）重啟。`auto_stop_margin_k` 只適用暖房。
+- `StepRecord` 另提供 T-s 圖用的四點熵（`suction_entropy_j_kg_k` 等，節流後熵由飽和液／蒸氣以乾度內插）、吸氣與液管溫度，以及板式換熱器進出水溫（水路為串聯：水桶 → 水泵 → 送風機 → 板式換熱器 → 水桶，進水為本步開始時的送風機**回水**溫度——冷房蒸發器進水 = 冰水桶 + Q_fc ÷ (ṁ·cp)、暖房冷凝器進水 = 熱水桶 − Q_fc ÷ (ṁ·cp)，其餘進水為桶溫，見 `simulation-model.md` §3.4；出水 = 進水 ∓ Q ÷ (ṁ·cp)；該換熱器不在流路中時為 None）與室外換熱量 `outdoor_heat_w`。
+- 系統 COP 為送風機送出（或取走）的熱量除以壓縮機、開啟送風機與水泵的總耗電。
+- 壓縮機頻率：日立 E505DH-49A2W（49 cc 渦卷式）由外接變頻器在固定階梯 `frequency_steps_hz`（預設 30／40／50／60 Hz）運轉。自動控制為 `PidController`（Kp、Ti、Td，微分低通、條件式積分抗飽和）輸出連續頻率，再由 `FrequencyStepper` 換成階梯（遲滯 2 Hz、變階最短停留 60 s、一次一階；高壓限頻上限低於目前階梯時立即降階）。手動頻率必須是階梯之一，否則以 `ValueError` 拒絕；手動→自動為無擾切換。
+- 水泵：冰水泵與熱水泵各自選擇階梯頻率（`cold_pump_hz`／`hot_pump_hz`，預設 60 Hz）。流量與耗電採實測曲線（`PumpParameters.flow_ratio_by_hz`、`power_w_by_hz`；實測為 √3·V·I 視在功率，40–60 Hz 實測、30 Hz 冪次外插）；沒有曲線時退回相似定律（流量 ∝ f、耗電 ∝ f³）。冰水泵額定流量為實測 0.62 kg/s，熱水泵無實測、沿用設計 12.06 GPM。泵浦全程運轉，耗電計入總耗電。
+- 水泵實測資料（冰水泵）的功率因數預設 `power_factor = 1.0`（√3·V·I 視為有效功率）；熱水泵沒有量測，沿用同一條曲線（假設）。送風機冷卻能力與水泵頻率無關（表 8.1.1 的量測對象待確認，暫不套用實測係數）。
+- 防凍保護：板式蒸發器在流路時（雙效、智慧冷房）以板式蒸發器出水溫度（蒸發器進水 − 水側取熱量／(冰水流量·cp)；冷房進水為送風機回水、暖房為冰水桶溫）判斷：低於 `freeze_limit_start_k`（4 °C）先以 `freeze_limit_down_hz_per_s` 逐步限頻（出水回到 `freeze_release_k`（5 °C）以上才回升），已在最低頻率仍過低持續 `freeze_stop_delay_s` 則停機；重啟除一般條件外，需預測最低頻率下的出水溫度不低於設定。`frost`（Te < 0 °C）警示保留且不被此保護擋住。水路串聯後冷房進水較高，此保護在冷房正常運轉幾乎不觸發。暖房時雙效中防凍停機會改由室外換熱器吸熱（智慧暖房）。保護優先於手動頻率；室外換熱器當蒸發器時不適用。
+- 除濕後再熱：冷房時 `reheat_fraction`（0–0.6）× 送風機冷卻盤管負荷為再熱需求，受盤管能力（熱水與盤管出風溫差）限制；再熱量由熱水桶扣除，不改變盤管負荷。`StepRecord` 記錄 `reheat_demand_w`、`reheat_w`、`reheat_energy_j` 與 `net_cooling_w`。
+- 模式回切：智慧冷房／智慧暖房切回雙效前，需在智慧模式停留至少 `mode_return_dwell_s`（預設 300 s）；切入智慧模式不受限。
+- 室外換熱器以原廠資料（報告表 2.1.5）的有效熱導 G = Q ÷ (T_冷媒平均 − T_設計進風) 計算；設計進風溫度（35 °C）為假設值。
+- 房間溫濕度模型（選用，只支援冷房；`simulation-model.md` §8）：`HeatPumpSimulation(..., room=RoomModel(...), start_time_s=...)`。有房間模型時：
+  - 室溫、含濕量是狀態（`RoomModel.state`），外氣取日負載情境（`DailyScenario`），`settings.room_k`／`outdoor_k`／`reheat_fraction` 不使用；`settings.fans` 改為「可用送風機」，實際運轉由室內控制器分級（`StepRecord.fans_running`）。
+  - 送風機盤管改為部分乾／部分濕的焓基 ε-NTU 盤管（`wet_coil.coil_performance`，依 EnergyPlus「Coil:Cooling:Water」詳細模式，逆流；交界處表面溫度 = 進風露點）：冷量隨冰水溫度、**冰水流量**與室內溫濕度變化，分顯熱／潛熱（`coil_sensible_w`／`coil_latent_w`），盤管進水為冰水桶、回水再進板式蒸發器（串聯不變）。
+  - 盤管每次計算都以 `wet_coil.invariant_violations()` 檢查：空氣側焓降 = 水側得熱、0 ≤ W_out ≤ W_in、RH_out ≤ 100 %、凝結 ≥ 0、迭代收斂；違反次數累計在 `HeatPumpSimulation.coil_check_failures`。
+  - 再熱由 `ReheatMode`（`OFF`／`FIXED`／`DEMAND`）決定，再熱量從熱水桶扣除**並加回送風顯熱**（`supply_k`）。
+  - 冷房冰水停機溫度可由冰水溫度重設改變（`chw_setpoint_k`；重啟 = 設定值 + 1 K）。
+  - 排程外（`DailyScenario.system_enabled` 為假）壓縮機、水泵、送風機都停。`settings.idle_pump_off` 啟用非必要迴路停泵。
+  - 室內控制器以 EWMA 斜率預測 10 min 後的室溫與 RH（`RoomModel.predicted_temperature_k`／`predicted_rh`）：送風機分級、冰水重設與水泵自動都看預測值。水泵自動時，送風機運轉中若溫濕度接近上限（`comfort_tight()`）就升一階，只有實際與預測都有餘裕（`comfort_ample()`）才允許降階；沒有固定頻率下限。
+  - `DailyScenario` 建構時檢查外氣含濕量不超過當日最低外氣溫度的飽和值，否則 `ValueError`。
+- 耗電口徑：`HeatPumpParameters.electrical`（`ElectricalParameters`）預設全為 0／1，維持既有口徑；`FULL_ELECTRICAL` 另計室外風扇 200 W（室外換熱器在流路且壓縮機運轉時）、變頻器效率 96 %、待機 30 W（假設值）。`StepRecord.total_power_w` 含 `outdoor_fan_power_w` 與 `standby_power_w`。
+- 策略比較（`domain/heat_pump/comparison.py`、`scripts/heat_pump_strategy_comparison.py`）：每策略自相同初始狀態開始，第一天量達標時間（室溫進入設定帶且 RH 在目標帶上下限內，維持 5 min）；之後重複同一日工況直到週期穩態（相隔兩天的狀態與用電接近，`PeriodicTolerance`），以最後兩天平均統計。殘留儲能差以主機 COP 換算列出，但不計入用電。列入比較須同時通過數值檢查（`StrategyResult.valid`）、絕對門檻（`AbsoluteComfort`）與不劣於舒適基準（`ComfortTolerance`）；沒有方案通過絕對門檻時，只提供條件式排名（`best_relative_only`）。

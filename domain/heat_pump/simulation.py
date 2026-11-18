@@ -1,0 +1,1299 @@
+"""多元取熱雙效熱泵的時間步進模擬（``docs/simulation-model.md`` §2–§5）。
+
+每個時間步：
+1. 依目前模式與頻率求解運轉點（Te、Tc、能力、耗電）。
+2. 以顯式 Euler 更新冰水桶與熱水桶溫度。
+3. 依水溫切換冷媒模式（電磁閥），再更新壓縮機頻率（PID＋階梯量化）與啟停。
+
+壓縮機與兩台水泵都由變頻器在固定階梯（預設 30／40／50／60 Hz）運轉；冷房時熱水桶另供
+除濕後再熱盤管。模擬器是可變物件：UI 可在步與步之間調整運轉方式、送風機、頻率模式、
+泵浦頻率、再熱比例與環境溫度。
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
+from enum import Enum
+
+from .components import (
+    VALVES_OPEN,
+    CompressorPerformance,
+    OperatingConditions,
+    OperatingPointSolver,
+    PlateExchanger,
+    RefrigerantMode,
+    refrigerant_side_resistance,
+)
+from . import psychrometrics as psy
+from .control import FrequencyStepper, PidController
+from .cycle_table import CycleTable
+from .parameters import WATER_CP_J_KG_K, CoolingControlMode, HeatPumpParameters, celsius, gpm_to_kg_s
+from .room import RoomModel, SupplyAir, ZoneGroup, ZoneSnapshot
+from .wet_coil import CoilResult, coil_performance, invariant_violations
+
+
+class OperationMode(str, Enum):
+    """使用者選擇的運轉方式：兩台送風機統一接冰水桶（冷房）或熱水桶（暖房）。"""
+
+    COOLING = "cooling"
+    HEATING = "heating"
+
+
+class FrequencyMode(str, Enum):
+    """壓縮機頻率控制方式。"""
+
+    AUTO = "auto"
+    MANUAL = "manual"
+
+
+class PumpMode(str, Enum):
+    """水泵頻率控制方式。"""
+
+    MANUAL = "manual"
+    AUTO = "auto"
+
+
+OUTDOOR_RANGE_K = (celsius(-10.0), celsius(45.0))
+ROOM_RANGE_K = (celsius(10.0), celsius(35.0))
+
+WARNING_HIGH_PRESSURE = "high_pressure"
+WARNING_HP_LIMITING = "hp_limiting"
+WARNING_FROST = "frost"
+WARNING_TRIPPED = "tripped"
+WARNING_FREEZE_LIMITING = "freeze_limiting"
+WARNING_FREEZE_STOPPED = "freeze_stopped"
+
+
+@dataclass(frozen=True)
+class SimulationSettings:
+    """使用者可在執行中調整的設定。"""
+
+    operation: OperationMode = OperationMode.COOLING
+    fans: frozenset[str] = frozenset({"A", "B"})
+    frequency_mode: FrequencyMode = FrequencyMode.AUTO
+    manual_frequency_hz: float = 60.0
+    cold_pump_hz: float = 60.0
+    hot_pump_hz: float = 60.0
+    pump_mode: PumpMode = PumpMode.MANUAL
+    reheat_fraction: float = 0.2
+    room_k: float = celsius(27.0)
+    outdoor_k: float = celsius(30.0)
+    # 非必要迴路停泵（§8.4）：冰水泵在壓縮機停機且送風機全停時停；熱水泵在板式冷凝器不在流路且無再熱時停。
+    idle_pump_off: bool = False
+
+
+def default_settings(operation: OperationMode) -> SimulationSettings:
+    """依運轉方式回傳預設環境（冷房 27/30 °C、暖房 20/15 °C）。
+
+參數：
+    operation: 運轉方式。
+
+回傳：
+    SimulationSettings。"""
+    if operation is OperationMode.HEATING:
+        return SimulationSettings(operation=operation, room_k=celsius(20.0), outdoor_k=celsius(15.0))
+    return SimulationSettings(operation=operation)
+
+
+@dataclass(frozen=True)
+class SimulationEvent:
+    """模式切換、啟停與保護事件。"""
+
+    time_s: float
+    code: str
+    message: str
+
+
+@dataclass(frozen=True)
+class StepRecord:
+    """單一時間步的記錄（§5）。所有量為 canonical SI。"""
+
+    time_s: float
+    dt_s: float
+    operation: OperationMode
+    mode: RefrigerantMode
+    compressor_on: bool
+    frequency_hz: float
+    frequency_limit_hz: float
+    valves_open: frozenset[int]
+    fans: frozenset[str]
+    cold_water_k: float
+    hot_water_k: float
+    evaporating_k: float | None
+    condensing_k: float | None
+    evaporating_pressure_pa: float | None
+    condensing_pressure_pa: float | None
+    pressure_ratio: float | None
+    mass_flow_kg_s: float
+    discharge_k: float | None
+    suction_enthalpy_j_kg: float | None
+    discharge_enthalpy_j_kg: float | None
+    liquid_enthalpy_j_kg: float | None
+    cooling_w: float
+    heating_w: float
+    compressor_power_w: float
+    fan_coil_load_w: float
+    fan_power_w: float
+    pump_power_w: float
+    cold_tank_loss_w: float
+    hot_tank_loss_w: float
+    energy_used_j: float
+    fan_coil_energy_j: float
+    warnings: frozenset[str]
+    suction_temperature_k: float | None = None
+    liquid_temperature_k: float | None = None
+    suction_entropy_j_kg_k: float | None = None
+    discharge_entropy_j_kg_k: float | None = None
+    liquid_entropy_j_kg_k: float | None = None
+    evaporator_inlet_entropy_j_kg_k: float | None = None
+    evaporator_water_in_k: float | None = None
+    evaporator_water_out_k: float | None = None
+    condenser_water_in_k: float | None = None
+    condenser_water_out_k: float | None = None
+    outdoor_heat_w: float = 0.0
+    cold_pump_hz: float = 0.0
+    hot_pump_hz: float = 0.0
+    cold_pump_gpm: float = 0.0
+    hot_pump_gpm: float = 0.0
+    cold_pump_power_w: float = 0.0
+    hot_pump_power_w: float = 0.0
+    reheat_demand_w: float = 0.0
+    reheat_w: float = 0.0
+    reheat_energy_j: float = 0.0
+    # 房間模型（§8；未啟用時為 None／0）。
+    room_k: float | None = None
+    room_rh: float | None = None
+    room_humidity_ratio: float | None = None
+    outdoor_k: float | None = None
+    coil_sensible_w: float = 0.0
+    coil_latent_w: float = 0.0
+    condensate_kg_s: float = 0.0
+    supply_k: float | None = None
+    fans_running: frozenset[str] = frozenset()
+    chw_setpoint_k: float | None = None
+    occupied: bool = True
+    system_enabled: bool = True
+    outdoor_fan_power_w: float = 0.0
+    standby_power_w: float = 0.0
+    # 控制診斷（§8.12）：PID 未量化的要求頻率與積分項（本步開始時的值；停機時為 0）。
+    pid_request_hz: float = 0.0
+    pid_integral_hz: float = 0.0
+    chw_target_k: float | None = None
+    # 受控水桶（冷房冰水、暖房熱水）目前的 PID 目標、停機門檻與重啟門檻（UI 參考線用；§2.3、§8.12）。
+    control_target_k: float | None = None
+    control_stop_k: float | None = None
+    control_restart_k: float | None = None
+    # 多區（§8.12.9）：各區狀態；單一房間時為空。
+    zones: tuple[ZoneSnapshot, ...] = ()
+
+    @property
+    def net_cooling_w(self) -> float:
+        """送到室內的淨冷卻量（盤管冷卻 − 再熱）；暖房時為 0。
+
+回傳：
+            W。"""
+        if self.operation is not OperationMode.COOLING:
+            return 0.0
+        return max(0.0, self.fan_coil_load_w - self.reheat_w)
+
+    @property
+    def total_power_w(self) -> float:
+        """壓縮機＋送風機＋水泵＋室外風扇＋待機（後兩者預設為 0，§8.5）。
+
+回傳：
+            W。"""
+        return (self.compressor_power_w + self.fan_power_w + self.pump_power_w + self.outdoor_fan_power_w
+                + self.standby_power_w)
+
+    @property
+    def system_cop(self) -> float | None:
+        """累計系統 COP（送風機側，含水泵）。
+
+回傳：
+            無因次；尚無耗電時為 None。"""
+        if self.energy_used_j <= 0:
+            return None
+        return self.fan_coil_energy_j / self.energy_used_j
+
+
+@dataclass
+class _ControllerState:
+    """頻率控制器內部狀態。"""
+
+    compressor_on: bool = True
+    frequency_hz: float = 60.0
+    frequency_limit_hz: float = 60.0
+    freeze_limit_hz: float = 60.0
+    freeze_timer_s: float = 0.0
+    freeze_stopped: bool = False
+    off_since_s: float | None = None
+    tripped: bool = False
+    cold_pump_hz: float = 60.0
+    hot_pump_hz: float = 60.0
+    cold_pump_changed_s: float = -1e9
+    hot_pump_changed_s: float = -1e9
+    pid_request_hz: float = 0.0
+    # 目標分離模式：本次運轉起點、在最低階且低於停機門檻的持續時間。
+    on_since_s: float | None = None
+    stop_hold_s: float = 0.0
+
+
+class HeatPumpSimulation:
+    """可逐步推進的熱泵模擬器。"""
+
+    def __init__(
+        self,
+        table: CycleTable,
+        params: HeatPumpParameters | None = None,
+        settings: SimulationSettings | None = None,
+        initial_cold_k: float = celsius(30.0),
+        initial_hot_k: float = celsius(30.0),
+        room: RoomModel | None = None,
+        start_time_s: float = 0.0,
+    ) -> None:
+        """建立模擬器。
+
+參數：
+    table: 循環性質表（須以相同冷媒設定與總效率建立）。
+    params: 系統參數。
+    settings: 初始使用者設定。
+    initial_cold_k: 冰水桶初始溫度。
+    initial_hot_k: 熱水桶初始溫度。
+    room: 房間溫濕度模型（§8；只支援冷房）。有值時室溫、外氣、送風機啟停、冰水設定值與再熱
+        都由房間模型決定，``settings.fans`` 改為「可用送風機」，``room_k``／``outdoor_k``／``reheat_fraction`` 不使用。
+    start_time_s: 起始時間（房間模型的日負載以此對應時刻；例如 7 h = 25,200 s）。
+
+回傳：
+    無。
+
+引發：
+    ValueError：性質表與參數不一致，或房間模型搭配暖房時。"""
+        self.room = room
+        self._pumps_on = (True, True)
+        self._last_reheat_request_w = 0.0
+        self._coil_cache: tuple[tuple, list[tuple[str, CoilResult]]] | None = None
+        # 盤管物理不變量違反次數（能量守恆、含濕量範圍、過飽和、收斂；§8.2）。
+        self.coil_check_failures: dict[str, int] = {}
+        self.params = params or HeatPumpParameters()
+        if table.settings != self.params.cycle:
+            raise ValueError("性質表的循環設定與模擬參數不一致。")
+        if abs(table.overall_efficiency - self.params.compressor.overall_efficiency) > 1e-9:
+            raise ValueError("性質表的壓縮機總效率與模擬參數不一致。")
+        self.table = table
+        self._solver = OperatingPointSolver(table, self.params)
+        resistance = refrigerant_side_resistance(self.params.refrigerant_side, self.params.geometry)
+        self._condenser = PlateExchanger(self.params.condenser, self.params.geometry, resistance)
+        self._evaporator = PlateExchanger(self.params.evaporator, self.params.geometry, resistance)
+        settings = settings or SimulationSettings()
+        self._settings = settings
+        self.time_s = start_time_s
+        self.cold_water_k = initial_cold_k
+        self.hot_water_k = initial_hot_k
+        self.mode = RefrigerantMode.DUAL
+        comp = self.params.compressor
+        control = self.params.control
+        self._ctrl = _ControllerState(frequency_hz=comp.max_frequency_hz, frequency_limit_hz=comp.max_frequency_hz,
+                                      freeze_limit_hz=comp.max_frequency_hz)
+        split = control.cooling_control_mode is CoolingControlMode.SPLIT
+        self._pid = PidController(
+            kp=control.kp_hz_per_k,
+            ti_s=control.split_integral_time_s if split else control.integral_time_s,
+            td_s=control.split_derivative_time_s if split else control.derivative_time_s,
+            out_min=comp.min_frequency_hz, out_max=comp.max_frequency_hz, bias=comp.min_frequency_hz,
+            filter_ratio=control.derivative_filter_ratio,
+            directional_anti_windup=split, derivative_on_measurement=split,
+            integral_min=control.split_integral_min_hz if split else None,
+        )
+        self._stepper = FrequencyStepper(comp.frequency_steps_hz, control.step_hysteresis_hz, control.step_dwell_s,
+                                         current_hz=comp.max_frequency_hz)
+        self._mode_since_s = start_time_s
+        self._guess: tuple[float, float] | None = None
+        self._energy_j = 0.0
+        self._fan_coil_energy_j = 0.0
+        self._reheat_energy_j = 0.0
+        self.events: list[SimulationEvent] = []
+        self.update_settings(settings)
+
+    @property
+    def settings(self) -> SimulationSettings:
+        """目前設定。
+
+回傳：
+            SimulationSettings。"""
+        return self._settings
+
+    @property
+    def condenser(self) -> PlateExchanger:
+        """板式冷凝器模型。
+
+回傳：
+            PlateExchanger。"""
+        return self._condenser
+
+    @property
+    def evaporator(self) -> PlateExchanger:
+        """板式蒸發器模型。
+
+回傳：
+            PlateExchanger。"""
+        return self._evaporator
+
+    def update_settings(self, settings: SimulationSettings) -> None:
+        """套用新的使用者設定（可在執行中呼叫）。
+
+參數：
+    settings: 新設定。
+
+回傳：
+    無。
+
+引發：
+    ValueError：設定不合理時。"""
+        compressor = self.params.compressor
+        known = {fan.name for fan in self.params.fan_coils}
+        if not settings.fans <= known:
+            raise ValueError(f"未知的送風機：{sorted(settings.fans - known)}")
+        if settings.manual_frequency_hz not in compressor.frequency_steps_hz:
+            raise ValueError(f"手動頻率必須是階梯 {self._format_steps(compressor.frequency_steps_hz)} Hz 之一。")
+        for value, pump, label in (
+            (settings.cold_pump_hz, self.params.cold_pump, "冰水泵"),
+            (settings.hot_pump_hz, self.params.hot_pump, "熱水泵"),
+        ):
+            if value not in pump.frequency_steps_hz:
+                raise ValueError(f"{label}頻率必須是階梯 {self._format_steps(pump.frequency_steps_hz)} Hz 之一。")
+        if self.room is not None and settings.operation is not OperationMode.COOLING:
+            raise ValueError("房間溫濕度模型目前只支援冷房。")
+        if not 0.0 <= settings.reheat_fraction <= self.params.reheat.max_fraction:
+            raise ValueError(f"再熱比例必須介於 0～{self.params.reheat.max_fraction:g}。")
+        for value, (low, high), label in (
+            (settings.outdoor_k, OUTDOOR_RANGE_K, "外氣溫度"),
+            (settings.room_k, ROOM_RANGE_K, "室溫"),
+        ):
+            if not low <= value <= high:
+                raise ValueError(f"{label}必須介於 {low - 273.15:g}～{high - 273.15:g} °C。")
+        previous = self._settings
+        self._settings = settings
+        ctrl = self._ctrl
+        if previous.operation is not settings.operation:
+            self.mode = RefrigerantMode.DUAL
+            self._mode_since_s = self.time_s
+            self._pid.reset()
+            self._event("operation", f"運轉方式切換為{'冷房' if settings.operation is OperationMode.COOLING else '暖房'}")
+            self._guess = None
+        elif previous.frequency_mode is FrequencyMode.MANUAL and settings.frequency_mode is FrequencyMode.AUTO:
+            # 無擾切換：讓 PID 輸出從目前頻率開始。
+            self._pid.preset(ctrl.frequency_hz, self._control_error(), measurement=self._pid_measurement())
+        if ctrl.compressor_on and not ctrl.tripped and settings.frequency_mode is FrequencyMode.MANUAL:
+            ctrl.frequency_hz = self._stepper.start(settings.manual_frequency_hz, ctrl.frequency_limit_hz, self.time_s)
+
+    @staticmethod
+    def _format_steps(steps: tuple[float, ...]) -> str:
+        """階梯顯示文字。
+
+參數：
+            steps: 階梯。
+
+回傳：
+            例如「30／40／50／60」。"""
+        return "／".join(f"{step:g}" for step in steps)
+
+    def set_manual_frequency(self, frequency_hz: float) -> None:
+        """切換為手動頻率。
+
+參數：
+    frequency_hz: 頻率。
+
+回傳：
+    無。"""
+        self.update_settings(
+            replace(self._settings, frequency_mode=FrequencyMode.MANUAL, manual_frequency_hz=frequency_hz)
+        )
+
+    def reset_trip(self) -> None:
+        """手動復歸安全停機。
+
+回傳：
+    無。"""
+        if self._ctrl.tripped:
+            self._ctrl.tripped = False
+            self._event("trip_reset", "安全停機已手動復歸")
+
+    def _event(self, code: str, message: str) -> None:
+        """記錄事件。
+
+參數：
+    code: 事件代碼。
+    message: 說明。
+
+回傳：
+    無。"""
+        self.events.append(SimulationEvent(self.time_s, code, message))
+
+    def _cold_flow_kg_s(self) -> float:
+        """冰水泵在目前頻率的流量（不論是否停泵；供換熱器熱導與預測使用）。
+
+回傳：
+            kg/s。"""
+        return gpm_to_kg_s(self.params.cold_pump.flow_gpm(self._pump_hz()[0]))
+
+    def _hot_flow_kg_s(self) -> float:
+        """熱水泵在目前頻率的流量（不論是否停泵）。
+
+回傳：
+            kg/s。"""
+        return gpm_to_kg_s(self.params.hot_pump.flow_gpm(self._pump_hz()[1]))
+
+    def _cold_flow_actual_kg_s(self) -> float:
+        """冰水泵實際流量（停泵時為 0）。
+
+回傳：
+            kg/s。"""
+        return self._cold_flow_kg_s() if self._pumps_on[0] else 0.0
+
+    def _hot_flow_actual_kg_s(self) -> float:
+        """熱水泵實際流量（停泵時為 0）。
+
+回傳：
+            kg/s。"""
+        return self._hot_flow_kg_s() if self._pumps_on[1] else 0.0
+
+    # ---- 房間模型（§8）----
+    def system_enabled(self) -> bool:
+        """空調系統是否啟用（無房間模型時恆為真）。
+
+回傳：
+            bool。"""
+        return self.room is None or self.room.scenario.system_enabled(self.time_s)
+
+    def _outdoor_k(self) -> float:
+        """外氣溫度：房間模型取日負載情境（夾在性質表範圍內），否則取設定值。
+
+回傳：
+            K。"""
+        if self.room is None:
+            return self._settings.outdoor_k
+        low, high = OUTDOOR_RANGE_K
+        return min(high, max(low, self.room.scenario.outdoor_k(self.time_s)))
+
+    def _room_k(self) -> float:
+        """室溫：房間模型狀態或設定值。
+
+回傳：
+            K。"""
+        return self.room.state.temperature_k if self.room is not None else self._settings.room_k
+
+    def _cooling_setpoint_k(self) -> float:
+        """冷房冰水停機設定值（房間模型可做冰水溫度重設）。
+
+回傳：
+            K。"""
+        if self.room is not None:
+            return self.room.chw_setpoint_k
+        return self.params.control.cooling_setpoint_k
+
+    def _split_cooling(self) -> bool:
+        """冷房且使用目標分離控制（§8.12）。
+
+回傳：
+            bool。"""
+        return (self._settings.operation is OperationMode.COOLING
+                and self.params.control.cooling_control_mode is CoolingControlMode.SPLIT)
+
+    def _cooling_target_k(self) -> float:
+        """冷房 PID 目標：LEGACY 等於停機設定值；目標分離時為停機設定值 + 偏移。
+
+回傳：
+            K。"""
+        offset = self.params.control.cooling_target_offset_k if self._split_cooling() else 0.0
+        return self._cooling_setpoint_k() + offset
+
+    def _cooling_restart_k(self) -> float:
+        """冷房重啟溫度 = 停機設定值 + 原始的重啟差（預設 1 K）。
+
+回傳：
+            K。"""
+        c = self.params.control
+        return self._cooling_setpoint_k() + (c.cooling_restart_k - c.cooling_setpoint_k)
+
+    def _coil_results(self) -> list[tuple[str, CoilResult]]:
+        """各運轉中送風機的濕盤管結果（進水 = 冰水桶，水量依分流比分配；有快取）。
+
+回傳：
+            [(名稱, CoilResult)]。"""
+        room = self.room
+        assert room is not None
+        fans = room.fans_on & self._settings.fans
+        flow = self._cold_flow_actual_kg_s()
+        # 盤管入風 = 所屬房間的狀態（多區時各區不同，§8.12.9）。
+        states = {name: room.coil_state(name) for name in sorted(fans)}
+        key = (self.cold_water_k, tuple((n, st.temperature_k, st.humidity_ratio) for n, st in states.items()), fans, flow)
+        if self._coil_cache is not None and self._coil_cache[0] == key:
+            return self._coil_cache[1]
+        flows = room.water_flows(flow, self._settings.fans)
+        results = []
+        for name in sorted(fans):
+            coil = room.coils[name]
+            state = states[name]
+            args = (coil, state.temperature_k, state.humidity_ratio, self.cold_water_k, flows.get(name, 0.0))
+            result = coil_performance(*args)
+            for problem in invariant_violations(*args, result):
+                self.coil_check_failures[problem] = self.coil_check_failures.get(problem, 0) + 1
+            results.append((name, result))
+        self._coil_cache = (key, results)
+        return results
+
+    def _fan_coil_load_w(self) -> float:
+        """送風機盤管負荷。
+
+無房間模型：UA × 溫差（供水＝水桶溫度；冷房取冰水桶，暖房取熱水桶）。
+有房間模型：濕盤管（顯熱＋潛熱）總冷量，隨水量、室內溫濕度與冰水溫度變化（§8.2）。
+
+回傳：
+            W。"""
+        if self.room is not None:
+            return sum(result.total_w for _, result in self._coil_results())
+        s = self._settings
+        fan_ua = sum(fan.ua_w_k for fan in self.params.fan_coils if fan.name in s.fans)
+        if s.operation is OperationMode.COOLING:
+            return max(0.0, fan_ua * (s.room_k - self.cold_water_k))
+        return max(0.0, fan_ua * (self.hot_water_k - s.room_k))
+
+    def _inlet_temperatures(self) -> tuple[float, float]:
+        """板式蒸發器與冷凝器的進水溫度（§1.4 管路串聯）。
+
+迴路：水桶 → 水泵 → 送風機 → 板式換熱器 → 水桶。所以板式換熱器進水是送風機**回水**：
+    冷房：蒸發器進水 = 冰水桶 + Q_fc ÷ (ṁ_cold·cp)；冷凝器進水 = 熱水桶（再熱盤管與熱水桶並聯）。
+    暖房：冷凝器進水 = 熱水桶 − Q_fc ÷ (ṁ_hot·cp)；蒸發器進水 = 冰水桶（冰水迴路不經過送風機）。
+
+回傳：
+    (蒸發器進水 K, 冷凝器進水 K)。"""
+        fan_load = self._fan_coil_load_w()
+        if self._settings.operation is OperationMode.COOLING:
+            flow = self._cold_flow_actual_kg_s()
+            rise = fan_load / (flow * WATER_CP_J_KG_K) if flow > 0 else 0.0
+            return self.cold_water_k + rise, self.hot_water_k
+        flow = self._hot_flow_actual_kg_s()
+        drop = fan_load / (flow * WATER_CP_J_KG_K) if flow > 0 else 0.0
+        return self.cold_water_k, self.hot_water_k - drop
+
+    def _pump_hz(self) -> tuple[float, float]:
+        """目前實際的（冰水泵, 熱水泵）頻率：手動取設定值，自動取控制器狀態（§2.4）。
+
+回傳：
+            (Hz, Hz)。"""
+        ctrl = self._ctrl
+        if self._settings.pump_mode is PumpMode.MANUAL:
+            ctrl.cold_pump_hz = self._settings.cold_pump_hz
+            ctrl.hot_pump_hz = self._settings.hot_pump_hz
+        return ctrl.cold_pump_hz, ctrl.hot_pump_hz
+
+    def _next_pump_hz(self, steps: tuple[float, ...], flow_gpm: Callable[[float], float], current: float,
+                      delta_t_k: float, target_k: float, changed_s: float) -> float:
+        """水側溫差控制：溫差高於目標＋遲滯時升一階；降一階後預測溫差仍不超過目標時降一階。
+
+參數：
+    steps: 可用階梯（升冪）。
+    flow_gpm: 頻率到流量的函式。
+    current: 目前頻率。
+    delta_t_k: 目前板式換熱器水側溫差（無熱交換為 0）。
+    target_k: 目標溫差。
+    changed_s: 上次變階的時間。
+
+回傳：
+    下一步頻率（Hz）。"""
+        c = self.params.control
+        if self.time_s - changed_s < c.pump_step_dwell_s:
+            return current
+        steps = tuple(sorted(steps))
+        index = steps.index(current) if current in steps else len(steps) - 1
+        if delta_t_k > target_k + c.pump_hysteresis_k and index < len(steps) - 1:
+            return steps[index + 1]
+        if index > 0:
+            lower = steps[index - 1]
+            if delta_t_k * flow_gpm(current) / flow_gpm(lower) <= target_k:
+                return lower
+        return current
+
+    def _update_pumps(self, perf: CompressorPerformance | None) -> None:
+        """自動模式下依板式換熱器水側溫差更新水泵頻率（下一步生效）。
+
+參數：
+    perf: 本步運轉點（停機或該換熱器不在流路時溫差視為 0，水泵逐階降到最低）。
+
+回傳：
+    無。"""
+        if self._settings.pump_mode is not PumpMode.AUTO:
+            return
+        c = self.params.control
+        ctrl = self._ctrl
+        cold_dt = hot_dt = 0.0
+        if perf is not None:
+            if self.mode is not RefrigerantMode.SMART_HEATING:
+                cold_dt = perf.cooling_w / (self._cold_flow_kg_s() * WATER_CP_J_KG_K)
+            if self.mode is not RefrigerantMode.SMART_COOLING:
+                hot_dt = perf.heating_w / (self._hot_flow_kg_s() * WATER_CP_J_KG_K)
+        room = self.room
+        if room is not None and self._cold_flow_actual_kg_s() > 0:
+            # 房間模型：冰水泵也看盤管水側溫差（壓縮機停機時盤管仍在取冷）。
+            cold_dt = max(cold_dt, self._fan_coil_load_w() / (self._cold_flow_kg_s() * WATER_CP_J_KG_K))
+        cold = self._next_pump_hz(self.params.cold_pump.frequency_steps_hz, self.params.cold_pump.flow_gpm,
+                                  ctrl.cold_pump_hz, cold_dt, c.pump_cold_delta_t_k, ctrl.cold_pump_changed_s)
+        if room is not None and room.fans_on:
+            # 舒適度保護（§8.4）：送風機運轉中，溫濕度（預測）接近上限時升一階（受最短停留限制）；
+            # 只有實際與預測都有餘裕時才允許降階。最低流量即最低階梯，防凍由板式蒸發器保護處理。
+            steps = sorted(self.params.cold_pump.frequency_steps_hz)
+            dwell_ok = self.time_s - ctrl.cold_pump_changed_s >= c.pump_step_dwell_s
+            chw_at_min = (not room.chw_reset
+                          or room.chw_setpoint_k <= room.control.chw_min_k + 1e-9)
+            if room.comfort_tight() and chw_at_min:
+                # 先降冰水溫度（便宜）；冰水已在下限仍接近上限，才升泵（40 → 60 Hz 只多約 4 % 冷量）。
+                higher = [step for step in steps if step > ctrl.cold_pump_hz]
+                cold = higher[0] if higher and dwell_ok else max(cold, ctrl.cold_pump_hz)
+            elif room.comfort_tight():
+                cold = max(cold, ctrl.cold_pump_hz)
+            elif cold < ctrl.cold_pump_hz and not room.comfort_ample():
+                cold = ctrl.cold_pump_hz
+        hot = self._next_pump_hz(self.params.hot_pump.frequency_steps_hz, self.params.hot_pump.flow_gpm,
+                                 ctrl.hot_pump_hz, hot_dt, c.pump_hot_delta_t_k, ctrl.hot_pump_changed_s)
+        if cold != ctrl.cold_pump_hz:
+            ctrl.cold_pump_hz, ctrl.cold_pump_changed_s = cold, self.time_s
+        if hot != ctrl.hot_pump_hz:
+            ctrl.hot_pump_hz, ctrl.hot_pump_changed_s = hot, self.time_s
+
+    def _pump_states(self, enabled: bool) -> tuple[bool, bool]:
+        """房間模型下兩台水泵是否運轉（§8.4）。
+
+系統停用時兩台都停（壓縮機仍在運轉的那一步除外）；``idle_pump_off`` 時，冰水泵只在壓縮機運轉或
+送風機運轉時開，熱水泵只在板式冷凝器在流路（壓縮機運轉且非智慧冷房）或上一步有再熱需求時開。
+
+參數：
+    enabled: 系統是否啟用。
+
+回傳：
+    (冰水泵, 熱水泵)。"""
+        running = self._ctrl.compressor_on and not self._ctrl.tripped
+        condenser = running and self.mode is not RefrigerantMode.SMART_COOLING
+        fans = bool(self.room.fans_on) if self.room is not None else True
+        reheat = self._last_reheat_request_w > 0
+        if not enabled:
+            return running, condenser
+        if not self._settings.idle_pump_off:
+            return True, True
+        return running or fans, condenser or reheat
+
+    def _conditions(self, frequency_hz: float) -> OperatingConditions:
+        """組合求解條件。
+
+參數：
+    frequency_hz: 頻率。
+
+回傳：
+    OperatingConditions。"""
+        evaporator_in_k, condenser_in_k = self._inlet_temperatures()
+        return OperatingConditions(
+            mode=self.mode,
+            cold_water_k=evaporator_in_k,
+            hot_water_k=condenser_in_k,
+            outdoor_k=self._outdoor_k(),
+            frequency_hz=frequency_hz,
+            evaporator_conductance_w_k=self._evaporator.conductance(self._cold_flow_kg_s()),
+            condenser_conductance_w_k=self._condenser.conductance(self._hot_flow_kg_s()),
+            outdoor_ua_w_k=self.params.outdoor_ua_w_k,
+        )
+
+    def step(self, dt_s: float = 5.0) -> StepRecord:
+        """推進一個時間步。
+
+參數：
+    dt_s: 時間步長（0 < dt ≤ 10 s）。
+
+回傳：
+    本步開始時運轉點與本步結束後水溫的記錄。
+
+引發：
+    ValueError：dt 不合理時。"""
+        if not 0 < dt_s <= 10.0:
+            raise ValueError("時間步長必須介於 0 與 10 秒之間。")
+        p = self.params
+        s = self._settings
+        ctrl = self._ctrl
+        cooling = s.operation is OperationMode.COOLING
+        room = self.room
+        enabled = self.system_enabled()
+        if room is not None:
+            if not enabled and ctrl.compressor_on:
+                # 排程停用：在求解前停機（含模擬起點落在停用時段時）。
+                ctrl.compressor_on = False
+                ctrl.off_since_s = self.time_s
+                self._event("schedule_stop", "空調排程停用，壓縮機停機")
+            room.update_fans(self.time_s, s.fans, enabled)
+            room.update_chw_setpoint(self.time_s, enabled, ctrl.compressor_on and not ctrl.tripped)
+            self._pumps_on = self._pump_states(enabled)
+
+        perf: CompressorPerformance | None = None
+        warnings: set[str] = set()
+        tripped_now = False
+        if ctrl.compressor_on and not ctrl.tripped:
+            perf = self._solver.solve(self._conditions(ctrl.frequency_hz), self._guess)
+            self._guess = (perf.evaporating_k, perf.condensing_k)
+            if perf.condensing_k >= p.control.trip_condensing_k or (
+                perf.properties.discharge_temperature_k >= p.control.trip_discharge_k
+            ):
+                ctrl.tripped = True
+                ctrl.compressor_on = False
+                tripped_now = True
+                perf = None
+        if perf is not None:
+            perf = self._apply_startup_loss(perf, dt_s)
+        if ctrl.tripped:
+            warnings.add(WARNING_TRIPPED)
+        if ctrl.freeze_stopped and not ctrl.compressor_on:
+            warnings.add(WARNING_FREEZE_STOPPED)
+        if perf is not None:
+            if perf.condensing_k >= p.control.warn_high_pressure_k:
+                warnings.add(WARNING_HIGH_PRESSURE)
+            if perf.evaporating_k < p.control.warn_frost_k:
+                warnings.add(WARNING_FROST)
+
+        fan_load = self._fan_coil_load_w()
+        evaporator_in_k, condenser_in_k = self._inlet_temperatures()
+        cold_pump_hz, hot_pump_hz = self._pump_hz()
+        cold_pump_hz = cold_pump_hz if self._pumps_on[0] else 0.0
+        hot_pump_hz = hot_pump_hz if self._pumps_on[1] else 0.0
+        cold_pump_power = p.cold_pump.power_w(cold_pump_hz) if cold_pump_hz > 0 else 0.0
+        hot_pump_power = p.hot_pump.power_w(hot_pump_hz) if hot_pump_hz > 0 else 0.0
+        pump_power = cold_pump_power + hot_pump_power
+        reheat_demand = reheat = 0.0
+        supplies: list[SupplyAir] = []
+        coil_sensible = coil_latent = condensate = 0.0
+        if room is None:
+            active_fans = [fan for fan in p.fan_coils if fan.name in s.fans]
+            fan_ua = sum(fan.ua_w_k for fan in active_fans)
+            fan_power = sum(fan.fan_power_w for fan in active_fans)
+            if cooling and fan_ua > 0 and fan_load > 0:
+                reheat_demand = s.reheat_fraction * fan_load
+                coil_air_k = self.cold_water_k + p.reheat.coil_air_approach_k
+                capacity = p.reheat.ua_ratio_to_fan_coil * fan_ua * max(0.0, self.hot_water_k - coil_air_k)
+                reheat = min(reheat_demand, capacity)
+        else:
+            results = self._coil_results()
+            running = {name for name, _ in results}
+            fan_power = sum(fan.fan_power_w for fan in p.fan_coils if fan.name in running)
+            capacities = {name: room.reheat_capacity_w(r.air_out_k, room.coils[name].air_flow_kg_s, self.hot_water_k)
+                          if self._pumps_on[1] else 0.0 for name, r in results}
+            # 單一房間：需求依整體冷量、依能力比例分配；多區：各區獨立（§8.12.9）。
+            shares = room.allocate_reheat(self.time_s, {name: r.total_w for name, r in results}, capacities)
+            reheat_demand = room.last_reheat_demand_w
+            self._last_reheat_request_w = reheat_demand
+            reheat = sum(shares.values())
+            for name, r in results:
+                air = room.coils[name].air_flow_kg_s
+                share = shares.get(name, 0.0)
+                supplies.append(SupplyAir(air, r.air_out_k + share / (air * psy.moist_air_cp(r.air_out_humidity_ratio)),
+                                          r.air_out_humidity_ratio, name))
+                coil_sensible += r.sensible_w
+                coil_latent += r.latent_w
+                condensate += r.condensate_kg_s
+
+        q_evap_water = perf.cooling_w if perf is not None and self.mode is not RefrigerantMode.SMART_HEATING else 0.0
+        q_cond_water = perf.heating_w if perf is not None and self.mode is not RefrigerantMode.SMART_COOLING else 0.0
+        # 板式換熱器進出水溫（進水 = 本步開始時的送風機回水或桶溫，見 _inlet_temperatures）；室外換熱量依模式取冷凝或蒸發側。
+        evap_in = cond_in = evap_out = cond_out = None
+        outdoor_heat = 0.0
+        if perf is not None:
+            cold_rate = self._cold_flow_kg_s() * WATER_CP_J_KG_K
+            hot_rate = self._hot_flow_kg_s() * WATER_CP_J_KG_K
+            if self.mode is not RefrigerantMode.SMART_HEATING:
+                evap_in = evaporator_in_k
+                evap_out = evap_in - perf.cooling_w / cold_rate
+            else:
+                outdoor_heat = perf.cooling_w
+            if self.mode is not RefrigerantMode.SMART_COOLING:
+                cond_in = condenser_in_k
+                cond_out = cond_in + perf.heating_w / hot_rate
+            else:
+                outdoor_heat = perf.heating_w
+        room_k = self._room_k()
+        cold_loss = p.cold_tank.loss_ua_w_k * (room_k - self.cold_water_k)
+        hot_loss = p.hot_tank.loss_ua_w_k * (room_k - self.hot_water_k)
+        cold_net = (fan_load if cooling else 0.0) - q_evap_water + cold_loss
+        hot_net = q_cond_water - (0.0 if cooling else fan_load) - reheat + hot_loss
+        self.cold_water_k += cold_net / p.cold_tank.heat_capacity_j_k * dt_s
+        self.hot_water_k += hot_net / p.hot_tank.heat_capacity_j_k * dt_s
+        elec = p.electrical
+        compressor_power = perf.power_w / elec.compressor_drive_efficiency if perf is not None else 0.0
+        outdoor_fan_power = (elec.outdoor_fan_w if perf is not None and self.mode is not RefrigerantMode.DUAL
+                             else 0.0)
+        standby_power = elec.standby_w if enabled else 0.0
+        self._energy_j += (compressor_power + fan_power + pump_power + outdoor_fan_power + standby_power) * dt_s
+        room_rh = room_w = supply_k = None
+        zone_snapshots: tuple[ZoneSnapshot, ...] = ()
+        if room is not None:
+            room.step(self.time_s, dt_s, supplies, fan_power)
+            room_rh, room_w = room.relative_humidity, room.state.humidity_ratio
+            if isinstance(room, ZoneGroup):
+                zone_snapshots = self._zone_snapshots(room, supplies, dict(results))
+            flow = sum(sup.air_flow_kg_s for sup in supplies)
+            supply_k = sum(sup.air_flow_kg_s * sup.temperature_k for sup in supplies) / flow if flow > 0 else None
+        self._fan_coil_energy_j += fan_load * dt_s
+        self._reheat_energy_j += reheat * dt_s
+
+        thresholds = self.control_thresholds()
+        record = StepRecord(
+            time_s=self.time_s,
+            dt_s=dt_s,
+            operation=s.operation,
+            mode=self.mode,
+            compressor_on=perf is not None,
+            frequency_hz=ctrl.frequency_hz if perf is not None else 0.0,
+            frequency_limit_hz=ctrl.frequency_limit_hz,
+            valves_open=VALVES_OPEN[self.mode],
+            fans=s.fans,
+            cold_water_k=self.cold_water_k,
+            hot_water_k=self.hot_water_k,
+            evaporating_k=perf.evaporating_k if perf else None,
+            condensing_k=perf.condensing_k if perf else None,
+            evaporating_pressure_pa=perf.properties.evaporating_pressure_pa if perf else None,
+            condensing_pressure_pa=perf.properties.condensing_pressure_pa if perf else None,
+            pressure_ratio=perf.pressure_ratio if perf else None,
+            mass_flow_kg_s=perf.mass_flow_kg_s if perf else 0.0,
+            discharge_k=perf.properties.discharge_temperature_k if perf else None,
+            suction_enthalpy_j_kg=perf.properties.suction_enthalpy_j_kg if perf else None,
+            discharge_enthalpy_j_kg=perf.properties.discharge_enthalpy_j_kg if perf else None,
+            liquid_enthalpy_j_kg=perf.properties.liquid_enthalpy_j_kg if perf else None,
+            cooling_w=perf.cooling_w if perf else 0.0,
+            heating_w=perf.heating_w if perf else 0.0,
+            compressor_power_w=compressor_power,
+            fan_coil_load_w=fan_load,
+            fan_power_w=fan_power,
+            pump_power_w=pump_power,
+            cold_tank_loss_w=cold_loss,
+            hot_tank_loss_w=hot_loss,
+            energy_used_j=self._energy_j,
+            fan_coil_energy_j=self._fan_coil_energy_j,
+            warnings=frozenset(warnings),
+            suction_temperature_k=perf.evaporating_k + p.cycle.superheat_k if perf else None,
+            liquid_temperature_k=perf.condensing_k - p.cycle.subcooling_k if perf else None,
+            suction_entropy_j_kg_k=perf.properties.suction_entropy_j_kg_k if perf else None,
+            discharge_entropy_j_kg_k=perf.properties.discharge_entropy_j_kg_k if perf else None,
+            liquid_entropy_j_kg_k=perf.properties.liquid_entropy_j_kg_k if perf else None,
+            evaporator_inlet_entropy_j_kg_k=perf.properties.evaporator_inlet_entropy_j_kg_k if perf else None,
+            evaporator_water_in_k=evap_in,
+            evaporator_water_out_k=evap_out,
+            condenser_water_in_k=cond_in,
+            condenser_water_out_k=cond_out,
+            outdoor_heat_w=outdoor_heat,
+            cold_pump_hz=cold_pump_hz,
+            hot_pump_hz=hot_pump_hz,
+            cold_pump_gpm=p.cold_pump.flow_gpm(cold_pump_hz),
+            hot_pump_gpm=p.hot_pump.flow_gpm(hot_pump_hz),
+            cold_pump_power_w=cold_pump_power,
+            hot_pump_power_w=hot_pump_power,
+            reheat_demand_w=reheat_demand,
+            reheat_w=reheat,
+            reheat_energy_j=self._reheat_energy_j,
+            room_k=room.state.temperature_k if room is not None else None,
+            room_rh=room_rh,
+            room_humidity_ratio=room_w,
+            outdoor_k=self._outdoor_k(),
+            coil_sensible_w=coil_sensible,
+            coil_latent_w=coil_latent,
+            condensate_kg_s=condensate,
+            supply_k=supply_k,
+            fans_running=frozenset(name for name, _ in self._coil_results()) if room is not None else s.fans,
+            chw_setpoint_k=self._cooling_setpoint_k() if cooling else None,
+            chw_target_k=self._cooling_target_k() if cooling else None,
+            control_target_k=thresholds[0],
+            control_stop_k=thresholds[1],
+            control_restart_k=thresholds[2],
+            occupied=room.scenario.occupied(self.time_s) if room is not None else True,
+            system_enabled=enabled,
+            outdoor_fan_power_w=outdoor_fan_power,
+            standby_power_w=standby_power,
+            zones=zone_snapshots,
+            pid_request_hz=ctrl.pid_request_hz if ctrl.compressor_on else 0.0,
+            pid_integral_hz=self._pid.integral if ctrl.compressor_on else 0.0,
+        )
+
+        self.time_s += dt_s
+        if tripped_now:
+            ctrl.off_since_s = self.time_s
+            self._event("trip", "高壓或排氣溫度過高，安全停機（需手動復歸）")
+        self._update_mode()
+        self._update_pumps(perf)
+        extra_warnings = self._update_compressor(perf, dt_s)
+        if extra_warnings:
+            record = replace(record, warnings=record.warnings | extra_warnings)
+        return record
+
+    def _switch_mode(self, mode: RefrigerantMode, code: str, message: str) -> None:
+        """切換冷媒模式並記錄事件。
+
+參數：
+    mode: 新模式。
+    code: 事件代碼。
+    message: 說明。
+
+回傳：
+    無。"""
+        self.mode = mode
+        self._mode_since_s = self.time_s
+        self._event(code, message)
+
+    def _update_mode(self) -> None:
+        """依水溫切換冷媒模式（§2.2 第 2、4 項）。回切需在智慧模式停留至少 ``mode_return_dwell_s``。
+
+回傳：
+    無。"""
+        c = self.params.control
+        cooling = self._settings.operation is OperationMode.COOLING
+        settled = self.time_s - self._mode_since_s >= c.mode_return_dwell_s
+        if cooling:
+            if self.mode is RefrigerantMode.DUAL and self.hot_water_k >= c.cooling_hot_switch_k:
+                self._switch_mode(RefrigerantMode.SMART_COOLING, "smart_cooling",
+                                  "熱水達上限：關 SV8、開 SV9，切換智慧冷房")
+                self._preempt_high_pressure()
+            elif self.mode is RefrigerantMode.SMART_COOLING and self.hot_water_k <= c.cooling_hot_return_k and settled:
+                self._switch_mode(RefrigerantMode.DUAL, "dual", "熱水回落：關 SV9、開 SV8，回到雙效")
+            elif self.mode is RefrigerantMode.SMART_HEATING:
+                self.mode = RefrigerantMode.DUAL
+        else:
+            if self.mode is RefrigerantMode.DUAL and self.cold_water_k <= c.heating_cold_switch_k:
+                self._switch_mode(RefrigerantMode.SMART_HEATING, "smart_heating",
+                                  "冰水達下限：關 SV10、開 SV11，切換智慧暖房")
+            elif self.mode is RefrigerantMode.DUAL and self._ctrl.freeze_stopped:
+                self._switch_mode(RefrigerantMode.SMART_HEATING, "smart_heating",
+                                  "冰水出水溫度過低（防凍保護）：關 SV10、開 SV11，改由室外換熱器吸熱")
+            elif (self.mode is RefrigerantMode.SMART_HEATING and self.cold_water_k >= c.heating_cold_return_k
+                  and settled and self._plate_evaporator_safe(RefrigerantMode.DUAL)):
+                self._switch_mode(RefrigerantMode.DUAL, "dual", "冰水回升：關 SV11、開 SV10，回到雙效")
+            elif self.mode is RefrigerantMode.SMART_COOLING:
+                self.mode = RefrigerantMode.DUAL
+
+    def _preempt_high_pressure(self) -> None:
+        """切換到室外冷凝時預先限頻：冷凝溫度會在一步內跳升，事後限頻來不及（§2.3）。
+
+以新模式預測冷凝溫度，由目前階梯逐階往下找第一個冷凝溫度低於限頻起點的階梯（都不行則取最低階）。
+
+回傳：
+    無。"""
+        ctrl = self._ctrl
+        if not ctrl.compressor_on or ctrl.tripped:
+            return
+        steps = [step for step in sorted(self.params.compressor.frequency_steps_hz, reverse=True)
+                 if step <= ctrl.frequency_hz + 1e-9]
+        chosen = steps[-1]
+        for step in steps:
+            perf = self._solver.solve(self._conditions(step), None)
+            if perf.condensing_k < self.params.control.hp_limit_start_k:
+                chosen = step
+                break
+        if chosen < ctrl.frequency_hz:
+            ctrl.frequency_limit_hz = min(ctrl.frequency_limit_hz, chosen)
+            ctrl.frequency_hz = self._stepper.start(chosen, chosen, self.time_s)
+            self._event("hp_preempt", f"切換室外冷凝前預先限頻至 {chosen:.0f} Hz")
+        self._guess = None
+
+    def _plate_evaporator_safe(self, mode: RefrigerantMode | None = None) -> bool:
+        """以最低頻率預測冰水出水溫度，是否不低於防凍保護設定（板式蒸發器不在流路時恆為真）。
+
+參數：
+    mode: 要預測的冷媒模式（預設目前模式）。
+
+回傳：
+    bool。"""
+        mode = mode or self.mode
+        if mode is RefrigerantMode.SMART_HEATING:
+            return True
+        conditions = replace(self._conditions(self.params.compressor.min_frequency_hz), mode=mode)
+        predicted = self._solver.solve(conditions, None)
+        return self._evaporator_leaving_k(predicted) >= self.params.control.freeze_limit_start_k
+
+    def _evaporator_leaving_k(self, perf: CompressorPerformance) -> float:
+        """板式蒸發器出水（冰水）溫度：進水（冰水桶）溫度減去水側取熱量 ÷ 水流熱容率。
+
+參數：
+    perf: 運轉點。
+
+回傳：
+    出水溫度（K）。"""
+        rate = self._cold_flow_kg_s() * WATER_CP_J_KG_K
+        return self._inlet_temperatures()[0] - perf.cooling_w / rate
+
+    def _update_compressor(self, perf: CompressorPerformance | None, dt_s: float) -> frozenset[str]:
+        """更新高壓與防凍限頻、頻率與啟停（§2.3）。
+
+參數：
+    perf: 本步運轉點（停機時為 None）。
+    dt_s: 時間步長。
+
+回傳：
+    本步額外的警示代碼（高壓限頻、防凍限頻）。"""
+        c = self.params.control
+        comp = self.params.compressor
+        s = self._settings
+        ctrl = self._ctrl
+        if ctrl.tripped:
+            return frozenset()
+        cooling = s.operation is OperationMode.COOLING
+        controlled = self.cold_water_k if cooling else self.hot_water_k
+        error = self._control_error()
+
+        if not ctrl.compressor_on:
+            restart = controlled >= self._cooling_restart_k() if cooling else controlled <= c.heating_restart_k
+            restart = restart and self.system_enabled()
+            waited = ctrl.off_since_s is None or self.time_s - ctrl.off_since_s >= c.min_off_time_s
+            if restart and waited and self._plate_evaporator_safe():
+                ctrl.compressor_on = True
+                ctrl.freeze_stopped = False
+                ctrl.freeze_timer_s = 0.0
+                self._pid.reset()
+                if self._split_cooling():
+                    # 積分歸零（不帶負荷記憶）：目標分離模式的一般停機發生在「最低階仍持續降溫」，
+                    # 代表負荷低於最低能力；以上一週期平均頻率預設積分會形成正回饋（高頻起步 → 平均高 →
+                    # 下次又高頻起步），實測 B 單台 60 Hz 占 66 %（§8.12）。只初始化微分的前值。
+                    self._pid.preset(self._pid.bias + self._pid.kp * error, error, measurement=controlled)
+                ctrl.off_since_s = None
+                ctrl.on_since_s = self.time_s
+                ctrl.stop_hold_s = 0.0
+                request = (s.manual_frequency_hz if s.frequency_mode is FrequencyMode.MANUAL
+                           else max(comp.min_frequency_hz, min(comp.max_frequency_hz, self._pid.output(error))))
+                ctrl.frequency_hz = self._stepper.start(
+                    request, min(ctrl.frequency_limit_hz, ctrl.freeze_limit_hz), self.time_s)
+                self._event("start", "壓縮機重新啟動")
+            return frozenset()
+
+        limiting = False
+        if perf is not None:
+            if perf.condensing_k >= c.hp_limit_start_k:
+                ctrl.frequency_limit_hz = max(comp.min_frequency_hz, ctrl.frequency_limit_hz - c.hp_limit_down_hz_per_s * dt_s)
+                limiting = True
+            elif perf.condensing_k < c.hp_limit_release_k:
+                ctrl.frequency_limit_hz = min(comp.max_frequency_hz, ctrl.frequency_limit_hz + c.hp_limit_up_hz_per_s * dt_s)
+            else:
+                limiting = ctrl.frequency_limit_hz < comp.max_frequency_hz
+        freezing = False
+        plate_in_use = self.mode is not RefrigerantMode.SMART_HEATING
+        if perf is not None and plate_in_use:
+            leaving = self._evaporator_leaving_k(perf)
+            if leaving < c.freeze_limit_start_k:
+                ctrl.freeze_limit_hz = max(comp.min_frequency_hz,
+                                           ctrl.freeze_limit_hz - c.freeze_limit_down_hz_per_s * dt_s)
+                freezing = True
+            elif leaving >= c.freeze_release_k:
+                ctrl.freeze_limit_hz = min(comp.max_frequency_hz,
+                                           ctrl.freeze_limit_hz + c.freeze_limit_up_hz_per_s * dt_s)
+            else:
+                freezing = ctrl.freeze_limit_hz < comp.max_frequency_hz
+        elif not plate_in_use:
+            ctrl.freeze_limit_hz = comp.max_frequency_hz
+        limit = min(ctrl.frequency_limit_hz, ctrl.freeze_limit_hz)
+
+        split = self._split_cooling() and s.frequency_mode is FrequencyMode.AUTO
+        if split:
+            # 目標分離（§8.12）：PID 以 7.5 °C 為目標調載；桶溫 ≤ 停機門檻時強制降到最低階
+            # （FrequencyStepper 高於上限階會立即降階），在最低階持續 hold 秒仍不回升才停機。
+            stop_k = self._cooling_setpoint_k()
+            below = controlled <= stop_k
+            request = self._pid.update(error, dt_s, out_max=limit, measurement=controlled)
+            stepper_limit = comp.min_frequency_hz if below else limit
+            ctrl.frequency_hz = self._stepper.update(request, stepper_limit, self.time_s)
+            at_minimum = ctrl.frequency_hz <= comp.min_frequency_hz + 1e-9
+            ctrl.stop_hold_s = ctrl.stop_hold_s + dt_s if (below and at_minimum) else 0.0
+            on_for = self.time_s - ctrl.on_since_s if ctrl.on_since_s is not None else float("inf")
+            backstop = controlled <= stop_k - c.cooling_stop_backstop_k
+            stop = backstop or (ctrl.stop_hold_s >= c.cooling_stop_hold_s and on_for >= c.split_min_on_time_s)
+            ctrl.pid_request_hz = request
+        elif s.frequency_mode is FrequencyMode.AUTO:
+            request = self._pid.update(error, dt_s, out_max=limit)
+            ctrl.pid_request_hz = request
+            ctrl.frequency_hz = self._stepper.update(request, limit, self.time_s)
+            at_minimum = ctrl.frequency_hz <= comp.min_frequency_hz + 1e-9
+            margin = c.auto_stop_margin_k
+            # 冷房：冰水降到設定值（7 °C）即停機（使用者決定）；暖房：最低頻率且熱水超過設定值 + 裕度才停。
+            stop = (controlled <= self._cooling_setpoint_k() if cooling
+                    else at_minimum and controlled >= c.heating_setpoint_k + margin)
+        else:
+            ctrl.pid_request_hz = 0.0
+            ctrl.frequency_hz = self._stepper.start(s.manual_frequency_hz, limit, self.time_s)
+            stop = controlled <= self._cooling_setpoint_k() if cooling else controlled >= c.heating_setpoint_k
+        stop = stop or not self.system_enabled()
+        if stop:
+            ctrl.compressor_on = False
+            ctrl.off_since_s = self.time_s
+            self._event("stop", "已達溫度目標，壓縮機停機")
+            return frozenset()
+        # 防凍停機：已在最低頻率運轉、冰水出水溫度仍低於設定，持續 freeze_stop_delay_s。
+        at_floor = perf is not None and perf.frequency_hz <= comp.min_frequency_hz + 1e-9
+        if perf is not None and plate_in_use and at_floor and self._evaporator_leaving_k(perf) < c.freeze_limit_start_k:
+            ctrl.freeze_timer_s += dt_s
+            if ctrl.freeze_timer_s >= c.freeze_stop_delay_s:
+                ctrl.compressor_on = False
+                ctrl.freeze_stopped = True
+                ctrl.freeze_timer_s = 0.0
+                ctrl.off_since_s = self.time_s
+                self._event("freeze_stop", f"冰水出水溫度低於 {c.freeze_limit_start_k - 273.15:g} °C，防凍保護停機")
+                return frozenset()
+        else:
+            ctrl.freeze_timer_s = 0.0
+        warnings: set[str] = set()
+        if limiting:
+            warnings.add(WARNING_HP_LIMITING)
+        if freezing:
+            warnings.add(WARNING_FREEZE_LIMITING)
+        return frozenset(warnings)
+
+    def _apply_startup_loss(self, perf: CompressorPerformance, dt_s: float) -> CompressorPerformance:
+        """啟停損失：啟動後有效冷量以 1 − e^(−t/τ) 爬升（本步取時間平均），耗電不變；
+冷凝熱以能量平衡重算（= 有效冷量 + 耗電），不另設設備儲熱項（§8.12.7）。
+
+參數：
+    perf: 穩態運轉點。
+    dt_s: 時間步長。
+
+回傳：
+    修正後的運轉點（τ = 0 或模擬起始即運轉時原樣回傳）。"""
+        tau = self.params.control.startup_capacity_tau_s
+        on_since = self._ctrl.on_since_s
+        if tau <= 0 or on_since is None:
+            return perf
+        t0 = max(0.0, self.time_s - on_since)
+        if t0 > 10 * tau:
+            return perf
+        factor = 1.0 - tau / dt_s * (math.exp(-t0 / tau) - math.exp(-(t0 + dt_s) / tau))
+        cooling = perf.cooling_w * factor
+        return replace(perf, cooling_w=cooling, heating_w=cooling + perf.power_w)
+
+    @staticmethod
+    def _zone_snapshots(group: ZoneGroup, supplies: list[SupplyAir],
+                        results: dict[str, CoilResult]) -> tuple[ZoneSnapshot, ...]:
+        """各區狀態（房間已推進到本步結束；盤管結果為本步開始時）。
+
+參數：
+    group: 區域群組。
+    supplies: 本步各送風機送風。
+    results: 本步各盤管結果。
+
+回傳：
+    各區 ZoneSnapshot。"""
+        snapshots = []
+        for zone in group.zones:
+            own = [sup for sup in supplies if sup.name in zone.coils]
+            air = sum(sup.air_flow_kg_s for sup in own)
+            coil = [results[name] for name in zone.coils if name in results]
+            reheat = sum(sup.air_flow_kg_s * psy.moist_air_cp(sup.humidity_ratio) * (sup.temperature_k - results[sup.name].air_out_k)
+                         for sup in own if sup.name in results)
+            snapshots.append(ZoneSnapshot(
+                name=zone.name, mode=zone.mode, temperature_k=zone.state.temperature_k,
+                relative_humidity=zone.relative_humidity, humidity_ratio=zone.state.humidity_ratio,
+                fans_on=zone.fans_on, dehum_mode=zone.dehum_mode,
+                supply_k=sum(sup.air_flow_kg_s * sup.temperature_k for sup in own) / air if air > 0 else None,
+                reheat_w=max(0.0, reheat), sensible_w=sum(r.sensible_w for r in coil),
+                latent_w=sum(r.latent_w for r in coil), condensate_kg_s=sum(r.condensate_kg_s for r in coil)))
+        return tuple(snapshots)
+
+    def control_thresholds(self) -> tuple[float, float, float]:
+        """受控水桶目前的（PID 目標, 停機門檻, 重啟門檻），K。
+
+        冷房：LEGACY 為 (7, 7, 8)、目標分離為 (7.5, 7, 8) °C，皆隨冰水重設平移；
+        暖房：自動為 (45, 46, 42)、手動為 (45, 45, 42) °C。
+
+回傳：
+    (目標, 停機, 重啟)。"""
+        c = self.params.control
+        if self._settings.operation is OperationMode.COOLING:
+            return self._cooling_target_k(), self._cooling_setpoint_k(), self._cooling_restart_k()
+        margin = c.auto_stop_margin_k if self._settings.frequency_mode is FrequencyMode.AUTO else 0.0
+        return c.heating_setpoint_k, c.heating_setpoint_k + margin, c.heating_restart_k
+
+    def _pid_measurement(self) -> float:
+        """與誤差同號的量測值（冷房：冰水溫度；暖房：−熱水溫度），供對量測值微分。
+
+回傳：
+    K。"""
+        if self._settings.operation is OperationMode.COOLING:
+            return self.cold_water_k
+        return -self.hot_water_k
+
+    def _control_error(self) -> float:
+        """PID 控制誤差：冷房為冰水 − 目標，暖房為目標 − 熱水（正值表示需要更多能力）。
+
+回傳：
+    K。"""
+        c = self.params.control
+        if self._settings.operation is OperationMode.COOLING:
+            return self.cold_water_k - self._cooling_target_k()
+        return c.heating_setpoint_k - self.hot_water_k
+
+    def run(self, duration_s: float, dt_s: float = 5.0) -> list[StepRecord]:
+        """連續推進。
+
+參數：
+    duration_s: 模擬時間。
+    dt_s: 時間步長。
+
+回傳：
+    每一步的記錄。"""
+        records = []
+        end = self.time_s + duration_s
+        while self.time_s < end - 1e-9:
+            records.append(self.step(min(dt_s, end - self.time_s)))
+        return records
+
+
+@dataclass(frozen=True)
+class SimulationSummary:
+    """一段模擬的摘要指標。"""
+
+    duration_s: float
+    stops: int
+    run_fraction: float
+    mean_frequency_hz: float
+    mean_fan_coil_load_w: float
+    energy_used_j: float
+    system_cop: float | None
+    max_condensing_k: float | None
+    min_evaporating_k: float | None
+    warnings: frozenset[str] = field(default_factory=frozenset)
+    reheat_energy_j: float = 0.0
+
+
+def summarize(records: list[StepRecord], events: list[SimulationEvent]) -> SimulationSummary:
+    """彙總記錄。
+
+參數：
+    records: 連續的時間步記錄。
+    events: 事件。
+
+回傳：
+    SimulationSummary。
+
+引發：
+    ValueError：記錄為空時。"""
+    if not records:
+        raise ValueError("沒有模擬記錄。")
+    start = records[0].time_s
+    duration = sum(r.dt_s for r in records)
+    running = [r for r in records if r.compressor_on]
+    run_time = sum(r.dt_s for r in running)
+    energy = records[-1].energy_used_j - (records[0].energy_used_j - records[0].total_power_w * records[0].dt_s)
+    fan_energy = sum(r.fan_coil_load_w * r.dt_s for r in records)
+    stops = sum(1 for e in events if e.code == "stop" and start < e.time_s <= start + duration)
+    warnings: frozenset[str] = frozenset().union(*(r.warnings for r in records))
+    condensing = [r.condensing_k for r in running if r.condensing_k is not None]
+    evaporating = [r.evaporating_k for r in running if r.evaporating_k is not None]
+    return SimulationSummary(
+        duration_s=duration,
+        stops=stops,
+        run_fraction=run_time / duration if duration else 0.0,
+        mean_frequency_hz=sum(r.frequency_hz * r.dt_s for r in running) / run_time if running else 0.0,
+        mean_fan_coil_load_w=fan_energy / duration if duration else 0.0,
+        energy_used_j=energy,
+        system_cop=fan_energy / energy if energy > 0 else None,
+        max_condensing_k=max(condensing) if condensing else None,
+        min_evaporating_k=min(evaporating) if evaporating else None,
+        warnings=warnings,
+        reheat_energy_j=sum(r.reheat_w * r.dt_s for r in records),
+    )
